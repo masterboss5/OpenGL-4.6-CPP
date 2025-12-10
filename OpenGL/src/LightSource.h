@@ -9,21 +9,44 @@ public:
 		SPOT = 1
 	};
 
-	LightType lightType; //4
-	bool isActive; //1
+    glm::vec3 position;
+    float pad6;
 
-	glm::vec3 position; //12
-	glm::vec3 direction;//12
-	float cutOff; //4
-	float outerCutOff; //4
+	//-----------16-------
 
-	glm::vec3 ambient; //12
-	glm::vec3 diffuse; //12
-	glm::vec3 specular; //12
+    glm::vec3 direction;
+    float pad7;
 
-	float constant; //4
-	float linear; //4
-	float quadratic; //4
+    //-----------32-------
+
+    float cutOff;
+    float outerCutOff;
+    int pad8;
+    int pad9;
+
+	//-----------48-------
+
+    glm::vec3 ambient;
+    float pad10;
+
+	//------------64-------
+
+    glm::vec3 diffuse;
+    float pad11;
+
+	//------------80-------
+
+    glm::vec3 specular;
+    float pad12;
+
+	//------------96-------
+
+    float constant;
+    float linear;
+    float quadratic;
+    float pad13;
+
+	//------------112-------
 
 	LightSource(
 		const LightType lightType,
@@ -38,6 +61,4 @@ public:
 		const float linear,
 		const float quadratic
 	);
-
-
 };

@@ -13,8 +13,8 @@ LightSource::LightSource(
 	const float linear,
 	const float quadratic
 ) {
-	this->lightType = lightType;
-	this->isActive = true;
+	//this->lightType = lightType;
+	//this->isActive = true;
 	this->position = position;
 	this->direction = direction;
 	this->cutOff = cutOff;

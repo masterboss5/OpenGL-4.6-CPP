@@ -1,28 +1,47 @@
 #version 460 core
 #extension GL_ARB_gpu_shader_int64 : enable
 
-const vec3 lightColor = vec3(1f, 1f, 1f);
-const float ambientStrength = 0.1;
-
-
 #define POINT 0
 #define SPOT 1
 struct LightSource {
-	int type; //4
-	bool isActive; //1
+	vec3 position;
+    float pad6;
 
-	vec3 position; //12
-	vec3 direction; //12
-	float cutOff;//4
-	float outerCutOff;//4
+	//-----------16-------
 
-	vec3 ambient; //12
-	vec3 diffuse; //12
-	vec3 specular; //12
+	vec3 direction;
+    float pad7;
 
-	float constant;//4
-	float linear;//4
-	float quadratic;//4
+    //-----------32-------
+
+    float cutOff;
+    float outerCutOff;
+    int pad8;
+    int pad9;
+
+	//-----------48-------
+
+    vec3 ambient;
+    float pad10;
+
+	//------------64-------
+
+    vec3 diffuse;
+    float pad11;
+
+	//------------80-------
+
+    vec3 specular;
+    float pad12;
+
+	//------------96-------
+
+    float constant;
+    float linear;
+    float quadratic;
+    float pad13;
+
+	//------------112-------
 };
 
 struct Material {
@@ -42,15 +61,15 @@ in vec3 fragPosition;
 out vec4 pixelColor;
 
 layout(std430, binding = 1) buffer LightBuffer {
-    LightSource lightSources[];
+   LightSource lightSources[];
 };
+
 
 uniform int lightCount;
 uniform vec3 viewPos;
 uniform Material material;
 
 void main() {
-
 	vec3 ambient = texture(material.diffuseTexture, pass_uv).rgb * lightSources[0].ambient;
 
 	vec3 fragNormal = normalize(pass_normal);

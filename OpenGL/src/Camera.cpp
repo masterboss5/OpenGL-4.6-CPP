@@ -14,27 +14,27 @@ Camera::Camera(float sensitivity, float FOV, float nearPlane, float farPlane) : 
 void Camera::tick(const Window& window, float deltaTime)
 {
 	if (window.isKeyPressed(GLFW_KEY_W)) {
-		this->position += this->front * deltaTime * 1000.0f;
+		this->position += this->front * deltaTime * 10.0f;
 	}
 
 	if (window.isKeyPressed(GLFW_KEY_S)) {
-		this->position -= this->front * deltaTime * 1000.0f;
+		this->position -= this->front * deltaTime * 10.0f;
 	}
 
 	if (window.isKeyPressed(GLFW_KEY_A)) {
-		this->position -= this->right * deltaTime * 1000.0f;
+		this->position -= this->right * deltaTime * 10.0f;
 	}
 
 	if (window.isKeyPressed(GLFW_KEY_D)) {
-		this->position += this->right * deltaTime * 1000.0f;
+		this->position += this->right * deltaTime * 10.0f;
 	}
 
 	if (window.isKeyPressed(GLFW_KEY_SPACE)) {
-		this->position += this->worldUp * deltaTime * 1000.0f;
+		this->position += this->worldUp * deltaTime * 10.0f;
 	}
 
 	if (window.isKeyPressed(GLFW_KEY_LEFT_SHIFT)) {
-		this->position -= this->worldUp * deltaTime * 1000.0f;
+		this->position -= this->worldUp * deltaTime * 10.0f;
 	}
 
 	float xOffset = window.getDeltaMouseX() * this->sensitivity;

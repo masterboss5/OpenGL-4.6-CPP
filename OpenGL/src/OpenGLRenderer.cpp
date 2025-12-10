@@ -55,7 +55,6 @@ void OpenGLRenderer::renderScene(const ShaderProgram& shader, const glm::mat4& p
 
 	for (const auto& [staticGeometry, objects] : this->batch) {
 		glBindVertexArray(staticGeometry->getVAO());
-		//glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, staticGeometry->getEBO());
 
 		std::vector<glm::mat4> transforms;
 		transforms.reserve(objects.size());

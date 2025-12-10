@@ -28,7 +28,6 @@ int main()
 	Window window("OpenGL 4.6", 2560, 1440);
 	window.makeContextCurrent();
 	window.lockMouse();
-	//window.uncapFPS();
 	window.setupInputs();
 	glewInit();
 
@@ -42,23 +41,37 @@ int main()
 		window.closeWindow();
 	});
 
+	//LightSource pointLight(
+	//	LightSource::LightType::POINT,
+	//	glm::vec3(0.0f, 50.0f, -900.0f),
+	//	glm::vec3(0.0f, -0.0995037f, 0.995037f),
+	//	glm::cos(glm::radians(12.5f)),
+	//	glm::cos(glm::radians(17.5f)),
+	//	glm::vec3(0.1f, 0.1f, 0.1f),
+	//	glm::vec3(0.8f, 0.8f, 0.8f),
+	//	glm::vec3(1.0f, 1.0f, 1.0f),
+	//	1.0f,
+	//	0.09f,
+	//	0.032f
+	//);
+
 	LightSource pointLight(
 		LightSource::LightType::POINT,
-		glm::vec3(0.0f, 50.0f, -900.0f),
-		glm::vec3(0.0f, -0.0995037f, 0.995037f),
+		glm::vec3(0.0f, 0.0f, -10.0f),
+		glm::vec3(glm::normalize(glm::vec3(0,0,0) - glm::vec3(0.0f, 0.0f, -10.0f))),
 		glm::cos(glm::radians(12.5f)),
 		glm::cos(glm::radians(17.5f)),
 		glm::vec3(0.1f, 0.1f, 0.1f),
 		glm::vec3(0.8f, 0.8f, 0.8f),
 		glm::vec3(1.0f, 1.0f, 1.0f),
 		1.0f,
-		0.09f,
-		0.032f
+		0.001f,
+		0.00001f
 	);
 	
 	StaticGeometry* worldObject = FileLoader::readObj("objects/backpack.obj", "objects");
 	StaticWorldObject backPack(worldObject, 0, 0, 0);
-	backPack.setScale(500.0f);
+	//backPack.setScale(500.0f);
 
 	culling: {
 		glEnable(GL_CULL_FACE);
