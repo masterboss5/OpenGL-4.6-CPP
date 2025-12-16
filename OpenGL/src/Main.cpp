@@ -11,7 +11,7 @@
 #include "OpenGLRenderer.h"
 #include "Texture.h"
 #include "FileLoader.cpp"
-#include "LightSource.h"
+#include "SpotLightSource.h"
 #include "Camera.h"
 
 #define FAR_PLANE 600.0f
@@ -29,6 +29,7 @@ int main()
 	window.makeContextCurrent();
 	window.lockMouse();
 	window.setupInputs();
+	window.uncapFPS();
 	glewInit();
 
 	Camera cam(0.1, 90.0f, 0.1f, 5000.0f);
@@ -41,24 +42,9 @@ int main()
 		window.closeWindow();
 	});
 
-	//LightSource pointLight(
-	//	LightSource::LightType::POINT,
-	//	glm::vec3(0.0f, 50.0f, -900.0f),
-	//	glm::vec3(0.0f, -0.0995037f, 0.995037f),
-	//	glm::cos(glm::radians(12.5f)),
-	//	glm::cos(glm::radians(17.5f)),
-	//	glm::vec3(0.1f, 0.1f, 0.1f),
-	//	glm::vec3(0.8f, 0.8f, 0.8f),
-	//	glm::vec3(1.0f, 1.0f, 1.0f),
-	//	1.0f,
-	//	0.09f,
-	//	0.032f
-	//);
-
-	LightSource pointLight(
-		LightSource::LightType::POINT,
+	SpotLightSource pointLight(
 		glm::vec3(0.0f, 0.0f, -10.0f),
-		glm::vec3(glm::normalize(glm::vec3(0,0,0) - glm::vec3(0.0f, 0.0f, -10.0f))),
+		glm::vec3(0.0f, 0.0f, 0.0f),
 		glm::cos(glm::radians(12.5f)),
 		glm::cos(glm::radians(17.5f)),
 		glm::vec3(0.1f, 0.1f, 0.1f),
@@ -68,6 +54,8 @@ int main()
 		0.001f,
 		0.00001f
 	);
+
+	pointLight.lookAt(glm::vec3(0.0f, 0.0f, 0.0f));
 	
 	StaticGeometry* worldObject = FileLoader::readObj("objects/backpack.obj", "objects");
 	StaticWorldObject backPack(worldObject, 0, 0, 0);

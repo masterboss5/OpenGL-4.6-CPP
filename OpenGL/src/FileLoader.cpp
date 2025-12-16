@@ -102,7 +102,8 @@ namespace FileLoader {
             Texture("objects/" + materials[0].bump_texname),
             Texture("objects/" + materials[0].ambient_texname),
             Texture("objects/" + materials[0].roughness_texname),
-            Texture("objects/" + materials[0].emissive_texname)
+            Texture("objects/" + materials[0].emissive_texname),
+            32.0f
         );
 
 		std::cout << material.diffuseTexture.isLoaded() << std::endl;

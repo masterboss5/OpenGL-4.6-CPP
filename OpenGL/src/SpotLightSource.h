@@ -2,14 +2,9 @@
 #include <glm.hpp>
 
 
-struct alignas(16) LightSource {
+struct alignas(16) SpotLightSource {
 public:
-	enum class LightType : int {
-		POINT = 0,
-		SPOT = 1
-	};
-
-    glm::vec3 position;
+	glm::vec3 position;
     float pad6;
 
 	//-----------16-------
@@ -48,8 +43,7 @@ public:
 
 	//------------112-------
 
-	LightSource(
-		const LightType lightType,
+	SpotLightSource(
 		const glm::vec3& position,
 		const glm::vec3& direction,
 		const float cutOff,
@@ -61,4 +55,6 @@ public:
 		const float linear,
 		const float quadratic
 	);
+
+	void lookAt(const glm::vec3& target);
 };

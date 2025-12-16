@@ -24,16 +24,13 @@
     <ClCompile Include="src\Main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\Application.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\Camera.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\FileLoader.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\LightSource.cpp">
+    <ClCompile Include="src\SpotLightSource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\Material.cpp">
@@ -57,6 +54,15 @@
     <ClCompile Include="src\Window.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\PointLightSource.h">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\PointLightSource.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DirectionalLightSource.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="shader\VertexShader.glsl" />
@@ -72,7 +78,7 @@
     <ClInclude Include="src\Camera.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\LightSource.h">
+    <ClInclude Include="src\SpotLightSource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\Material.h">
@@ -91,6 +97,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\Window.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\DirectionalLightSource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

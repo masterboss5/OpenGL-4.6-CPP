@@ -11,6 +11,7 @@ public:
 	Texture ambientOcclusionTexture;
 	Texture roughnessTexture;
 	Texture emissiveTexture;
+	float shininess;
 
 	Material(
 		const Texture& diffuse,
@@ -19,7 +20,8 @@ public:
 		const Texture& height,
 		const Texture& ao,
 		const Texture& roughness,
-		const Texture& emissive
+		const Texture& emissive,
+		const float shininess
 	);
 	Material(const Material&) = default;
 	Material(Material&&) = default;

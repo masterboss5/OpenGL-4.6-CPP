@@ -133,10 +133,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\DirectionalLightSource.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="src\Camera.cpp" />
     <ClCompile Include="src\FileLoader.cpp" />
-    <ClCompile Include="src\LightSource.cpp" />
+    <ClCompile Include="src\PointLightSource.cpp" />
+    <ClCompile Include="src\PointLightSource.h" />
+    <ClCompile Include="src\SpotLightSource.cpp" />
     <ClCompile Include="src\Material.cpp" />
     <ClCompile Include="src\OpenGLRenderer.cpp" />
     <ClCompile Include="src\ShaderProgram.cpp" />
@@ -153,7 +156,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\Camera.h" />
-    <ClInclude Include="src\LightSource.h" />
+    <ClInclude Include="src\DirectionalLightSource.h" />
+    <ClInclude Include="src\SpotLightSource.h" />
     <ClInclude Include="src\Material.h" />
     <ClInclude Include="src\OpenGLRenderer.h" />
     <ClInclude Include="src\ShaderProgram.h" />

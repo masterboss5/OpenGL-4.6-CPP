@@ -14,7 +14,7 @@ OpenGLRenderer::OpenGLRenderer() : drawCount(0), objectsDrawn(0)
 
 	glGenBuffers(1, &lightSourcesSSBO);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lightSourcesSSBO);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(LightSource) * MAX_LIGHT_SOURCES, nullptr, GL_DYNAMIC_DRAW);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(SpotLightSource) * MAX_LIGHT_SOURCES, nullptr, GL_DYNAMIC_DRAW);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, lightSourcesSSBO);
 }
 
@@ -28,7 +28,7 @@ unsigned int OpenGLRenderer::getObjectsDrawn() const
 	return this->objectsDrawn;
 }
 
-void OpenGLRenderer::addLightSource(const LightSource& lightSource)
+void OpenGLRenderer::addLightSource(const SpotLightSource& lightSource)
 {
 	this->lightSources.push_back(lightSource);
 }
@@ -36,10 +36,12 @@ void OpenGLRenderer::addLightSource(const LightSource& lightSource)
 void OpenGLRenderer::uploadLightSources(const ShaderProgram& shader) const
 {
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lightSourcesSSBO);
-	void* const lightSSBO = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, sizeof(LightSource) * this->lightSources.size(), GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
-	std::memcpy(lightSSBO, this->lightSources.data(), sizeof(LightSource) * this->lightSources.size());
+	void* const lightSSBO = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, sizeof(SpotLightSource) * this->lightSources.size(), GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
+	std::memcpy(lightSSBO, this->lightSources.data(), sizeof(SpotLightSource) * this->lightSources.size());
 	glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
 	glUniform1i(shader.getUniformLocation("lightCount"), this->lightSources.size());
+
+
 }
 
 void OpenGLRenderer::render(const StaticWorldObject& worldObject)
