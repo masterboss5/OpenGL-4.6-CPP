@@ -6,6 +6,8 @@
 #include <gtc/matrix_transform.hpp>
 #include <gtc/type_ptr.hpp>
 #include "SpotLightSource.h"
+#include "DirectionalLightSource.h"
+#include "PointLightSource.h"
 #include "Material.h"
 
 class OpenGLRenderer final
@@ -15,7 +17,9 @@ private:
 	inline static unsigned int lightSourcesSSBO;
 	unsigned int drawCount;
 	unsigned int objectsDrawn;
-	std::vector<SpotLightSource> lightSources;
+	std::vector<DirectionalLightSource> directionalLightSources;
+	std::vector<SpotLightSource> spotLightSources;
+	std::vector<PointLightSource> pointLightSources;
 	std::unordered_map<const StaticGeometry*, std::vector<StaticWorldObject>> batch;
 public:
 	OpenGLRenderer();
@@ -26,7 +30,9 @@ public:
 
 	unsigned int getDrawCount() const;
 	unsigned int getObjectsDrawn() const;
+	void addLightSource(const DirectionalLightSource& lightSource);
 	void addLightSource(const SpotLightSource& lightSource);
+	void addLightSource(const PointLightSource& lightSource);
 	void uploadLightSources(const ShaderProgram& shader) const;
 	void render(const StaticWorldObject& worldObject);
 	void renderScene(const ShaderProgram& shader, const glm::mat4& projection);

@@ -139,6 +139,7 @@
     <ClCompile Include="src\FileLoader.cpp" />
     <ClCompile Include="src\PointLightSource.cpp" />
     <ClCompile Include="src\PointLightSource.h" />
+    <ClCompile Include="src\ShaderSorageBufferObject.cpp" />
     <ClCompile Include="src\SpotLightSource.cpp" />
     <ClCompile Include="src\Material.cpp" />
     <ClCompile Include="src\OpenGLRenderer.cpp" />
@@ -157,6 +158,7 @@
   <ItemGroup>
     <ClInclude Include="src\Camera.h" />
     <ClInclude Include="src\DirectionalLightSource.h" />
+    <ClInclude Include="src\ShaderStorageBufferObject.h" />
     <ClInclude Include="src\SpotLightSource.h" />
     <ClInclude Include="src\Material.h" />
     <ClInclude Include="src\OpenGLRenderer.h" />

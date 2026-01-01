@@ -63,6 +63,9 @@
     <ClCompile Include="src\DirectionalLightSource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ShaderSorageBufferObject.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="shader\VertexShader.glsl" />
@@ -100,6 +103,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\DirectionalLightSource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ShaderStorageBufferObject.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
