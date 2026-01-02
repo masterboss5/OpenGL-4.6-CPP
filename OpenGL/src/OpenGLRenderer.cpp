@@ -1,4 +1,3 @@
-#include <GL/glew.h>
 #include "OpenGLRenderer.h"
 
 #define MAX_INSTANCES_PER_BATCH 3250

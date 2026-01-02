@@ -1,5 +1,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <cstring>
+#include <type_traits>
 
 enum class BindingPoint : GLuint
 {
@@ -9,20 +11,25 @@ enum class BindingPoint : GLuint
 	//Add more as needed
 };
 
-template<typename T, BindingPoint BINDING>
+template<typename T, BindingPoint BINDING, GLenum BUFFER_USAGE>
 class ShaderSorageBufferObject final
 {
 private:
 	GLuint bufferID;
 	GLuint bytesSize;
 	size_t maxElements;
+	T* bufferPointer;
 public:
 
 	ShaderSorageBufferObject(size_t maxElements);
 	~ShaderSorageBufferObject();
 
+	void uploadData(const T* data, size_t count) const;
 	GLuint getBufferID() const;
 	void bindBuffer() const;
-	GLuint getBytesSize() const;
-	GLuint getMaxElements() const;
+	size_t getBytesSize() const;
+	size_t getMaxElements() const;
+	T* getBufferPointer() const;
+
+	static_assert(std::is_trivially_copyable_v<T>, "SSBO element type must be trivially copyable");
 };

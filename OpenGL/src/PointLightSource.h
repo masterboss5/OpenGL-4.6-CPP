@@ -40,3 +40,5 @@ public:
 		const float quadratic
 	);
 };
+
+static_assert(std::is_trivially_copyable_v<PointLightSource>, "SSBO element type must be trivially opyable");

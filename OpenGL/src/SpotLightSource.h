@@ -58,3 +58,5 @@ public:
 
 	void lookAt(const glm::vec3& target);
 };
+
+static_assert(std::is_trivially_copyable_v<SpotLightSource>, "SSBO element type must be trivially copyable");

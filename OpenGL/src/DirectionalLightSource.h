@@ -30,3 +30,5 @@ public:
 		const glm::vec3& specular
 	);
 };
+
+static_assert(std::is_trivially_copyable_v<DirectionalLightSource>, "SSBO element type must be trivially copyable");
