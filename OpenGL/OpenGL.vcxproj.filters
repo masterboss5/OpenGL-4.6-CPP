@@ -108,5 +108,8 @@
     <ClInclude Include="src\ShaderStorageBufferObject.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\LightBufferManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

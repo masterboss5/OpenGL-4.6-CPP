@@ -9,12 +9,13 @@
 #include "DirectionalLightSource.h"
 #include "PointLightSource.h"
 #include "Material.h"
+#include "LightBufferManager.h"
 
 class OpenGLRenderer final
 {
 private:
-	inline static unsigned int instanceSSBO;
-	inline static unsigned int lightSourcesSSBO;
+	GLuint instanceSSBO;
+	GLuint lightSourcesSSBO;
 	unsigned int drawCount;
 	unsigned int objectsDrawn;
 	std::vector<DirectionalLightSource> directionalLightSources;

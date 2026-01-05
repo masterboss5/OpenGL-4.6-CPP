@@ -11,7 +11,7 @@ enum class BindingPoint : GLuint
 	//Add more as needed
 };
 
-template<typename T, BindingPoint BINDING, GLenum BUFFER_USAGE>
+template<typename T, BindingPoint BINDING>
 class ShaderSorageBufferObject final
 {
 private:
