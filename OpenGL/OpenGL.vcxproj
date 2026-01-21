@@ -133,19 +133,22 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\Application.cpp" />
     <ClCompile Include="src\DirectionalLightSource.cpp" />
+    <ClCompile Include="src\LightBufferManager.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="src\Camera.cpp" />
     <ClCompile Include="src\FileLoader.cpp" />
     <ClCompile Include="src\PointLightSource.cpp" />
     <ClCompile Include="src\PointLightSource.h" />
+    <ClCompile Include="src\RenderLayer.cpp" />
     <ClCompile Include="src\ShaderSorageBufferObject.cpp" />
     <ClCompile Include="src\SpotLightSource.cpp" />
     <ClCompile Include="src\Material.cpp" />
     <ClCompile Include="src\OpenGLRenderer.cpp" />
     <ClCompile Include="src\ShaderProgram.cpp" />
-    <ClCompile Include="src\StaticGeometry.cpp" />
-    <ClCompile Include="src\StaticWorldObject.cpp" />
+    <ClCompile Include="src\StaticMesh.cpp" />
+    <ClCompile Include="src\StaticMeshObject.cpp" />
     <ClCompile Include="src\stb_image.cpp" />
     <ClCompile Include="src\Texture.cpp" />
     <ClCompile Include="src\tiny_obj_loader.cpp" />
@@ -156,18 +159,20 @@
     <None Include="shader\VertexShader.glsl" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\Application.h" />
+    <ClInclude Include="src\ApplicationLayer.h" />
     <ClInclude Include="src\Camera.h" />
     <ClInclude Include="src\DirectionalLightSource.h" />
     <ClInclude Include="src\LightBufferManager.h" />
+    <ClInclude Include="src\RenderLayer.h" />
     <ClInclude Include="src\ShaderStorageBufferObject.h" />
     <ClInclude Include="src\SpotLightSource.h" />
     <ClInclude Include="src\Material.h" />
     <ClInclude Include="src\OpenGLRenderer.h" />
     <ClInclude Include="src\ShaderProgram.h" />
-    <ClInclude Include="src\StaticGeometry.h" />
-    <ClInclude Include="src\StaticWorldObject.h" />
+    <ClInclude Include="src\StaticMesh.h" />
+    <ClInclude Include="src\StaticMeshObject.h" />
     <ClInclude Include="src\Texture.h" />
-    <ClInclude Include="src\VertexArray.h" />
     <ClInclude Include="src\Window.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

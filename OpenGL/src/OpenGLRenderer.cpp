@@ -4,18 +4,12 @@
 #define MAX_LIGHT_SOURCES 100
 #define __DEBUG_MAP_BUFFER
 
-OpenGLRenderer::OpenGLRenderer() : drawCount(0), objectsDrawn(0)
+OpenGLRenderer::OpenGLRenderer() : drawCount(0), objectsDrawn(0), lightBufferManager(MAX_LIGHT_SOURCES)
 {
 	glGenBuffers(1, &instanceSSBO);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, instanceSSBO);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(glm::mat4) * MAX_INSTANCES_PER_BATCH, nullptr, GL_DYNAMIC_DRAW);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, instanceSSBO);
-
-	glGenBuffers(1, &lightSourcesSSBO);
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lightSourcesSSBO);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(SpotLightSource) * MAX_LIGHT_SOURCES, nullptr, GL_DYNAMIC_DRAW);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, lightSourcesSSBO);
-	//have to do with other lights
 }
 
 unsigned int OpenGLRenderer::getDrawCount() const 
@@ -28,45 +22,19 @@ unsigned int OpenGLRenderer::getObjectsDrawn() const
 	return this->objectsDrawn;
 }
 
-void OpenGLRenderer::addLightSource(const DirectionalLightSource& lightSource)
-{
-	this->directionalLightSources.push_back(lightSource);
-}
-
-void OpenGLRenderer::addLightSource(const SpotLightSource& lightSource)
-{
-	this->spotLightSources.push_back(lightSource);
-}
-
-void OpenGLRenderer::addLightSource(const PointLightSource& lightSource)
-{
-	this->pointLightSources.push_back(lightSource);
-}
-
-void OpenGLRenderer::uploadLightSources(const ShaderProgram& shader) const
-{
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, lightSourcesSSBO);
-	void* const lightSSBO = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, sizeof(SpotLightSource) * this->spotLightSources.size(), GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
-	std::memcpy(lightSSBO, this->spotLightSources.data(), sizeof(SpotLightSource) * this->spotLightSources.size());
-	glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
-	glUniform1i(shader.getUniformLocation("lightCount"), this->spotLightSources.size());
-
-	glUniform1i(shader.getUniformLocation("spotLightSourcesCount"), this->spotLightSources.size());
-
-	//have to do with other lights
-
-}
-
-void OpenGLRenderer::render(const StaticWorldObject& worldObject)
+void OpenGLRenderer::render(const StaticMeshObject& worldObject)
 {
 	this->batch[worldObject.getGameObject()].push_back(worldObject);
 	this->objectsDrawn++;
 }
 
-void OpenGLRenderer::renderScene(const ShaderProgram& shader, const glm::mat4& projection)
+void OpenGLRenderer::renderScene(const ShaderProgram& shader, const Camera& camera, const Window& window)
 {
 	shader.bind();
-	this->uploadLightSources(shader);
+
+	glUniformMatrix4fv(shader.getUniformLocation("projection"), 1, 0, glm::value_ptr(camera.getProjectionMatrix(window)));
+	glUniformMatrix4fv(shader.getUniformLocation("view"), 1, 0, glm::value_ptr(camera.getViewMatrix()));
+	glUniform3f(shader.getUniformLocation("viewPos"), camera.position.x, camera.position.y, camera.position.z);
 
 	for (const auto& [staticGeometry, objects] : this->batch) {
 		glBindVertexArray(staticGeometry->getVAO());
@@ -102,4 +70,16 @@ void OpenGLRenderer::renderScene(const ShaderProgram& shader, const glm::mat4& p
 	this->drawCount = 0;
 	//this->lightSources.clear();
 	this->objectsDrawn = 0;
+}
+
+void OpenGLRenderer::enableCulling() const
+{
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glFrontFace(GL_CCW);
+}
+
+void OpenGLRenderer::disableCulling() const
+{
+	glDisable(GL_CULL_FACE);
 }

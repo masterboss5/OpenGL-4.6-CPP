@@ -133,6 +133,10 @@ vec3 CalculateSpotLight(SpotLightSource spotLight, vec3 normal, vec3 viewDir)
 
 vec3 CalculateDirectionalLight(DirectionalLightSource dirLight, vec3 normal, vec3 viewDir)
 {
+
+
+
+
 	vec3 lightDir = normalize(-dirLight.direction);
 
 	float diff = max(dot(normal, lightDir), 0.0);
@@ -202,13 +206,31 @@ void main()
 	vec3 normal = normalize(pass_normal);
 	vec3 viewDir = normalize(viewPos - fragPosition);
 
-	vec3 result = CalculateDirectionalLight(directionalLightSources[0], normal, viewDir);
+	//vec3 result = CalculateDirectionalLight(directionalLightSources[0], normal, viewDir);
+	//result += CalculateSpotLight(spotLightSources[0], normal, viewDir);
+	// for (int i = 0; i < pointLightSourcesCount; i++)
+	// {
+	// 	result += CalculatePointLight(pointLightSources[i], normal, viewDir);
+	// }
+
+
+	//New version
+	vec3 result = vec3(0, 0, 0);
 
 	for (int i = 0; i < pointLightSourcesCount; i++)
 	{
-		result += CalculatePointLight(pointLightSources[0], normal, viewDir);
+		result += CalculatePointLight(pointLightSources[i], normal, viewDir);
+	}
+	
+	for (int i = 0; i < spotLightSourcesCount; i++)
+	{
+		result += CalculateSpotLight(spotLightSources[i], normal, viewDir);
 	}
 
-	result += CalculateSpotLight(spotLightSources[0], normal, viewDir);
+	for (int i = 0; i < directionalLightSourcesCount; i++)
+	{
+		result += CalculateDirectionalLight(directionalLightSources[i], normal, viewDir);
+	}
+
 	pixelColor = vec4(result, 1.0);
 }

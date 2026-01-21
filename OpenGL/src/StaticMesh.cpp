@@ -1,6 +1,6 @@
-#include "StaticGeometry.h"
+#include "StaticMesh.h"
 
-StaticGeometry::StaticGeometry(const std::string& name,
+StaticMesh::StaticMesh(const std::string& name,
 	const Material& material,
 	const std::vector<float>& vertices,
 	const std::vector<unsigned int>& indices,
@@ -39,38 +39,38 @@ StaticGeometry::StaticGeometry(const std::string& name,
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(unsigned int) * indices.size(), indices.data(), GL_STATIC_DRAW);
 };
 
-unsigned int StaticGeometry::getVAO() const {
+unsigned int StaticMesh::getVAO() const {
 	return this->VAO;
 }
 
-unsigned int StaticGeometry::getVertexVBO() const {
+unsigned int StaticMesh::getVertexVBO() const {
 	return this->vertexVBO;
 }
 
-unsigned int StaticGeometry::getEBO() const {
+unsigned int StaticMesh::getEBO() const {
 	return this->EBO;
 }
 
-unsigned int StaticGeometry::getIndicesCount() const {
+unsigned int StaticMesh::getIndicesCount() const {
 	return this->indices.size();
 }
 
-const std::vector<float>& StaticGeometry::getVertices() const {
+const std::vector<float>& StaticMesh::getVertices() const {
 	return this->vertices;
 }
 
-const std::vector<unsigned int>& StaticGeometry::getIndices() const {
+const std::vector<unsigned int>& StaticMesh::getIndices() const {
 	return this->indices;
 }
 
-unsigned int StaticGeometry::getUVVBO() const {
+unsigned int StaticMesh::getUVVBO() const {
 	return this->UVVBO;
 }
 
-unsigned int StaticGeometry::getNormalVBO() const {
+unsigned int StaticMesh::getNormalVBO() const {
 	return this->normalVBO;
 }
 
-const Material& StaticGeometry::getMaterial() const {
+const Material& StaticMesh::getMaterial() const {
 	return this->material;
 }

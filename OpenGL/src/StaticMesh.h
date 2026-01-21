@@ -5,7 +5,7 @@
 #include "Texture.h"
 #include "Material.h"
 
-class StaticGeometry final {
+class StaticMesh final {
 private:
 	unsigned int VAO = 0;
 	unsigned int vertexVBO = 0;
@@ -19,7 +19,7 @@ private:
 	const std::vector<float> uv;
 	const std::vector<float> normals;
 public:
-	StaticGeometry(
+	StaticMesh(
 		const std::string& name,
 		const Material& material,
 		const std::vector<float>& vertices,

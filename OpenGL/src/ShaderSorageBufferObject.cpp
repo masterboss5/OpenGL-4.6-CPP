@@ -8,7 +8,7 @@ ShaderSorageBufferObject<T, BINDING>::ShaderSorageBufferObject(size_t maxElement
 	glGenBuffers(1, &this->bufferID);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, this->bufferID);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, this->bytesSize, nullptr, GL_DYNAMIC_DRAW);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, BINDING, this->bufferID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(BINDING), this->bufferID);
 	this->bufferPointer = static_cast<T*>(glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, this->bytesSize, 
 		GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT));
 }
@@ -22,7 +22,7 @@ ShaderSorageBufferObject<T, BINDING>::~ShaderSorageBufferObject()
 }
 
 template<typename T, BindingPoint BINDING>
-void ShaderSorageBufferObject<T, BINDING>::uploadData(const T* data, size_t count) const
+void ShaderSorageBufferObject<T, BINDING>::upload(const T* data, size_t count, ShaderProgram& shaderProgram) const
 {
 	assert(count <= this->maxElements);
 	std::memcpy(this->bufferPointer, data, sizeof(T) * count);
@@ -57,3 +57,7 @@ T* ShaderSorageBufferObject<T, BINDING>::getBufferPointer() const
 {
 	return this->bufferPointer;
 }
+
+template class ShaderSorageBufferObject<PointLightSource, BindingPoint::POINT_LIGHT_SOURCE>;
+template class ShaderSorageBufferObject<DirectionalLightSource, BindingPoint::DIRECTIONAL_LIGHT_SOURCES>;
+template class ShaderSorageBufferObject<SpotLightSource, BindingPoint::SPOT_LIGHT_SOURCES>;

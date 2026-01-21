@@ -5,7 +5,7 @@
 #include <vector>
 #include <stdexcept>
 #include "tiny_obj_loader.h"
-#include "StaticGeometry.h"
+#include "StaticMesh.h"
 #include <glm.hpp>
 
 namespace FileLoader {
@@ -17,7 +17,7 @@ namespace FileLoader {
 		return buffer.str();
 	}
 
-    static StaticGeometry* readObj(const std::string& objPath, const std::string& dirPath) {
+    static StaticMesh* readObj(const std::string& objPath, const std::string& dirPath) {
         tinyobj::attrib_t attrib;
         std::vector<tinyobj::shape_t> shapes;
         std::vector<tinyobj::material_t> materials;
@@ -114,7 +114,7 @@ namespace FileLoader {
 		std::cout << material.roughnessTexture.isLoaded() << std::endl;
 		std::cout << material.emissiveTexture.isLoaded() << std::endl;
 
-        return new StaticGeometry(
+        return new StaticMesh(
             "test-01",
             material,
             flatPositions,

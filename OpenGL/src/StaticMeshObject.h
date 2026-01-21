@@ -1,11 +1,11 @@
 #pragma once
-#include "StaticGeometry.h"
+#include "StaticMesh.h"
 #include "glm.hpp"
 #include <gtc/matrix_transform.hpp>
 #include <gtc/type_ptr.hpp>
 #include <iostream>
 
-class StaticWorldObject final {
+class StaticMeshObject final {
 private:
 	float x;
 	float y;
@@ -16,10 +16,10 @@ private:
 	float scaleX = 1;
 	float scaleY = 1;
 	float scaleZ = 1;
-	const StaticGeometry* const staticGeometry;
+	const StaticMesh* const staticGeometry;
 public:
-	StaticWorldObject(StaticGeometry* gameObject, double x, double y, double z);
-	const StaticGeometry* const getGameObject() const;
+	StaticMeshObject(StaticMesh* gameObject, double x, double y, double z);
+	const StaticMesh* const getGameObject() const;
 	void buildMatrix(glm::mat4& transformMatrix) const;
 	void setPosition(float x, float y, float z);
 	void setRotation(float rotX, float rotY, float rotZ);

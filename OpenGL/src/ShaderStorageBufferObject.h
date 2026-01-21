@@ -2,6 +2,10 @@
 #include <GLFW/glfw3.h>
 #include <cstring>
 #include <type_traits>
+#include "PointLightSource.h"
+#include "SpotLightSource.h"
+#include "DirectionalLightSource.h"
+#include "ShaderProgram.h"
 
 enum class BindingPoint : GLuint
 {
@@ -20,11 +24,10 @@ private:
 	size_t maxElements;
 	T* bufferPointer;
 public:
-
 	ShaderSorageBufferObject(size_t maxElements);
 	~ShaderSorageBufferObject();
 
-	void uploadData(const T* data, size_t count) const;
+	void upload(const T* data, size_t count, ShaderProgram& shaderProgram) const;
 	GLuint getBufferID() const;
 	void bindBuffer() const;
 	size_t getBytesSize() const;

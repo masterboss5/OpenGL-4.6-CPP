@@ -1,6 +1,6 @@
 #pragma once
 #include <vector>
-#include "StaticWorldObject.h"
+#include "StaticMeshObject.h"
 #include <map>
 #include "ShaderProgram.h"
 #include <gtc/matrix_transform.hpp>
@@ -10,18 +10,18 @@
 #include "PointLightSource.h"
 #include "Material.h"
 #include "LightBufferManager.h"
+#include "Camera.h"
+#include "Window.h"
 
 class OpenGLRenderer final
 {
 private:
 	GLuint instanceSSBO;
-	GLuint lightSourcesSSBO;
 	unsigned int drawCount;
 	unsigned int objectsDrawn;
 	std::vector<DirectionalLightSource> directionalLightSources;
-	std::vector<SpotLightSource> spotLightSources;
-	std::vector<PointLightSource> pointLightSources;
-	std::unordered_map<const StaticGeometry*, std::vector<StaticWorldObject>> batch;
+	LightBufferManager lightBufferManager;
+	std::unordered_map<const StaticMesh*, std::vector<StaticMeshObject>> batch;
 public:
 	OpenGLRenderer();
 	OpenGLRenderer(const OpenGLRenderer&) = delete;
@@ -29,12 +29,16 @@ public:
 	OpenGLRenderer(OpenGLRenderer&&) = delete;
 	OpenGLRenderer& operator=(OpenGLRenderer&&) = delete;
 
+	template<typename LightType>
+	void uploadLightSources(std::vector<LightType>& lightSources, ShaderProgram& shaderProgram)
+	{
+		this->lightBufferManager.uploadLightSources(lightSources, shaderProgram);
+	}
+
 	unsigned int getDrawCount() const;
 	unsigned int getObjectsDrawn() const;
-	void addLightSource(const DirectionalLightSource& lightSource);
-	void addLightSource(const SpotLightSource& lightSource);
-	void addLightSource(const PointLightSource& lightSource);
-	void uploadLightSources(const ShaderProgram& shader) const;
-	void render(const StaticWorldObject& worldObject);
-	void renderScene(const ShaderProgram& shader, const glm::mat4& projection);
+	void render(const StaticMeshObject& worldObject);
+	void renderScene(const ShaderProgram& shader, const Camera& camera, const Window& window);
+	void enableCulling() const;
+	void disableCulling() const;
 };

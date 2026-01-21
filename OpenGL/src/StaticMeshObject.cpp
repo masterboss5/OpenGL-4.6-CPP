@@ -1,6 +1,6 @@
-#include "StaticWorldObject.h"
+#include "StaticMeshObject.h"
 
-StaticWorldObject::StaticWorldObject(StaticGeometry* gameObject,
+StaticMeshObject::StaticMeshObject(StaticMesh* gameObject,
 	double x,
 	double y,
 	double z
@@ -8,7 +8,7 @@ StaticWorldObject::StaticWorldObject(StaticGeometry* gameObject,
 {
 }
 
-void StaticWorldObject::buildMatrix(glm::mat4& transformMatrix) const {
+void StaticMeshObject::buildMatrix(glm::mat4& transformMatrix) const {
 	transformMatrix = glm::translate(transformMatrix, glm::vec3(x, y, z));
 
 	transformMatrix = glm::rotate(transformMatrix, glm::radians(rotX), glm::vec3(1.0f, 0.0f, 0.0f));
@@ -18,28 +18,28 @@ void StaticWorldObject::buildMatrix(glm::mat4& transformMatrix) const {
 	transformMatrix = glm::scale(transformMatrix, glm::vec3(this->scaleX, this->scaleY, this->scaleZ));
 }
 
-const StaticGeometry* const StaticWorldObject::getGameObject() const {
+const StaticMesh* const StaticMeshObject::getGameObject() const {
 	return this->staticGeometry;
 }
 
-void StaticWorldObject::setPosition(float x, float y, float z) {
+void StaticMeshObject::setPosition(float x, float y, float z) {
 	this->x = x;
 	this->y = y;
 	this->z = z;
 }
 
-void StaticWorldObject::setRotation(float rotX, float rotY, float rotZ) {
+void StaticMeshObject::setRotation(float rotX, float rotY, float rotZ) {
 	this->rotX = rotX;
 	this->rotY = rotY;
 	this->rotZ = rotZ;
 }
 
-void StaticWorldObject::setScale(float scaleX, float scaleY, float scaleZ) {
+void StaticMeshObject::setScale(float scaleX, float scaleY, float scaleZ) {
 	this->scaleX = scaleX;
 	this->scaleY = scaleY;
 	this->scaleZ = scaleZ;
 }
 
-void StaticWorldObject::setScale(float xyz) {
+void StaticMeshObject::setScale(float xyz) {
 	this->setScale(xyz, xyz, xyz);
 }
