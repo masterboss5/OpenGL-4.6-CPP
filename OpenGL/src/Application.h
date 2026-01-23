@@ -6,6 +6,13 @@
 
 namespace core
 {
+	struct WindowSpecification final
+	{
+		std::string windowTitle;
+		unsigned int width;
+		unsigned int height;
+	};
+
 	class Application final
 	{
 	private:

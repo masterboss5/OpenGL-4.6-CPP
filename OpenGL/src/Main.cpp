@@ -19,6 +19,19 @@
 #define FAR_PLANE 600.0f
 #define NEAR_PLANE 0.1f
 
+#define RESOLUTION_1080P(spec) \
+    spec.width = 1920;         \
+    spec.height = 1080;
+
+#define RESOLUTION_1440P(spec) \
+    spec.width = 2560;         \
+    spec.height = 1440;
+
+#define RESOLUTION_4K(spec)    \
+    spec.width = 3840;         \
+    spec.height = 2160;
+
+
 //Style
 /*
 * Get first, then setters
@@ -26,7 +39,9 @@
 
 int main()
 {
-
+	core::WindowSpecification windowSpecification;
+	windowSpecification.windowTitle = "OpenGL 4.6 Core";
+	RESOLUTION_4K(windowSpecification);
 
 	core::Application app;
 	std::unique_ptr<ApplicationLayer> renderLayer = std::make_unique<RenderLayer>();
