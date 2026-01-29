@@ -10,11 +10,12 @@
 #include <gtc/type_ptr.hpp>
 #include "OpenGLRenderer.h"
 #include "Texture.h"
-#include "FileLoader.cpp"
+#include "FileLoader.h"
 #include "SpotLightSource.h"
 #include "Camera.h"
 #include "Application.h"
-#include "RenderLayer.h"
+#include "core/layers/RenderLayer.h"
+#include "core/layers/InputLayer.h"
 
 #define FAR_PLANE 600.0f
 #define NEAR_PLANE 0.1f
@@ -40,22 +41,30 @@
 int main()
 {
 	core::WindowSpecification windowSpecification;
-	windowSpecification.windowTitle = "OpenGL 4.6 Core";
-	RESOLUTION_4K(windowSpecification);
-
-	core::Application app;
-	std::unique_ptr<ApplicationLayer> renderLayer = std::make_unique<RenderLayer>();
-	app.pushLayer(std::move(renderLayer));
-	app.run();
-
+	windowSpecification.windowTitle = "OpenGL 4.6";
+	windowSpecification.width = 1920;
+	windowSpecification.height = 1080;
 
 	glfwInit();
-	Window window("OpenGL 4.6", 2560, 1440);
+	Window window(windowSpecification);
 	window.makeContextCurrent();
 	window.lockMouse();
 	window.setupInputs();
 	window.uncapFPS();
 	glewInit();
+
+	core::Application app = core::Application(windowSpecification);
+	app.pushLayer<core::InputLayer>();
+	app.pushLayer<core::RenderLayer>();
+	app.run();
+
+	//glfwInit();
+	//Window window(windowSpecification);
+	//window.makeContextCurrent();
+	//window.lockMouse();
+	//window.setupInputs();
+	//window.uncapFPS();
+	//glewInit();
 
 	Camera camera(0.1, 90.0f, 0.1f, 5000.0f);
 	OpenGLRenderer openGLRenderer;
@@ -130,12 +139,13 @@ int main()
 	openGLRenderer.uploadLightSources(directionalLights, shader);
 
 	while (!window.shouldClose()) {
+		core::input::InputManager::getInstance()->update(); //TEMP
 		window.pollEvents();
 		window.clearColor();
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glEnable(GL_DEPTH_TEST);
 
-		camera.tick(window, window.getFrameDeltaTime());
+		camera.update(window, window.getFrameDeltaTime());
 
 		static float x = 0;
 		x += 0.01f;

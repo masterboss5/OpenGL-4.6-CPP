@@ -17,11 +17,18 @@ namespace core
 	{
 	private:
 		bool running = false;
-		std::vector<std::unique_ptr<ApplicationLayer>> layers;
+		std::vector<std::unique_ptr<ApplicationLayer>> layers = {};
 	public:
+		Application(WindowSpecification windowSpecification = {"Window", 100, 100});
+
 		void run();
 		void stop();
-		void pushLayer(std::unique_ptr<ApplicationLayer> layer);
 		size_t getLayerCount() const;
+
+		template<typename TLayer>
+		void pushLayer()
+		{
+			this->layers.push_back(std::make_unique<TLayer>());
+		}
 	};
 }

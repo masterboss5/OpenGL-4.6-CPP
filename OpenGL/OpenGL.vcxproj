@@ -122,7 +122,7 @@
       <PreprocessorDefinitions>
       </PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)Dependencies\GLFW\include;$(SolutionDir)Dependencies\GLEW\include;$(SolutionDir)Dependencies\GLM;$(SolutionDir)Dependencies\STB;$(SolutionDir)Dependencies\TOJ;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)Dependencies\GLFW\include;$(SolutionDir)Dependencies\GLEW\include;$(SolutionDir)Dependencies\GLM;$(SolutionDir)Dependencies\STB;$(SolutionDir)Dependencies\TOJ;$(ProjectDir)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
@@ -134,14 +134,15 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Application.cpp" />
+    <ClCompile Include="src\core\input\InputManager.cpp" />
     <ClCompile Include="src\DirectionalLightSource.cpp" />
+    <ClCompile Include="src\InputLayer.cpp" />
     <ClCompile Include="src\LightBufferManager.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="src\Camera.cpp" />
-    <ClCompile Include="src\FileLoader.cpp" />
+    <ClCompile Include="src\FileLoader.h" />
     <ClCompile Include="src\PointLightSource.cpp" />
     <ClCompile Include="src\PointLightSource.h" />
-    <ClCompile Include="src\RenderLayer.cpp" />
     <ClCompile Include="src\ShaderSorageBufferObject.cpp" />
     <ClCompile Include="src\SpotLightSource.cpp" />
     <ClCompile Include="src\Material.cpp" />
@@ -162,9 +163,13 @@
     <ClInclude Include="src\Application.h" />
     <ClInclude Include="src\ApplicationLayer.h" />
     <ClInclude Include="src\Camera.h" />
+    <ClInclude Include="src\core\input\InputManager.h" />
+    <ClInclude Include="src\core\layers\InputLayer.h" />
+    <ClInclude Include="src\core\layers\WindowLayer.h" />
     <ClInclude Include="src\DirectionalLightSource.h" />
+    <ClInclude Include="src\InputLayer.h" />
     <ClInclude Include="src\LightBufferManager.h" />
-    <ClInclude Include="src\RenderLayer.h" />
+    <ClInclude Include="src\core\layers\RenderLayer.h" />
     <ClInclude Include="src\ShaderStorageBufferObject.h" />
     <ClInclude Include="src\SpotLightSource.h" />
     <ClInclude Include="src\Material.h" />

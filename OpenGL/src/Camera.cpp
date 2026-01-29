@@ -1,5 +1,6 @@
 #include "Camera.h"
 #include <iostream>
+#include "src/core/input/InputManager.h"
 
 Camera::Camera(float sensitivity, float FOV, float nearPlane, float farPlane) : yaw(0.0f), pitch(0.0f), sensitivity(sensitivity), FOV(FOV), nearPlane(nearPlane), farPlane(farPlane)
 {
@@ -11,34 +12,58 @@ Camera::Camera(float sensitivity, float FOV, float nearPlane, float farPlane) : 
 	this->updateCameraVectors();
 }
 
-void Camera::tick(const Window& window, float deltaTime)
+void Camera::update(const Window& window, float deltaTime)
 {
-	if (window.isKeyPressed(GLFW_KEY_W)) {
+	//if (window.isKeyPressed(GLFW_KEY_W)) {
+	//	this->position += this->front * deltaTime * 10.0f;
+	//}
+
+	//if (window.isKeyPressed(GLFW_KEY_S)) {
+	//	this->position -= this->front * deltaTime * 10.0f;
+	//}
+
+	//if (window.isKeyPressed(GLFW_KEY_A)) {
+	//	this->position -= this->right * deltaTime * 10.0f;
+	//}
+
+	//if (window.isKeyPressed(GLFW_KEY_D)) {
+	//	this->position += this->right * deltaTime * 10.0f;
+	//}
+
+	//if (window.isKeyPressed(GLFW_KEY_SPACE)) {
+	//	this->position += this->worldUp * deltaTime * 10.0f;
+	//}
+
+	//if (window.isKeyPressed(GLFW_KEY_LEFT_SHIFT)) {
+	//	this->position -= this->worldUp * deltaTime * 10.0f;
+	//}
+
+	if (core::input::InputManager::getInstance()->isKeyPressed(GLFW_KEY_W)) {
 		this->position += this->front * deltaTime * 10.0f;
 	}
 
-	if (window.isKeyPressed(GLFW_KEY_S)) {
+	if (core::input::InputManager::getInstance()->isKeyPressed(GLFW_KEY_S)) {
 		this->position -= this->front * deltaTime * 10.0f;
 	}
 
-	if (window.isKeyPressed(GLFW_KEY_A)) {
+	if (core::input::InputManager::getInstance()->isKeyPressed(GLFW_KEY_A)) {
 		this->position -= this->right * deltaTime * 10.0f;
 	}
 
-	if (window.isKeyPressed(GLFW_KEY_D)) {
+	if (core::input::InputManager::getInstance()->isKeyPressed(GLFW_KEY_D)) {
 		this->position += this->right * deltaTime * 10.0f;
 	}
 
-	if (window.isKeyPressed(GLFW_KEY_SPACE)) {
+	if (core::input::InputManager::getInstance()->isKeyPressed(GLFW_KEY_SPACE)) {
 		this->position += this->worldUp * deltaTime * 10.0f;
 	}
 
-	if (window.isKeyPressed(GLFW_KEY_LEFT_SHIFT)) {
+	if (core::input::InputManager::getInstance()->isKeyPressed(GLFW_KEY_LEFT_SHIFT)) {
 		this->position -= this->worldUp * deltaTime * 10.0f;
 	}
 
-	float xOffset = window.getDeltaMouseX() * this->sensitivity;
-	float yOffset = window.getDeltaMouseY() * this->sensitivity;
+	float xOffset = core::input::InputManager::getInstance()->getDeltaMouseX() * this->sensitivity;
+	float yOffset = core::input::InputManager::getInstance()->getDeltaMouseY() * this->sensitivity;
 	this->yaw += xOffset;
 	this->pitch -= yOffset;
 

@@ -27,7 +27,7 @@
     <ClCompile Include="src\Camera.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\FileLoader.cpp">
+    <ClCompile Include="src\FileLoader.h">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\SpotLightSource.cpp">
@@ -72,7 +72,10 @@
     <ClCompile Include="src\Application.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\RenderLayer.cpp">
+    <ClCompile Include="src\InputLayer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\input\InputManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -123,7 +126,19 @@
     <ClInclude Include="src\ApplicationLayer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\RenderLayer.h">
+    <ClInclude Include="src\core\layers\RenderLayer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\InputLayer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\input\InputManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\layers\InputLayer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\core\layers\WindowLayer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

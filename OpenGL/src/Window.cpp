@@ -1,67 +1,72 @@
 #include "Window.h"
+#include "Application.h"
 #include <iostream>
 
-Window::Window(const std::string& name, unsigned int width, unsigned int height) : title(name), height(height), width(width) {
-	this->window = glfwCreateWindow(width, height, name.c_str(), nullptr, nullptr);
+Window::Window(core::WindowSpecification windowSpecification)
+	: title(windowSpecification.windowTitle), width(windowSpecification.width), height(windowSpecification.height)
+{
+	this->window = glfwCreateWindow(width, height, this->title.c_str(), nullptr, nullptr);
 	glfwMakeContextCurrent(this->window);
 	windowPtr = this;
 }
 
-Window::~Window() {
-	//glfwDestroyWindow(this->window);
-	//glfwTerminate();
+Window::~Window()
+{
+	glfwDestroyWindow(this->window);
+	this->window = nullptr;
 }
 
-void Window::setupInputs() {
-	glfwSetKeyCallback(this->window, [](GLFWwindow* glfwWindow, int key, int scancode, int action, int mods) {
-		switch (action) {
-		case GLFW_PRESS:
-			windowPtr->keysPressed[key] = true;
+void Window::setupInputs()
+{
+	//glfwSetKeyCallback(this->window, [](GLFWwindow* glfwWindow, int key, int scancode, int action, int mods) {
+	//	switch (action) {
+	//	case GLFW_PRESS:
+	//		windowPtr->keysPressed[key] = true;
 
-			if (windowPtr->keyPressedEvents.contains(key)) {
-				windowPtr->keyPressedEvents[key](key);
-				windowPtr->onKeyPress(glfwWindow, key, scancode, mods);
-			}
-			break;
+	//		if (windowPtr->keyPressedEvents.contains(key)) {
+	//			windowPtr->keyPressedEvents[key](key);
+	//			windowPtr->onKeyPress(glfwWindow, key, scancode, mods);
+	//		}
+	//		break;
 
-		case GLFW_RELEASE:
-			windowPtr->keysPressed[key] = false;
+	//	case GLFW_RELEASE:
+	//		windowPtr->keysPressed[key] = false;
 
-			if (windowPtr->keyReleasedEvents.contains(key)) {
-				windowPtr->keyReleasedEvents[key](key);
-				windowPtr->onKeyRelease(glfwWindow, key, scancode, mods);
-			}
-			break;
+	//		if (windowPtr->keyReleasedEvents.contains(key)) {
+	//			windowPtr->keyReleasedEvents[key](key);
+	//			windowPtr->onKeyRelease(glfwWindow, key, scancode, mods);
+	//		}
+	//		break;
 
-		case GLFW_REPEAT:
-			windowPtr->keysPressed[key] = true;
+	//	case GLFW_REPEAT:
+	//		windowPtr->keysPressed[key] = true;
 
-			if (windowPtr->keyPressedEvents.contains(key)) {
-				windowPtr->keyPressedEvents[key](key);
-				windowPtr->onKeyPress(glfwWindow, key, scancode, mods);
-			}
-			break;
-		}
-	});
+	//		if (windowPtr->keyPressedEvents.contains(key)) {
+	//			windowPtr->keyPressedEvents[key](key);
+	//			windowPtr->onKeyPress(glfwWindow, key, scancode, mods);
+	//		}
+	//		break;
+	//	}
+	//});
 
-	glfwSetCursorPosCallback(this->window, [](GLFWwindow* glfwWindow, double mouseX, double mouseY) {
-		windowPtr->deltaMouseX = mouseX - windowPtr->mouseX;
-		windowPtr->deltaMouseY = mouseY - windowPtr->mouseY;
-		windowPtr->mouseX = mouseX;
-		windowPtr->mouseY = mouseY;
-		windowPtr->onMouseMove(mouseX, mouseY);
-	});
+	//glfwSetCursorPosCallback(this->window, [](GLFWwindow* glfwWindow, double mouseX, double mouseY) {
+	//	windowPtr->deltaMouseX = mouseX - windowPtr->mouseX;
+	//	windowPtr->deltaMouseY = mouseY - windowPtr->mouseY;
+	//	windowPtr->mouseX = mouseX;
+	//	windowPtr->mouseY = mouseY;
+	//	windowPtr->onMouseMove(mouseX, mouseY);
+	//});
 
-	glfwSetMouseButtonCallback(this->window, [](GLFWwindow* glfwWindow, int button, int action, int mods) {
-		windowPtr->mouseButtonsPressed[button] = (action != GLFW_RELEASE);
-		windowPtr->onMouseClick(button, action);
-	});
+	//glfwSetMouseButtonCallback(this->window, [](GLFWwindow* glfwWindow, int button, int action, int mods) {
+	//	windowPtr->mouseButtonsPressed[button] = (action != GLFW_RELEASE);
+	//	windowPtr->onMouseClick(button, action);
+	//});
 
-	glfwSetWindowSizeCallback(this->window, [](GLFWwindow* glfwWindow, int width, int height) {
-		windowPtr->setWidth(width);
-		windowPtr->setHeight(height);
-		windowPtr->onWindowResize(width, height);
-	});
+	//glfwSetWindowSizeCallback(this->window, [](GLFWwindow* glfwWindow, int width, int height) {
+	//	windowPtr->setWidth(width);
+	//	windowPtr->setHeight(height);
+	//	windowPtr->onWindowResize(width, height);
+	//});
 }
 
 void Window::onMouseClick(int button, int action) {

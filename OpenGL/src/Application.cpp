@@ -2,31 +2,32 @@
 
 namespace core
 {
+	Application::Application(WindowSpecification windowSpecification)
+		: running(false)
+	{
+		//this->window = std::make_unique<Window>()
+	}
+
 	void Application::run()
 	{
-		this->running = true;
-		while (this->running)
-		{
-			for (const auto& layer : this->layers)
-			{
-				layer->update();
-			}
+		//this->running = true;
+		//while (this->running)
+		//{
+		//	for (const auto& layer : this->layers)
+		//	{
+		//		layer->update();
+		//	}
 
-			for (const auto& layer : this->layers)
-			{
-				layer->render();
-			}
-		}
+		//	for (const auto& layer : this->layers)
+		//	{
+		//		layer->render();
+		//	}
+		//}
 	}
 
 	void Application::stop()
 	{
 		this->running = false;
-	}
-
-	void Application::pushLayer(std::unique_ptr<ApplicationLayer> layer)
-	{
-		this->layers.push_back(std::move(layer));
 	}
 
 	size_t Application::getLayerCount() const

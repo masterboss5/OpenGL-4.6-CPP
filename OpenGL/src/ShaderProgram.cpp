@@ -1,5 +1,5 @@
 #include "ShaderProgram.h"
-#include "FileLoader.cpp"
+#include "FileLoader.h"
 #include<iostream>
 
 void checkCompileErrors(GLuint shader, std::string type) {

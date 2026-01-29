@@ -23,7 +23,7 @@ public:
 
 	Camera(float sensitivity, float FOV, float nearPlane, float farPlane);
 
-	void tick(const Window& window, float deltaTime);
+	void update(const Window& window, float deltaTime);
 	glm::mat4 getViewMatrix() const;
 	glm::mat4 getProjectionMatrix(const Window& window) const;
 	void updateCameraVectors();
