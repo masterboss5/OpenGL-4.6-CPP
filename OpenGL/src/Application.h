@@ -3,6 +3,9 @@
 #include<vector>
 #include "ApplicationLayer.h"
 #include "Window.h"
+#include "src/core/input/InputManager.h"
+#include "src/Camera.h"
+#include "src/OpenGLRenderer.h"
 
 namespace core
 {
@@ -17,6 +20,7 @@ namespace core
 	{
 	private:
 		bool running = false;
+		std::unique_ptr<Window> window = nullptr;
 		std::vector<std::unique_ptr<ApplicationLayer>> layers = {};
 	public:
 		Application(WindowSpecification windowSpecification = {"Window", 100, 100});
@@ -28,7 +32,7 @@ namespace core
 		template<typename TLayer>
 		void pushLayer()
 		{
-			this->layers.push_back(std::make_unique<TLayer>());
+			this->layers.push_back(std::make_unique<TLayer>(this->window.get()));
 		}
 	};
 }

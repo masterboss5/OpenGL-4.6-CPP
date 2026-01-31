@@ -15,7 +15,6 @@
 #include "Camera.h"
 #include "Application.h"
 #include "core/layers/RenderLayer.h"
-#include "core/layers/InputLayer.h"
 
 #define FAR_PLANE 600.0f
 #define NEAR_PLANE 0.1f
@@ -45,16 +44,15 @@ int main()
 	windowSpecification.width = 1920;
 	windowSpecification.height = 1080;
 
-	glfwInit();
-	Window window(windowSpecification);
-	window.makeContextCurrent();
-	window.lockMouse();
-	window.setupInputs();
-	window.uncapFPS();
-	glewInit();
+	//glfwInit();
+	//Window window(windowSpecification);
+	//window.makeContextCurrent();
+	//window.lockMouse();
+	//window.setupInputs();
+	//window.uncapFPS();
+	//glewInit();
 
 	core::Application app = core::Application(windowSpecification);
-	app.pushLayer<core::InputLayer>();
 	app.pushLayer<core::RenderLayer>();
 	app.run();
 
@@ -70,19 +68,14 @@ int main()
 	OpenGLRenderer openGLRenderer;
 	ShaderProgram shader("shader/VertexShader.glsl", "shader/FragmentShader.glsl");
 	shader.bind();
-	Texture texture("image/img.png");
 
-	openGLRenderer.enableCulling();
-	window.registerKeyPressEvent(GLFW_KEY_ESCAPE, [&](int key) {
-		window.closeWindow();
-	});
 
 	StaticMesh* worldObject = FileLoader::readObj("objects/backpack.obj", "objects");
 	StaticMeshObject backPack(worldObject, 0, 0, 0);
 	//backPack.setScale(500.0f);
 
 
-	PointLightSource pointLight{
+	PointLightSource pointLight {
 		glm::vec3(0.0f, -10.0f, 0.0f),
 		// AMBIENT: Extremely low, neutral grey. 
 		// This prevents the "red glow" in the dark from your previous settings.
@@ -100,7 +93,7 @@ int main()
 		0.032f   // Quadratic (This preset is great for a range of ~50 units)
 	};
 
-	SpotLightSource spotLight{
+	SpotLightSource spotLight {
 		glm::vec3(0.0f, 10.0f, 0.0f),
 		glm::vec3(0.0f, 0.0f, 0.0f),
 		glm::cos(glm::radians(12.5f)),
@@ -118,7 +111,7 @@ int main()
 	};
 	spotLight.lookAt(glm::vec3(0.0f, 0.0f, 0.0f));
 
-	DirectionalLightSource dirL{
+	DirectionalLightSource dirL {
 		glm::vec3(0.5f, -0.7f, 0.5f),
 		// AMBIENT: Extremely low (0.02). This ensures back-faces are nearly black, 
 		// but not "void" black (so you can essentially only see the lit side).
@@ -131,8 +124,8 @@ int main()
 	};
 
 	std::vector<PointLightSource> pointLights = {pointLight};
-	std::vector<SpotLightSource> spotLights = { spotLight };
-	std::vector<DirectionalLightSource> directionalLights = {  };
+	std::vector<SpotLightSource> spotLights = {spotLight};
+	std::vector<DirectionalLightSource> directionalLights = {};
 
 	openGLRenderer.uploadLightSources(pointLights, shader);
 	openGLRenderer.uploadLightSources(spotLights, shader);
@@ -154,7 +147,7 @@ int main()
 
 		openGLRenderer.render(backPack);
 		openGLRenderer.renderScene(shader, camera, window);
-		window.swapBuffers();
+		window.swapBuffers(); //used
 	}
 
 	return 0;

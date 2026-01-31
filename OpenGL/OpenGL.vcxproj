@@ -136,7 +136,6 @@
     <ClCompile Include="src\Application.cpp" />
     <ClCompile Include="src\core\input\InputManager.cpp" />
     <ClCompile Include="src\DirectionalLightSource.cpp" />
-    <ClCompile Include="src\InputLayer.cpp" />
     <ClCompile Include="src\LightBufferManager.cpp" />
     <ClCompile Include="src\Main.cpp" />
     <ClCompile Include="src\Camera.cpp" />
@@ -164,10 +163,8 @@
     <ClInclude Include="src\ApplicationLayer.h" />
     <ClInclude Include="src\Camera.h" />
     <ClInclude Include="src\core\input\InputManager.h" />
-    <ClInclude Include="src\core\layers\InputLayer.h" />
     <ClInclude Include="src\core\layers\WindowLayer.h" />
     <ClInclude Include="src\DirectionalLightSource.h" />
-    <ClInclude Include="src\InputLayer.h" />
     <ClInclude Include="src\LightBufferManager.h" />
     <ClInclude Include="src\core\layers\RenderLayer.h" />
     <ClInclude Include="src\ShaderStorageBufferObject.h" />
