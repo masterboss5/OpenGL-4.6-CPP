@@ -122,60 +122,98 @@
       <PreprocessorDefinitions>
       </PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)Dependencies\GLFW\include;$(SolutionDir)Dependencies\GLEW\include;$(SolutionDir)Dependencies\GLM;$(SolutionDir)Dependencies\STB;$(SolutionDir)Dependencies\TOJ;$(ProjectDir)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)Dependencies\GLFW\include;$(SolutionDir)Dependencies\GLEW\include;$(SolutionDir)Dependencies\GLM;$(SolutionDir)Dependencies\STB;$(SolutionDir)Dependencies\TOJ;$(ProjectDir);$(SolutionDir)Dependencies\ASSIMP\include</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)Dependencies\GLEW\lib\Release\x64;$(SolutionDir)Dependencies\GLFW\lib-vc2022</AdditionalLibraryDirectories>
-      <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;glew32s.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)Dependencies\GLEW\lib\Release\x64;$(SolutionDir)Dependencies\GLFW\lib-vc2022;$(SolutionDir)Dependencies\ASSIMP\lib</AdditionalLibraryDirectories>
+      <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;glew32s.lib;assimp-vc145-mt.lib</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\Application.cpp" />
+    <ClCompile Include="src\component\object\CObjectTransformComponent.cpp" />
+    <ClCompile Include="src\core\app\Application.cpp" />
     <ClCompile Include="src\core\input\InputManager.cpp" />
-    <ClCompile Include="src\DirectionalLightSource.cpp" />
-    <ClCompile Include="src\LightBufferManager.cpp" />
-    <ClCompile Include="src\Main.cpp" />
-    <ClCompile Include="src\Camera.cpp" />
-    <ClCompile Include="src\FileLoader.h" />
-    <ClCompile Include="src\PointLightSource.cpp" />
-    <ClCompile Include="src\PointLightSource.h" />
-    <ClCompile Include="src\ShaderSorageBufferObject.cpp" />
-    <ClCompile Include="src\SpotLightSource.cpp" />
-    <ClCompile Include="src\Material.cpp" />
-    <ClCompile Include="src\OpenGLRenderer.cpp" />
-    <ClCompile Include="src\ShaderProgram.cpp" />
-    <ClCompile Include="src\StaticMesh.cpp" />
-    <ClCompile Include="src\StaticMeshObject.cpp" />
-    <ClCompile Include="src\stb_image.cpp" />
-    <ClCompile Include="src\Texture.cpp" />
-    <ClCompile Include="src\tiny_obj_loader.cpp" />
-    <ClCompile Include="src\Window.cpp" />
+    <ClCompile Include="src\pipeline\shader\FragmentShader.cpp" />
+    <ClCompile Include="src\pipeline\shader\VertexShader.cpp" />
+    <ClCompile Include="src\renderer\buffers\VertexBuffer.cpp" />
+    <ClCompile Include="src\pipeline\texture\Texture2D.cpp" />
+    <ClCompile Include="src\resource\asset\importer\FragmentShaderImporter.cpp" />
+    <ClCompile Include="src\resource\asset\importer\ModelAssetImporter.cpp" />
+    <ClCompile Include="src\resource\asset\importer\Texture2DImporter.cpp" />
+    <ClCompile Include="src\resource\asset\importer\VertexShaderImporter.cpp" />
+    <ClCompile Include="src\resource\asset\AssetManager.cpp" />
+    <ClCompile Include="src\scene\DirectionalLightSource.cpp" />
+    <ClCompile Include="src\renderer\LightBufferManager.cpp" />
+    <ClCompile Include="src\core\Main.cpp" />
+    <ClCompile Include="src\scene\Camera.cpp" />
+    <ClCompile Include="src\resource\FileLoader.h" />
+    <ClCompile Include="src\scene\Object.cpp" />
+    <ClCompile Include="src\scene\PointLightSource.cpp" />
+    <ClCompile Include="src\scene\PointLightSource.h" />
+    <ClCompile Include="src\renderer\ShaderSorageBufferObject.cpp" />
+    <ClCompile Include="src\scene\SpotLightSource.cpp" />
+    <ClCompile Include="src\renderer\Material.cpp" />
+    <ClCompile Include="src\renderer\OpenGLRenderer.cpp" />
+    <ClCompile Include="src\renderer\ShaderProgram.cpp" />
+    <ClCompile Include="src\renderer\StaticMesh.cpp" />
+    <ClCompile Include="src\scene\StaticMeshObject.cpp" />
+    <ClCompile Include="src\resource\stb_image.cpp" />
+    <ClCompile Include="src\renderer\Texture.cpp" />
+    <ClCompile Include="src\resource\tiny_obj_loader.cpp" />
+    <ClCompile Include="src\core\input\Window.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="..\..\..\Downloads\buster_drone\scene.bin" />
     <None Include="shader\FragmentShader.glsl" />
     <None Include="shader\VertexShader.glsl" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\Application.h" />
-    <ClInclude Include="src\ApplicationLayer.h" />
-    <ClInclude Include="src\Camera.h" />
+    <ClInclude Include="src\component\Components.h" />
+    <ClInclude Include="src\component\object\CObjectTransformComponent.h" />
+    <ClInclude Include="src\component\object\CObjectComponent.h" />
+    <ClInclude Include="src\concepts.h" />
+    <ClInclude Include="src\core\app\Application.h" />
+    <ClInclude Include="src\core\layers\ApplicationLayer.h" />
+    <ClInclude Include="src\scene\Object.h" />
+    <ClInclude Include="src\util\logger.h" />
+    <ClInclude Include="src\pipeline\shader\FragmentShader.h" />
+    <ClInclude Include="src\pipeline\shader\ShaderProgram.h" />
+    <ClInclude Include="src\pipeline\shader\VertexShader.h" />
+    <ClInclude Include="src\renderer\buffers\VertexBuffer.h" />
+    <ClInclude Include="src\renderer\Mesh.h" />
+    <ClInclude Include="src\renderer\RenderCommand.h" />
+    <ClInclude Include="src\pipeline\texture\Texture2D.h" />
+    <ClInclude Include="src\renderer\Vertex.h" />
+    <ClInclude Include="src\resource\asset\AssetHandle.h" />
+    <ClInclude Include="src\resource\asset\AssetTypes.h" />
+    <ClInclude Include="src\resource\asset\importer\AssetImporter.h" />
+    <ClInclude Include="src\resource\asset\importer\FragmentShaderImporter.h" />
+    <ClInclude Include="src\resource\asset\importer\ModelAssetImporter.h" />
+    <ClInclude Include="src\resource\asset\importer\Texture2DImporter.h" />
+    <ClInclude Include="src\resource\asset\importer\VertexShaderImporter.h" />
+    <ClInclude Include="src\resource\asset\AssetManager.h" />
+    <ClInclude Include="src\resource\Asset.h" />
+    <ClInclude Include="src\scene\Camera.h" />
     <ClInclude Include="src\core\input\InputManager.h" />
-    <ClInclude Include="src\core\layers\WindowLayer.h" />
-    <ClInclude Include="src\DirectionalLightSource.h" />
-    <ClInclude Include="src\LightBufferManager.h" />
+    <ClInclude Include="src\scene\DirectionalLightSource.h" />
+    <ClInclude Include="src\renderer\LightBufferManager.h" />
     <ClInclude Include="src\core\layers\RenderLayer.h" />
-    <ClInclude Include="src\ShaderStorageBufferObject.h" />
-    <ClInclude Include="src\SpotLightSource.h" />
-    <ClInclude Include="src\Material.h" />
-    <ClInclude Include="src\OpenGLRenderer.h" />
-    <ClInclude Include="src\ShaderProgram.h" />
-    <ClInclude Include="src\StaticMesh.h" />
-    <ClInclude Include="src\StaticMeshObject.h" />
-    <ClInclude Include="src\Texture.h" />
-    <ClInclude Include="src\Window.h" />
+    <ClInclude Include="src\renderer\ShaderStorageBufferObject.h" />
+    <ClInclude Include="src\scene\SceneCollection.h" />
+    <ClInclude Include="src\scene\SpotLightSource.h" />
+    <ClInclude Include="src\renderer\PBRMaterial.h" />
+    <ClInclude Include="src\renderer\OpenGLRenderer.h" />
+    <ClInclude Include="src\renderer\ShaderProgram.h" />
+    <ClInclude Include="src\renderer\StaticMesh.h" />
+    <ClInclude Include="src\scene\StaticMeshObject.h" />
+    <ClInclude Include="src\renderer\Texture.h" />
+    <ClInclude Include="src\core\input\Window.h" />
+    <ClInclude Include="src\Types.h" />
+    <ClInclude Include="src\util\files.h" />
+    <ClInclude Include="src\util\UUID.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
