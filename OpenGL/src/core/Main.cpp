@@ -2,7 +2,7 @@
 #include "src/core/app/Application.h"
 #include "src/core/layers/RenderLayer.h"
 
-
+#include "src/util/memory/TypedPoolAllocator.h"
 #include "src/util/logger.h"
 #include "src/scene/Object.h"
 #include "src/component/object/CObjectTransformComponent.h"
@@ -29,6 +29,8 @@ int main()
 	LOG_INFO("[Starting application]");
 
 #ifndef DEBUG
+
+
 	core::WindowSpecification windowSpecification;
 	windowSpecification.windowTitle = "OpenGL 4.6";
 	windowSpecification.width = 1920;
@@ -37,8 +39,6 @@ int main()
 	core::Application app = core::Application(windowSpecification);
 	app.pushLayer<core::RenderLayer>();
 	app.main();
-
-
 
 #else
 	//resource::AssetManager resourceManager {};

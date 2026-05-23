@@ -23,10 +23,11 @@ namespace world
 		Object& operator=(Object&&) = delete;
 
 		template<typename T, typename... Args> requires isCObjectComponent<T>
-		void addComponent(const Args&&... args)
+		void addComponent(Args&&... args)
 		{
 			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID >= this->components.size(), "Object component type id exceeded component storage");
+			static_assert(TYPE_ID < components::MAX_COBJECT_COMPONENTS,
+				"Object component type id exceeded component storage");
 
 			if (this->components[TYPE_ID] != nullptr)
 			{
@@ -44,7 +45,8 @@ namespace world
 		[[nodiscard]] T* getComponent() const
 		{
 			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID >= this->components.size(), "Object component type id exceeded component storage");
+			static_assert(TYPE_ID < components::MAX_COBJECT_COMPONENTS,
+				"Object component type id exceeded component storage");
 
 			if (this->components[TYPE_ID] != nullptr)
 			{
@@ -58,7 +60,8 @@ namespace world
 		[[nodiscard]] bool hasComponent() const
 		{
 			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID >= this->components.size(), "Object component type id exceeded component storage");
+			static_assert(TYPE_ID < components::MAX_COBJECT_COMPONENTS,
+				"Object component type id exceeded component storage");
 
 			if (this->components[TYPE_ID] == nullptr)
 			{

@@ -213,6 +213,7 @@
     <ClInclude Include="src\core\input\Window.h" />
     <ClInclude Include="src\Types.h" />
     <ClInclude Include="src\util\files.h" />
+    <ClInclude Include="src\util\memory\TypedPoolAllocator.h" />
     <ClInclude Include="src\util\UUID.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

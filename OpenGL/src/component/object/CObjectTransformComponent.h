@@ -27,7 +27,7 @@ namespace components
 		glm::vec3 position {0.0f, 0.0f, 0.0f};
 		glm::quat rotation {1.0f, 0.0f, 0.0f, 0.0f};
 		glm::vec3 scale {1.0f, 1.0f, 1.0f};
-		mutable bool needsRecalculation{true};
+		mutable bool needsRecalculation {true};
 		mutable glm::mat4 matrix {1.0f};
 
 		void updateMatrix() const;
