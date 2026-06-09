@@ -1,0 +1,6 @@
+//CObjectComponents
+
+REGISTER_COMPONENT(CObjectTransformComponent)
+REGISTER_COMPONENT(CObjectMeshComponent)
+
+//UIWidgetComponents

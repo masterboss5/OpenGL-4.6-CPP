@@ -1,8 +1,12 @@
 #pragma once
-#include<string>
+#include "src/component/Components.h"
 #include "src/Types.h"
 
 #define CCOMPONENT_BODY(type) \
+	static_assert(DependenciesRegistered<GetDependencies<type>, ComponentTypeList>::value, \
+		#type " declares a dependency on an unregistered component type"); \
+	inline static constexpr uint32 TYPE_ID = \
+		static_cast<uint32>(ComponentTypeID<type>); \
 	std::string_view getComponentName() const override final \
 	{ \
 		return #type; \
@@ -28,9 +32,7 @@ namespace components
 		CObjectComponent() = delete;
 		explicit CObjectComponent(world::Object* object) : object(object) {}
 		virtual ~CObjectComponent() = default;
-
-		[[nodiscard]] virtual uint32 getTypeID() const = 0;
-
+		
 		[[nodiscard]] bool hasOwner() const
 		{
 			return this->object != nullptr;
@@ -41,6 +43,7 @@ namespace components
 			return this->object;
 		}
 
+		[[nodiscard]] virtual uint32 getTypeID() const = 0;
 		[[nodiscard]] virtual std::string_view getComponentName() const = 0;
 		virtual void onAttachment() {}
 		virtual void onDetachment() {}

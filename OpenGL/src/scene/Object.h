@@ -12,7 +12,7 @@ namespace world
 	{
 	private:
 		uint32 componentsAttached {};
-		std::array<components::CObjectComponent*, components::MAX_COBJECT_COMPONENTS> components {};
+		std::array<components::CObjectComponent*, components::COBJECT_COMPONENTS> components {};
 	public:
 		explicit Object();
 		virtual ~Object();
@@ -26,7 +26,7 @@ namespace world
 		void addComponent(Args&&... args)
 		{
 			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID < components::MAX_COBJECT_COMPONENTS,
+			static_assert(TYPE_ID < components::COBJECT_COMPONENTS,
 				"Object component type id exceeded component storage");
 
 			if (this->components[TYPE_ID] != nullptr)
@@ -45,7 +45,7 @@ namespace world
 		[[nodiscard]] T* getComponent() const
 		{
 			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID < components::MAX_COBJECT_COMPONENTS,
+			static_assert(TYPE_ID < components::COBJECT_COMPONENTS,
 				"Object component type id exceeded component storage");
 
 			if (this->components[TYPE_ID] != nullptr)
@@ -60,7 +60,7 @@ namespace world
 		[[nodiscard]] bool hasComponent() const
 		{
 			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID < components::MAX_COBJECT_COMPONENTS,
+			static_assert(TYPE_ID < components::COBJECT_COMPONENTS,
 				"Object component type id exceeded component storage");
 
 			if (this->components[TYPE_ID] == nullptr)

@@ -4,8 +4,11 @@
 #include <GLFW/glfw3.h>
 #include <unordered_map>
 #include <functional>
-// Forward-declare WindowSpecification to avoid circular include with Application.h
-namespace core { struct WindowSpecification; }
+
+namespace core
+{
+	struct WindowSpecification;
+}
 
 class Window final {
 private:

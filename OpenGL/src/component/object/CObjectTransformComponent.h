@@ -1,7 +1,6 @@
 #pragma once
 
 #include "src/component/object/CObjectComponent.h"
-#include "src/component/Components.h"
 #include <glm.hpp>
 #include <cmath>
 #include <limits>
@@ -33,9 +32,6 @@ namespace components
 		void updateMatrix() const;
 		void recalculateMatrix() const;
 	public:
-		inline static constexpr uint32 TYPE_ID = 
-			static_cast<uint32>(CObjectComponentTypeID::CObjectTransformComponent);
-
 		explicit CObjectTransformComponent
 		(
 			world::Object* object,
@@ -43,7 +39,7 @@ namespace components
 			const glm::quat& rotation = glm::quat{1.0f, 0.0f, 0.0f, 0.0f},
 			const glm::vec3& scale = glm::vec3{1.0f, 1.0f, 1.0f}
 		);
-
+		using Dependencies = TypeList<>;
 		CCOMPONENT_BODY(CObjectTransformComponent)
 
 
@@ -84,10 +80,7 @@ namespace components
 		void lookAt(const glm::vec3& target, const glm::vec3& up = glm::vec3{0.0f, 1.0f, 0.0f});
 		[[nodiscard]] float distanceTo(const glm::vec3& point) const;
 		[[nodiscard]] float distanceToSquared(const glm::vec3& point) const;
-
-
 		[[nodiscard]] bool isWithinDistance(const glm::vec3& point, float distance) const;
-
 		[[nodiscard]] glm::vec3 getForward() const;
 		[[nodiscard]] glm::vec3 getUp() const;
 		[[nodiscard]] glm::vec3 getRight() const;

@@ -177,6 +177,7 @@
     <ClInclude Include="src\concepts.h" />
     <ClInclude Include="src\core\app\Application.h" />
     <ClInclude Include="src\core\layers\ApplicationLayer.h" />
+    <ClInclude Include="src\meta.h" />
     <ClInclude Include="src\scene\Object.h" />
     <ClInclude Include="src\util\logger.h" />
     <ClInclude Include="src\pipeline\shader\FragmentShader.h" />

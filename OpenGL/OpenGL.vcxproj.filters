@@ -249,5 +249,8 @@
     <ClInclude Include="src\util\memory\TypedPoolAllocator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\meta.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
