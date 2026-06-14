@@ -100,11 +100,6 @@ namespace components
 		;
 #undef REGISTER_COMPONENT
 
-	//using ComponentTypeList = TypeList<
-	//	components::CObjectTransformComponent,
-	//	components::CObjectMeshComponent
-	//>;
-
 	template<typename T>
 	inline constexpr uint32 ComponentTypeID =
 		static_cast<uint32>(TypeListIndex<T, ComponentTypeList>::value);
@@ -117,8 +112,6 @@ struct _ComponentDependencyValidation
 	: ValidateComponentDependencies<components::ComponentTypeList> {
 };
 
-static_assert(TypeListUnique<components::ComponentTypeList>::value,
-	"ComponentTypeList contains duplicate types");
 
 //static_assert(TypeListSubtypeOf<components::CObjectComponent, components::ComponentTypeList>::value,
 //	"");

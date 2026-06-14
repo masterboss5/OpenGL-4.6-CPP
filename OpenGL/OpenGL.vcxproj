@@ -172,6 +172,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\component\Components.h" />
+    <ClInclude Include="src\component\ComponentValidation.h" />
     <ClInclude Include="src\component\object\CObjectTransformComponent.h" />
     <ClInclude Include="src\component\object\CObjectComponent.h" />
     <ClInclude Include="src\concepts.h" />

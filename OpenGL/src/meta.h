@@ -3,6 +3,9 @@
 #include <cstddef>
 #include <type_traits>
 
+template<typename>
+inline constexpr bool dependent_false_v = false;
+
 template<typename... Ts>
 struct TypeList
 {
@@ -18,7 +21,7 @@ struct TypeListIndex;
 template<typename T, std::size_t Index>
 struct TypeListIndex<T, TypeList<>, Index>
 {
-	static_assert(false, "Type is not found in type list");
+	static_assert(dependent_false_v<T>, "Type is not found in type list");
 };
 
 template<typename T, typename... Rest, std::size_t Index>
@@ -99,8 +102,58 @@ struct TypeListSubtypeOf<T, TypeList<Rest...>>
 
 
 
+template<typename Base, typename List>
+struct TypeListAllDerivedFrom;
+
+
+template<typename Base>
+struct TypeListAllDerivedFrom<Base, TypeList<>>
+{
+	static constexpr bool value = true;
+};
+
+
+template<typename Base, typename T, typename... Rest>
+struct TypeListAllDerivedFrom<Base, TypeList<T, Rest...>>
+{
+	static constexpr bool value = TypeListAllDerivedFrom<Base, TypeList<Rest...>>::value && std::is_base_of_v<Base, T>;
+};
+
+
+template<typename List>
+struct TypeListAllNotAbstract;
+
+
+template<>
+struct TypeListAllNotAbstract<TypeList<>>
+{
+	static constexpr bool value = true;
+};
+
+
+template<typename T, typename... Rest>
+struct TypeListAllNotAbstract<TypeList<T, Rest...>>
+{
+	static constexpr bool value = TypeListAllNotAbstract<TypeList<Rest...>>::value && !std::is_abstract_v<T>;
+};
 
 
 
+template<typename List>
+struct TypeListAllFinal;
 
-//struct 
+
+template<>
+struct TypeListAllFinal<TypeList<>>
+{
+	static constexpr bool value = true;
+};
+
+
+template<typename T, typename... Rest>
+struct TypeListAllFinal<TypeList<T, Rest...>>
+{
+	static constexpr bool value = TypeListAllFinal<TypeList<Rest...>>::value && std::is_final_v<T>;
+};
+
+

@@ -252,5 +252,8 @@
     <ClInclude Include="src\meta.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\component\ComponentValidation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
