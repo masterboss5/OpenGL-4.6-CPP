@@ -11,18 +11,10 @@ renderer::VertexBuffer::~VertexBuffer()
 	glDeleteBuffers(1, &this->ID);
 }
 
-renderer::VertexBuffer::VertexBuffer(const VertexBuffer&)
-{
-}
-
 renderer::VertexBuffer::VertexBuffer(VertexBuffer&&)
 {
 }
 
-renderer::VertexBuffer& renderer::VertexBuffer::operator=(const VertexBuffer&)
-{
-	// TODO: insert return statement here
-}
 
 renderer::VertexBuffer& renderer::VertexBuffer::operator=(VertexBuffer&&)
 {

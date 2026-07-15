@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <type_traits>
+#include <concepts>
 
 template<typename>
 inline constexpr bool dependent_false_v = false;
@@ -39,10 +40,6 @@ public:
 	static constexpr std::size_t value = Next::value;
 };
 
-
-
-
-
 template<typename T, typename List>
 struct TypeListContains;
 
@@ -68,7 +65,6 @@ public:
 	static constexpr bool value = Next::value;
 };
 
-
 template<typename List>
 struct TypeListUnique;
 
@@ -86,9 +82,6 @@ struct TypeListUnique<TypeList<T, Rest...>>
 		TypeListUnique<TypeList<Rest...>>::value;
 };
 
-
-
-
 template<typename T, typename List>
 struct TypeListSubtypeOf;
 
@@ -100,11 +93,8 @@ struct TypeListSubtypeOf<T, TypeList<Rest...>>
 		(!std::same_as<Rest, T> && ...);
 };
 
-
-
 template<typename Base, typename List>
 struct TypeListAllDerivedFrom;
-
 
 template<typename Base>
 struct TypeListAllDerivedFrom<Base, TypeList<>>
@@ -112,17 +102,16 @@ struct TypeListAllDerivedFrom<Base, TypeList<>>
 	static constexpr bool value = true;
 };
 
-
 template<typename Base, typename T, typename... Rest>
 struct TypeListAllDerivedFrom<Base, TypeList<T, Rest...>>
 {
-	static constexpr bool value = TypeListAllDerivedFrom<Base, TypeList<Rest...>>::value && std::is_base_of_v<Base, T>;
+	static constexpr bool value = TypeListAllDerivedFrom<Base, TypeList<Rest...>>::value &&
+		std::is_base_of_v<Base, T> && 
+		!std::is_same_v<Base, T>;
 };
-
 
 template<typename List>
 struct TypeListAllNotAbstract;
-
 
 template<>
 struct TypeListAllNotAbstract<TypeList<>>
@@ -130,18 +119,14 @@ struct TypeListAllNotAbstract<TypeList<>>
 	static constexpr bool value = true;
 };
 
-
 template<typename T, typename... Rest>
 struct TypeListAllNotAbstract<TypeList<T, Rest...>>
 {
 	static constexpr bool value = TypeListAllNotAbstract<TypeList<Rest...>>::value && !std::is_abstract_v<T>;
 };
 
-
-
 template<typename List>
 struct TypeListAllFinal;
-
 
 template<>
 struct TypeListAllFinal<TypeList<>>
@@ -149,11 +134,8 @@ struct TypeListAllFinal<TypeList<>>
 	static constexpr bool value = true;
 };
 
-
 template<typename T, typename... Rest>
 struct TypeListAllFinal<TypeList<T, Rest...>>
 {
 	static constexpr bool value = TypeListAllFinal<TypeList<Rest...>>::value && std::is_final_v<T>;
 };
-
-

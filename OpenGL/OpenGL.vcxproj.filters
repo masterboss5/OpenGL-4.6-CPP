@@ -33,22 +33,7 @@
     <ClCompile Include="src\scene\SpotLightSource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\renderer\Material.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\OpenGLRenderer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\ShaderProgram.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\StaticMesh.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\scene\StaticMeshObject.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\Texture.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\core\input\Window.cpp">
@@ -58,12 +43,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\scene\DirectionalLightSource.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\ShaderSorageBufferObject.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\LightBufferManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\scene\PointLightSource.h">
@@ -78,7 +57,7 @@
     <ClCompile Include="src\resource\asset\importer\ModelAssetImporter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\renderer\buffers\VertexBuffer.cpp">
+    <ClCompile Include="src\pipeline\buffer\VertexBuffer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\pipeline\texture\Texture2D.cpp">
@@ -108,6 +87,30 @@
     <ClCompile Include="src\scene\Object.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\component\ComponentValidation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\LightBufferManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\Material.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\OpenGLRenderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\ShaderProgram.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\ShaderSorageBufferObject.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\StaticMesh.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\renderer\Texture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="shader\VertexShader.glsl" />
@@ -117,25 +120,10 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\renderer\Texture.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="src\scene\Camera.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\scene\SpotLightSource.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\PBRMaterial.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\OpenGLRenderer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\ShaderProgram.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\StaticMesh.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\scene\StaticMeshObject.h">
@@ -145,12 +133,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\scene\DirectionalLightSource.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\ShaderStorageBufferObject.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\LightBufferManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\core\app\Application.h">
@@ -168,22 +150,13 @@
     <ClInclude Include="src\scene\SceneCollection.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\renderer\RenderCommand.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\Vertex.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\Mesh.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="src\resource\asset\importer\AssetImporter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\resource\asset\importer\ModelAssetImporter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\renderer\buffers\VertexBuffer.h">
+    <ClInclude Include="src\pipeline\buffer\VertexBuffer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\pipeline\texture\Texture2D.h">
@@ -192,7 +165,7 @@
     <ClInclude Include="src\resource\asset\importer\Texture2DImporter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\Types.h">
+    <ClInclude Include="src\types.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\resource\Asset.h">
@@ -253,6 +226,36 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\component\ComponentValidation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\LightBufferManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\Mesh.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\OpenGLRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\PBRMaterial.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\RenderCommand.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\ShaderProgram.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\ShaderStorageBufferObject.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\StaticMesh.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\Texture.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\renderer\Vertex.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

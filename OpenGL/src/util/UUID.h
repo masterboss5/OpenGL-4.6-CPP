@@ -1,5 +1,5 @@
 #pragma once
-#include "src/Types.h"
+#include "src/types.h"
 #include <random>
 #include <functional>
 #include <string>

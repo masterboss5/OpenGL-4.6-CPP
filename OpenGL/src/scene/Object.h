@@ -1,6 +1,6 @@
 #pragma once
 #include<array>
-#include "src/Types.h"
+#include "src/types.h"
 #include "src/concepts.h"
 #include "src/component/object/CObjectComponent.h"
 #include "src/component/Components.h"

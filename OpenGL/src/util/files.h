@@ -3,7 +3,7 @@
 #include <string>
 #include <fstream>
 #include <sstream>
-#include "src/Types.h"
+#include "src/types.h"
 
 namespace file
 {

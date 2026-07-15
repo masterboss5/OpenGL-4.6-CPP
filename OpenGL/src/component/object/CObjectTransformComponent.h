@@ -1,9 +1,6 @@
 #pragma once
-
 #include "src/component/object/CObjectComponent.h"
 #include <glm.hpp>
-#include <cmath>
-#include <limits>
 #include <gtc/quaternion.hpp>
 
 //TODO

@@ -10,9 +10,11 @@ namespace renderer
 	public:
 		VertexBuffer();
 		~VertexBuffer();
-		VertexBuffer(const VertexBuffer&);
+
+		VertexBuffer(const VertexBuffer&) = delete;
+		renderer::VertexBuffer& operator=(const VertexBuffer&) = delete;
+
 		VertexBuffer(VertexBuffer&&);
-		renderer::VertexBuffer& operator=(const VertexBuffer&);
 		renderer::VertexBuffer& operator=(VertexBuffer&&);
 
 		void bind();

@@ -223,12 +223,10 @@ void components::CObjectTransformComponent::recalculateMatrix() const
 {
 	const float qx = this->rotation.x, qy = this->rotation.y;
 	const float qz = this->rotation.z, qw = this->rotation.w;
-
 	const float x2 = qx + qx, y2 = qy + qy, z2 = qz + qz;
 	const float xx = qx * x2, xy = qx * y2, xz = qx * z2;
 	const float yy = qy * y2, yz = qy * z2, zz = qz * z2;
 	const float wx = qw * x2, wy = qw * y2, wz = qw * z2;
-
 	const float sx = this->scale.x, sy = this->scale.y, sz = this->scale.z;
 
 	this->matrix = glm::mat4(
@@ -310,12 +308,10 @@ void components::CObjectTransformComponent::setTransform(const glm::vec3& positi
 	{
 		return;
 	}
-
 	if (!isFinite(rotation) || glm::dot(rotation, rotation) <= MIN_NORMALIZE_LENGTH_SQUARED)
 	{
 		return;
 	}
-
 	if (!isValidScale(scale))
 	{
 		return;

@@ -1,21 +1,6 @@
 #pragma once
 #include "src/component/Components.h"
-#include "src/Types.h"
-
-#define CCOMPONENT_BODY(type) \
-	static_assert(DependenciesRegistered<GetDependencies<type>, ComponentTypeList>::value, \
-		#type " declares a dependency on an unregistered component type"); \
-	inline static constexpr uint32 TYPE_ID = \
-		static_cast<uint32>(ComponentTypeID<type>); \
-	std::string_view getComponentName() const override final \
-	{ \
-		return #type; \
-	} \
-	\
-	virtual uint32 getTypeID() const override final \
-	{ \
-		return TYPE_ID; \
-	} \
+#include "src/types.h"
 
 namespace world
 {
@@ -28,6 +13,8 @@ namespace components
 	{
 	private:
 		world::Object* object = nullptr;
+		bool enabled = true;
+
 	public:
 		CObjectComponent() = delete;
 		explicit CObjectComponent(world::Object* object) : object(object) {}
@@ -38,13 +25,16 @@ namespace components
 			return this->object != nullptr;
 		}
 
-		[[nodiscard]] world::Object* getOwnerPointer() const
+		[[nodiscard]] world::Object* getOwner() const
 		{
 			return this->object;
 		}
 
 		[[nodiscard]] virtual uint32 getTypeID() const = 0;
 		[[nodiscard]] virtual std::string_view getComponentName() const = 0;
+
+		/*Lifecycle events and gameplay behavior*/
+
 		virtual void onAttachment() {}
 		virtual void onDetachment() {}
 		virtual void onRender() {}
