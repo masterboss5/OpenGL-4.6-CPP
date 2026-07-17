@@ -38,7 +38,7 @@ ShaderSorageBufferObject<T, BINDING>::~ShaderSorageBufferObject()
 }
 
 template<typename T, BindingPoint BINDING>
-void ShaderSorageBufferObject<T, BINDING>::upload(const T* data, size_t count, ShaderProgram& shaderProgram) const
+void ShaderSorageBufferObject<T, BINDING>::upload(const T* data, size_t count) const
 {
 	assert(count <= this->maxElements);
 

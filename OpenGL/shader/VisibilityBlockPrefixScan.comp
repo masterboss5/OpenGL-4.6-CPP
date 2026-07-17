@@ -1,0 +1,31 @@
+#version 460 core
+
+// The first scan produces at most 256 block sums for the engine's 65,536
+// batch capacity. One workgroup scans those sums in parallel.
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 6) buffer VisibilityScratch { uint scratch[]; };
+
+uniform uint blockCount;
+uniform uint scratchCapacity;
+
+shared uint scanValues[256];
+
+void main()
+{
+    uint localIndex = gl_LocalInvocationID.x;
+    uint blockSumOffset = scratchCapacity * 4U;
+    uint blockOffsetOffset = blockSumOffset + 256U;
+    scanValues[localIndex] = localIndex < blockCount ? scratch[blockSumOffset + localIndex] : 0U;
+    barrier();
+
+    for (uint stride = 1U; stride < 256U; stride <<= 1U)
+    {
+        uint prior = localIndex >= stride ? scanValues[localIndex - stride] : 0U;
+        barrier();
+        scanValues[localIndex] += prior;
+        barrier();
+    }
+
+    if (localIndex < blockCount) scratch[blockOffsetOffset + localIndex] = localIndex == 0U ? 0U : scanValues[localIndex - 1U];
+}

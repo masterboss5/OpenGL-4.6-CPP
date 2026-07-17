@@ -1,0 +1,34 @@
+#version 460 core
+
+// Parallel exclusive scan of 256 batch counts per workgroup. Block totals are
+// scanned by VisibilityBlockPrefixScan before VisibilityFinalize applies them.
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 6) buffer VisibilityScratch { uint scratch[]; };
+
+uniform uint batchCount;
+uniform uint scratchCapacity;
+
+shared uint scanValues[256];
+
+void main()
+{
+    uint localIndex = gl_LocalInvocationID.x;
+    uint batchIndex = gl_WorkGroupID.x * 256U + localIndex;
+    uint countOffset = scratchCapacity;
+    uint localOffsetOffset = scratchCapacity * 2U;
+    uint blockSumOffset = scratchCapacity * 4U;
+    scanValues[localIndex] = batchIndex < batchCount ? scratch[countOffset + batchIndex] : 0U;
+    barrier();
+
+    for (uint stride = 1U; stride < 256U; stride <<= 1U)
+    {
+        uint prior = localIndex >= stride ? scanValues[localIndex - stride] : 0U;
+        barrier();
+        scanValues[localIndex] += prior;
+        barrier();
+    }
+
+    if (batchIndex < batchCount) scratch[localOffsetOffset + batchIndex] = localIndex == 0U ? 0U : scanValues[localIndex - 1U];
+    if (localIndex == 255U) scratch[blockSumOffset + gl_WorkGroupID.x] = scanValues[localIndex];
+}

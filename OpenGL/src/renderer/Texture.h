@@ -7,12 +7,12 @@
 class Texture final
 {
 private:
-	unsigned long long textureHandle;
-	unsigned int textureID;
-	int width;
-	int height;
-	int channels;
-	unsigned char* pixels;
+	unsigned long long textureHandle = 0;
+	unsigned int textureID = 0;
+	int width = 0;
+	int height = 0;
+	int channels = 0;
+	unsigned char* pixels = nullptr;
 public:
 	Texture(const std::string& path);
 	~Texture();

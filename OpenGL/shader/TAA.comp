@@ -1,0 +1,47 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D currentHDR;
+layout(binding = 1) uniform sampler2D historyHDR;
+layout(binding = 2) uniform sampler2D velocityTexture;
+layout(rgba16f, binding = 0) uniform writeonly image2D nextHistory;
+layout(rgba16f, binding = 1) uniform writeonly image2D resolvedHDR;
+uniform uint historyValid;
+
+void main()
+{
+    ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(resolvedHDR);
+    if (any(greaterThanEqual(coordinate, extent))) return;
+
+    vec3 current = texelFetch(currentHDR, coordinate, 0).rgb;
+    vec3 resolved = current;
+    if (historyValid != 0U)
+    {
+        vec2 velocity = texelFetch(velocityTexture, coordinate, 0).xy * 0.5;
+        vec2 uv = (vec2(coordinate) + 0.5) / vec2(extent);
+        vec3 history = texture(historyHDR, clamp(uv - velocity, vec2(0.0), vec2(1.0))).rgb;
+
+        // Clamp reprojected history to the current 3x3 neighborhood. This
+        // rejects invalid history across silhouettes/disocclusions without
+        // requiring a separate reactive-mask path for opaque geometry.
+        vec3 neighborhoodMinimum = current;
+        vec3 neighborhoodMaximum = current;
+        for (int y = -1; y <= 1; ++y)
+        {
+            for (int x = -1; x <= 1; ++x)
+            {
+                ivec2 sampleCoordinate = clamp(coordinate + ivec2(x, y), ivec2(0), extent - 1);
+                vec3 sampleColor = texelFetch(currentHDR, sampleCoordinate, 0).rgb;
+                neighborhoodMinimum = min(neighborhoodMinimum, sampleColor);
+                neighborhoodMaximum = max(neighborhoodMaximum, sampleColor);
+            }
+        }
+        history = clamp(history, neighborhoodMinimum, neighborhoodMaximum);
+        float velocityMagnitude = length(velocity * vec2(extent));
+        float historyWeight = mix(0.92, 0.08, clamp(velocityMagnitude / 32.0, 0.0, 1.0));
+        resolved = mix(current, history, historyWeight);
+    }
+    imageStore(nextHistory, coordinate, vec4(resolved, 1.0));
+    imageStore(resolvedHDR, coordinate, vec4(resolved, 1.0));
+}

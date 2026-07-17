@@ -33,15 +33,18 @@ core::input::InputManager::InputManager()
 	});
 
     glfwSetCursorPosCallback(Window::windowPtr->window, [](GLFWwindow* glfwWindow, double mouseX, double mouseY) {
-        InputManager::getInstance()->deltaMouseX = mouseX - InputManager::getInstance()->mouseX;
-        InputManager::getInstance()->deltaMouseY = mouseY - InputManager::getInstance()->mouseY;
-        InputManager::getInstance()->mouseX = mouseX;
-        InputManager::getInstance()->mouseY = mouseY;
+        InputManager::getInstance()->deltaMouseX = static_cast<float32>(mouseX) - InputManager::getInstance()->mouseX;
+        InputManager::getInstance()->deltaMouseY = static_cast<float32>(mouseY) - InputManager::getInstance()->mouseY;
+        InputManager::getInstance()->mouseX = static_cast<float32>(mouseX);
+        InputManager::getInstance()->mouseY = static_cast<float32>(mouseY);
     });
 }
 
 core::input::InputManager::~InputManager()
 {
+	// The input singleton outlives Application. Window owns GLFW callback
+	// lifetime and clears this pointer before destroying the native window.
+	if (Window::windowPtr == nullptr || Window::windowPtr->window == nullptr) return;
 	glfwSetKeyCallback(Window::windowPtr->window, nullptr);
 	glfwSetMouseButtonCallback(Window::windowPtr->window, nullptr);
 	glfwSetCursorPosCallback(Window::windowPtr->window, nullptr);

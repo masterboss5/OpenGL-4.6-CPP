@@ -5,7 +5,6 @@
 #include "src/scene/PointLightSource.h"
 #include "src/scene/SpotLightSource.h"
 #include "src/scene/DirectionalLightSource.h"
-#include "ShaderProgram.h"
 #include "src/util/logger.h"
 
 enum class BindingPoint : GLuint
@@ -28,7 +27,7 @@ public:
 	ShaderSorageBufferObject(size_t maxElements);
 	~ShaderSorageBufferObject();
 
-	void upload(const T* data, size_t count, ShaderProgram& shaderProgram) const;
+	void upload(const T* data, size_t count) const;
 	GLuint getBufferID() const;
 	void bindBuffer() const;
 	size_t getBytesSize() const;

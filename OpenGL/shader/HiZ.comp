@@ -1,0 +1,28 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D sourceDepth;
+layout(r32f, binding = 0) uniform writeonly image2D destinationPyramid;
+uniform uvec2 sourceExtent;
+uniform uint sourceMip;
+uniform uint sourceScale;
+
+void main()
+{
+    ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(coordinate, imageSize(destinationPyramid)))) return;
+    // Reversed-Z uses maximum reduction: larger depth is closer. Mip zero is
+    // a direct copy of the depth buffer; every later level reduces its
+    // immediately preceding pyramid level.
+    ivec2 sourceCoordinate = coordinate * int(sourceScale);
+    ivec2 extent = ivec2(sourceExtent);
+    float maximumDepth = 0.0;
+    for (int y = 0; y < int(sourceScale); ++y)
+    {
+        for (int x = 0; x < int(sourceScale); ++x)
+        {
+            maximumDepth = max(maximumDepth, texelFetch(sourceDepth, min(sourceCoordinate + ivec2(x, y), extent - 1), int(sourceMip)).r);
+        }
+    }
+    imageStore(destinationPyramid, coordinate, vec4(maximumDepth));
+}

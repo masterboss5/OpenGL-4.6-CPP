@@ -1,6 +1,5 @@
 #pragma once
 #include "Texture.h"
-#include "ShaderProgram.h"
 
 class Material final {
 public:
@@ -28,5 +27,4 @@ public:
 	Material& operator=(const Material&) = delete;
 	Material& operator=(Material&&) = delete;
 
-	void applyToShader(const ShaderProgram& shader) const;
 };

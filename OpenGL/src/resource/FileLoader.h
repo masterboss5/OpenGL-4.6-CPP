@@ -91,24 +91,17 @@ namespace FileLoader {
             flatUVs.insert(flatUVs.end(), { v.uv.x, v.uv.y });
         }
 
+		const auto loadOptionalTexture = [](const std::string& textureName) { return Texture(textureName.empty() ? std::string {} : "objects/" + textureName); };
 		Material material(
-            Texture("objects/" + materials[0].diffuse_texname),
-            Texture("objects/" + materials[0].specular_texname),
-            Texture("objects/" + materials[0].normal_texname),
-            Texture("objects/" + materials[0].bump_texname),
-            Texture("objects/" + materials[0].ambient_texname),
-            Texture("objects/" + materials[0].roughness_texname),
-            Texture("objects/" + materials[0].emissive_texname),
+			loadOptionalTexture(materials[0].diffuse_texname),
+			loadOptionalTexture(materials[0].specular_texname),
+			loadOptionalTexture(materials[0].normal_texname),
+			loadOptionalTexture(materials[0].bump_texname),
+			loadOptionalTexture(materials[0].ambient_texname),
+			loadOptionalTexture(materials[0].roughness_texname),
+			loadOptionalTexture(materials[0].emissive_texname),
             32.0f
         );
-
-		std::cout << material.diffuseTexture.isLoaded() << std::endl;
-		std::cout << material.specularTexture.isLoaded() << std::endl;
-		std::cout << material.normalTexture.isLoaded() << std::endl;
-		std::cout << material.heightTexture.isLoaded() << std::endl;
-		std::cout << material.ambientOcclusionTexture.isLoaded() << std::endl;
-		std::cout << material.roughnessTexture.isLoaded() << std::endl;
-		std::cout << material.emissiveTexture.isLoaded() << std::endl;
 
         return new StaticMesh(
             "test-01",

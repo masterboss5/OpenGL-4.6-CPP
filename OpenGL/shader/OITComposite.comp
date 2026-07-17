@@ -1,0 +1,18 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D opaqueHDR;
+layout(binding = 1) uniform sampler2D accumulationTexture;
+layout(binding = 2) uniform sampler2D revealageTexture;
+layout(rgba16f, binding = 0) uniform writeonly image2D outputHDR;
+
+void main()
+{
+    ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(coordinate, imageSize(outputHDR)))) return;
+    vec4 opaque = texelFetch(opaqueHDR, coordinate, 0);
+    vec4 accumulation = texelFetch(accumulationTexture, coordinate, 0);
+    float revealage = texelFetch(revealageTexture, coordinate, 0).r;
+    vec3 transparent = accumulation.rgb / max(accumulation.a, 0.00001);
+    imageStore(outputHDR, coordinate, vec4(mix(transparent, opaque.rgb, revealage), 1.0));
+}

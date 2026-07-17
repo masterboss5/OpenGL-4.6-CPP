@@ -7,6 +7,10 @@
 #include "src/scene/Object.h"
 #include "src/component/object/CObjectTransformComponent.h"
 
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+
 #define FAR_PLANE 600.0f
 #define NEAR_PLANE 0.1f
 
@@ -26,7 +30,9 @@
 //#define LOG
 int main()
 {
-	LOG_INFO("[Starting application]");
+	try
+	{
+		LOG_INFO("[Starting application]");
 
 #ifndef DEBUG
 
@@ -47,5 +53,16 @@ int main()
 
 
 
-	return 0;
+		return EXIT_SUCCESS;
+	}
+	catch (const std::exception& exception)
+	{
+		std::cerr << "Fatal engine exception: " << exception.what() << '\n';
+		return EXIT_FAILURE;
+	}
+	catch (...)
+	{
+		std::cerr << "Fatal engine exception: unknown non-standard exception\n";
+		return EXIT_FAILURE;
+	}
 }

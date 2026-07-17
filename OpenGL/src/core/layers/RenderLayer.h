@@ -2,8 +2,11 @@
 #include "src/core/layers/ApplicationLayer.h"
 #include "src/core/input/Window.h"
 #include "src/scene/Camera.h"
+#include "src/scene/StaticMeshObject.h"
 #include "src/renderer/OpenGLRenderer.h"
 #include "src/resource/FileLoader.h"
+#include "src/resource/asset/AssetManager.h"
+#include "src/pipeline/shader/ShaderLibrary.h"
 #include <memory>
 
 namespace core
@@ -14,15 +17,56 @@ namespace core
 		const Window* window = nullptr;
 		std::unique_ptr<Camera> camera = nullptr;
 		std::unique_ptr<OpenGLRenderer> openGLRenderer = nullptr;
-		std::unique_ptr<ShaderProgram> shaderProgram = nullptr;
+		std::unique_ptr<resource::AssetManager> assetManager = nullptr;
+		std::unique_ptr<pipeline::shader::ShaderLibrary> shaderLibrary = nullptr;
+		uint32 shadowDepthPipeline = 0;
+		uint32 depthPrepassPipeline = 0;
+		uint32 gbufferPipeline = 0;
+		uint32 transparentOITPipeline = 0;
+		uint32 toneMapPipeline = 0;
+		uint32 visibilityCullPipeline = 0;
+		uint32 visibilityPrefixScanPipeline = 0;
+		uint32 visibilityBlockPrefixScanPipeline = 0;
+		uint32 visibilityFinalizePipeline = 0;
+		uint32 visibilityScatterPipeline = 0;
+		uint32 hierarchicalDepthPipeline = 0;
+		uint32 clusteredLightsPipeline = 0;
+		uint32 deferredLightingPipeline = 0;
+		uint32 oitCompositionPipeline = 0;
+		uint32 temporalAAPipeline = 0;
+		uint32 autoExposurePipeline = 0;
+		uint32 bloomPipeline = 0;
 	public:
 		RenderLayer(const Window* window) 
 			: window(window)
 		{
-			this->camera = std::make_unique<Camera>(0.1, 90.0f, 0.1f, 5000.0f);
+			this->camera = std::make_unique<Camera>(0.1f, 90.0f, 0.1f, 5000.0f);
+			// The sample mesh is centered at the origin. Start outside it and
+			// orient the camera toward -Z so the first rendered frame is useful.
+			this->camera->position = glm::vec3(0.0f, 0.0f, 5.0f);
+			this->camera->yaw = -90.0f;
+			this->camera->pitch = 0.0f;
+			this->camera->updateCameraVectors();
 			this->openGLRenderer = std::make_unique<OpenGLRenderer>();
-			this->shaderProgram = std::make_unique<ShaderProgram>("shader/VertexShader.glsl", "shader/FragmentShader.glsl");
-			this->shaderProgram->bind();
+			this->assetManager = std::make_unique<resource::AssetManager>();
+			this->shaderLibrary = std::make_unique<pipeline::shader::ShaderLibrary>(*this->assetManager);
+			this->shadowDepthPipeline = this->shaderLibrary->createGraphicsPipeline({ .vertex = { .path = "shader/ShadowDepth.vert", .stage = pipeline::shader::ShaderStage::Vertex }, .fragment = { .path = "shader/DepthOnly.frag", .stage = pipeline::shader::ShaderStage::Fragment }, .state = { .depthStencil = { .depthTest = true, .depthWrite = true, .depthCompare = pipeline::shader::CompareFunction::Less }, .renderTargets = { .colorAttachmentCount = 0, .hasDepth = true } } });
+			this->depthPrepassPipeline = this->shaderLibrary->createGraphicsPipeline({ .vertex = { .path = "shader/GBuffer.vert", .stage = pipeline::shader::ShaderStage::Vertex }, .fragment = { .path = "shader/DepthOnly.frag", .stage = pipeline::shader::ShaderStage::Fragment }, .state = { .depthStencil = { .depthTest = true, .depthWrite = true, .depthCompare = pipeline::shader::CompareFunction::Greater }, .renderTargets = { .colorAttachmentCount = 0, .hasDepth = true } } });
+			this->gbufferPipeline = this->shaderLibrary->createGraphicsPipeline({ .vertex = { .path = "shader/GBuffer.vert", .stage = pipeline::shader::ShaderStage::Vertex }, .fragment = { .path = "shader/GBuffer.frag", .stage = pipeline::shader::ShaderStage::Fragment }, .state = { .depthStencil = { .depthTest = true, .depthWrite = false, .depthCompare = pipeline::shader::CompareFunction::GreaterEqual }, .renderTargets = { .colorAttachmentCount = 5, .hasDepth = true } } });
+			this->transparentOITPipeline = this->shaderLibrary->createGraphicsPipeline({ .vertex = { .path = "shader/GBuffer.vert", .stage = pipeline::shader::ShaderStage::Vertex }, .fragment = { .path = "shader/TransparentOIT.frag", .stage = pipeline::shader::ShaderStage::Fragment }, .state = { .depthStencil = { .depthTest = true, .depthWrite = false }, .colorAttachmentBlends = { { .enabled = true, .sourceColor = pipeline::shader::BlendFactor::One, .destinationColor = pipeline::shader::BlendFactor::One, .sourceAlpha = pipeline::shader::BlendFactor::One, .destinationAlpha = pipeline::shader::BlendFactor::One }, { .enabled = true, .sourceColor = pipeline::shader::BlendFactor::Zero, .destinationColor = pipeline::shader::BlendFactor::OneMinusSourceColor, .sourceAlpha = pipeline::shader::BlendFactor::Zero, .destinationAlpha = pipeline::shader::BlendFactor::OneMinusSourceAlpha } }, .renderTargets = { .colorAttachmentCount = 2, .hasDepth = true } } });
+			this->toneMapPipeline = this->shaderLibrary->createGraphicsPipeline({ .vertex = { .path = "shader/Fullscreen.vert", .stage = pipeline::shader::ShaderStage::Vertex }, .fragment = { .path = "shader/ToneMap.frag", .stage = pipeline::shader::ShaderStage::Fragment }, .state = { .rasterizer = { .cullMode = pipeline::shader::CullMode::None }, .depthStencil = { .depthTest = false, .depthWrite = false }, .renderTargets = { .colorAttachmentCount = 1, .hasDepth = false } } });
+			this->visibilityCullPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/Visibility.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->visibilityPrefixScanPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/VisibilityPrefixScan.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->visibilityBlockPrefixScanPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/VisibilityBlockPrefixScan.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->visibilityFinalizePipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/VisibilityFinalize.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->visibilityScatterPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/VisibilityScatter.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->hierarchicalDepthPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/HiZ.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->clusteredLightsPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/ClusteredLights.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->deferredLightingPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/DeferredLighting.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->oitCompositionPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/OITComposite.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->temporalAAPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/TAA.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->autoExposurePipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/AutoExposure.comp", .stage = pipeline::shader::ShaderStage::Compute } });
+			this->bloomPipeline = this->shaderLibrary->createComputePipeline({ .compute = { .path = "shader/Bloom.comp", .stage = pipeline::shader::ShaderStage::Compute } });
 		}
 
 		virtual ~RenderLayer() override
@@ -31,6 +75,7 @@ namespace core
 
 		virtual void run() override
 		{
+			this->shaderLibrary->beginFrame();
 			static StaticMesh* worldObject = FileLoader::readObj("objects/backpack.obj", "objects");
 			static StaticMeshObject backPack(worldObject, 0, 0, 0);
 
@@ -85,11 +130,11 @@ namespace core
 
 			static std::vector<PointLightSource> pointLights = { pointLight };
 			static std::vector<SpotLightSource> spotLights = { spotLight };
-			static std::vector<DirectionalLightSource> directionalLights = {};
+			static std::vector<DirectionalLightSource> directionalLights = { dirL };
 
-			this->openGLRenderer->uploadLightSources(pointLights, *this->shaderProgram);
-			this->openGLRenderer->uploadLightSources(spotLights, *this->shaderProgram);
-			this->openGLRenderer->uploadLightSources(directionalLights, *this->shaderProgram);
+			this->openGLRenderer->uploadLightSources(pointLights);
+			this->openGLRenderer->uploadLightSources(spotLights);
+			this->openGLRenderer->uploadLightSources(directionalLights);
 
 			this->camera->update(*this->window, this->window->getFrameDeltaTime());
 			static float rotX = 0.0f;
@@ -99,7 +144,8 @@ namespace core
 
 			this->camera->updateCameraVectors();
 			this->openGLRenderer->render(backPack);
-			this->openGLRenderer->renderScene(*this->shaderProgram, *this->camera, *this->window);
+			const renderer::RenderPassPipelineSet pipelines { .shadowDepth = this->shaderLibrary->getGraphicsPipeline(this->shadowDepthPipeline), .depthPrepass = this->shaderLibrary->getGraphicsPipeline(this->depthPrepassPipeline), .gbuffer = this->shaderLibrary->getGraphicsPipeline(this->gbufferPipeline), .transparentOIT = this->shaderLibrary->getGraphicsPipeline(this->transparentOITPipeline), .toneMap = this->shaderLibrary->getGraphicsPipeline(this->toneMapPipeline), .visibilityCull = this->shaderLibrary->getComputePipeline(this->visibilityCullPipeline), .visibilityPrefixScan = this->shaderLibrary->getComputePipeline(this->visibilityPrefixScanPipeline), .visibilityBlockPrefixScan = this->shaderLibrary->getComputePipeline(this->visibilityBlockPrefixScanPipeline), .visibilityFinalize = this->shaderLibrary->getComputePipeline(this->visibilityFinalizePipeline), .visibilityScatter = this->shaderLibrary->getComputePipeline(this->visibilityScatterPipeline), .hierarchicalDepth = this->shaderLibrary->getComputePipeline(this->hierarchicalDepthPipeline), .clusteredLights = this->shaderLibrary->getComputePipeline(this->clusteredLightsPipeline), .deferredLighting = this->shaderLibrary->getComputePipeline(this->deferredLightingPipeline), .oitComposition = this->shaderLibrary->getComputePipeline(this->oitCompositionPipeline), .temporalAA = this->shaderLibrary->getComputePipeline(this->temporalAAPipeline), .autoExposure = this->shaderLibrary->getComputePipeline(this->autoExposurePipeline), .bloom = this->shaderLibrary->getComputePipeline(this->bloomPipeline) };
+			this->openGLRenderer->renderScene(pipelines, *this->camera, *this->window);
 		};
 	};
 }

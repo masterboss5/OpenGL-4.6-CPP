@@ -1,0 +1,44 @@
+#version 460 core
+
+// Phase 3: scatter only visible candidates into the prefix-scanned, compact
+// instance stream consumed by indirect draws.
+layout(local_size_x = 64) in;
+
+struct InstanceRecord
+{
+    mat4 transform;
+    mat4 previousTransform;
+    vec4 worldBounds;
+    uint materialIndex;
+    uint objectID;
+    uint batchIndex;
+    uint flags;
+};
+
+struct IndirectCommand
+{
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int baseVertex;
+    uint baseInstance;
+};
+
+layout(std430, binding = 5) readonly buffer CandidateInstances { InstanceRecord candidates[]; };
+layout(std430, binding = 0) writeonly buffer VisibleInstances { InstanceRecord visible[]; };
+layout(std430, binding = 6) buffer VisibilityScratch { uint scratch[]; };
+layout(std430, binding = 7) readonly buffer IndirectCommands { IndirectCommand commands[]; };
+
+uniform uint candidateCount;
+uniform uint scratchCapacity;
+
+void main()
+{
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    if (candidateIndex >= candidateCount || scratch[candidateIndex] == 0U) return;
+
+    InstanceRecord instance = candidates[candidateIndex];
+    uint cursorOffset = scratchCapacity * 3U;
+    uint batchOffset = atomicAdd(scratch[cursorOffset + instance.batchIndex], 1U);
+    visible[commands[instance.batchIndex].baseInstance + batchOffset] = instance;
+}

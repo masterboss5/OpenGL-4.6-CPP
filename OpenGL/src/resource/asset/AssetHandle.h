@@ -1,43 +1,42 @@
 #pragma once
-#include "src/resource/asset/AssetTypes.h"
+
 #include "src/concepts.h"
-#include "src/resource/asset/AssetManager.h"
 
 namespace resource
 {
 	class AssetManager;
 
-	template<typename T> requires IsAsset<T> /*T Must be a sub type of resource::Asset*/
+	template<typename T> requires IsAsset<T>
 	class AssetHandle final
 	{
-	private:
-		T* asset = nullptr;
-		AssetManager* assetManager = nullptr;
 	public:
+		AssetHandle() = default;
+
 		explicit AssetHandle(T* asset, AssetManager* assetManager)
 			: asset(asset),
 			assetManager(assetManager)
 		{
-			if (asset)
+			if (this->asset != nullptr)
 			{
-				asset->incrementReferenceCount();
+				this->asset->incrementReferenceCount();
 			}
 		}
 
 		~AssetHandle()
 		{
-			if (this->asset)
+			if (this->asset != nullptr)
 			{
 				this->asset->decrementReferenceCount();
 			}
 			this->asset = nullptr;
+			this->assetManager = nullptr;
 		}
 
 		AssetHandle(const AssetHandle& other) noexcept
 			: asset(other.asset),
 			assetManager(other.assetManager)
 		{
-			if (this->asset)
+			if (this->asset != nullptr)
 			{
 				this->asset->incrementReferenceCount();
 			}
@@ -47,18 +46,19 @@ namespace resource
 		{
 			if (this != &other)
 			{
-				if (this->asset)
+				if (this->asset != nullptr)
 				{
 					this->asset->decrementReferenceCount();
 				}
+
 				this->asset = other.asset;
 				this->assetManager = other.assetManager;
-				if (this->asset)
+
+				if (this->asset != nullptr)
 				{
 					this->asset->incrementReferenceCount();
 				}
 			}
-
 			return *this;
 		}
 
@@ -74,37 +74,48 @@ namespace resource
 		{
 			if (this != &other)
 			{
-				if (this->asset)
+				if (this->asset != nullptr)
 				{
 					this->asset->decrementReferenceCount();
 				}
+
 				this->asset = other.asset;
 				this->assetManager = other.assetManager;
 				other.asset = nullptr;
 				other.assetManager = nullptr;
 			}
-
 			return *this;
 		}
 
-		T* get() const
+		[[nodiscard]] T* get() const noexcept
 		{
-			return asset;
+			return this->asset;
 		}
 
-		T* operator->() const
+		[[nodiscard]] T* operator->() const noexcept
 		{
-			return asset;
+			return this->get();
 		}
 
-		bool isValid() const
+		[[nodiscard]] T& operator*() const
 		{
-			return asset != nullptr;
+			return *this->get();
 		}
 
-		explicit operator bool() const
+		[[nodiscard]] bool isValid() const noexcept
 		{
-			return asset != nullptr;
+			return this->get() != nullptr;
 		}
+
+		explicit operator bool() const noexcept
+		{
+			return this->isValid();
+		}
+
+	private:
+		T* asset = nullptr;
+		AssetManager* assetManager = nullptr;
+
+		friend class AssetManager;
 	};
 }

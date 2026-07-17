@@ -1,38 +1,84 @@
 #pragma once
+
+#include <memory>
+#include <unordered_map>
 #include <vector>
-#include "src/scene/StaticMeshObject.h"
-#include "ShaderProgram.h"
-#include "src/scene/DirectionalLightSource.h"
+
+#include <glm.hpp>
+
+#include "src/pipeline/shader/GraphicsPipeline.h"
+#include "src/renderer/FrameResourceRing.h"
+#include "src/renderer/HybridDeferredFrameGraph.h"
+#include "src/renderer/RenderPassPipelineSet.h"
+#include "src/renderer/RendererGpuTypes.h"
+#include "src/renderer/ScenePreparation.h"
+#include "src/scene/SceneCollection.h"
 #include "LightBufferManager.h"
-#include "src/scene/Camera.h"
-#include "src/core/input/Window.h"
+
+class Camera;
+class StaticMeshObject;
+class Window;
 
 class OpenGLRenderer final
 {
-private:
-	GLuint instanceSSBO;
-	unsigned int drawCount;
-	unsigned int objectsDrawn;
-	std::vector<DirectionalLightSource> directionalLightSources;
-	LightBufferManager lightBufferManager;
-	std::unordered_map<const StaticMesh*, std::vector<StaticMeshObject>> batch;
 public:
 	OpenGLRenderer();
+	~OpenGLRenderer();
 	OpenGLRenderer(const OpenGLRenderer&) = delete;
 	OpenGLRenderer& operator=(const OpenGLRenderer&) = delete;
 	OpenGLRenderer(OpenGLRenderer&&) = delete;
 	OpenGLRenderer& operator=(OpenGLRenderer&&) = delete;
 
 	template<typename LightType>
-	void uploadLightSources(std::vector<LightType>& lightSources, ShaderProgram& shaderProgram)
+	void uploadLightSources(std::vector<LightType>& lightSources)
 	{
-		this->lightBufferManager.uploadLightSources(lightSources, shaderProgram);
+		this->lightBufferManager.uploadLightSources(lightSources);
 	}
 
-	unsigned int getDrawCount() const;
-	unsigned int getObjectsDrawn() const;
+	[[nodiscard]] uint32 getDrawCount() const noexcept;
+	[[nodiscard]] uint32 getObjectsDrawn() const noexcept;
 	void render(const StaticMeshObject& worldObject);
-	void renderScene(const ShaderProgram& shader, const Camera& camera, const Window& window);
+	void renderScene(const pipeline::shader::GraphicsPipeline& pipeline, const Camera& camera, const Window& window);
+	void renderScene(const renderer::RenderPassPipelineSet& pipelines, const Camera& camera, const Window& window);
 	void enableCulling() const;
 	void disableCulling() const;
+
+private:
+	struct ShadowLayerCacheEntry final
+	{
+		GLuint texture = 0;
+		uint32 layer = 0;
+		uint64 signature = 0;
+		bool valid = false;
+	};
+	GLuint frameConstantsUBO = 0;
+	GLuint materialSSBO = 0;
+	GLuint shadowDataSSBO = 0;
+	GLuint shadowFramebuffer = 0;
+	uint32 drawCount = 0;
+	uint32 objectsDrawn = 0;
+	uint64 frameNumber = 0;
+	glm::mat4 previousViewProjection { 1.0f };
+	renderer::graph::Extent2D hierarchicalDepthHistoryExtent {};
+	bool hierarchicalDepthHistoryValid = false;
+	renderer::graph::Extent2D temporalHistoryExtent {};
+	bool temporalHistoryValid = false;
+	bool exposureHistoryValid = false;
+	glm::vec3 previousCameraPosition { 0.0f };
+	glm::vec3 previousCameraFront { 0.0f, 0.0f, -1.0f };
+	bool hasPreviousCameraState = false;
+	bool collectingFrame = false;
+	bool headlessPresentationValidation = false;
+	bool presentationValidated = false;
+	std::unordered_map<uint32, ShadowLayerCacheEntry> shadowLayerCache;
+	SceneCollection sceneCollection;
+	renderer::ScenePreparation scenePreparation;
+	LightBufferManager lightBufferManager;
+	std::unique_ptr<renderer::FrameResourceRing> frameResources;
+	renderer::graph::RenderGraph renderGraph;
+	renderer::HybridDeferredFrameGraph hybridFrameGraph;
+	void uploadFrameConstants(const Camera& camera, const Window& window);
+	void validateHeadlessDepthCoverage(GLuint depthTexture, renderer::graph::Extent2D extent) const;
+	void validateHeadlessColorCoverage(GLuint colorTexture, renderer::graph::Extent2D extent, string_view stage) const;
+	void validateHeadlessPresentation(const Window& window);
 };

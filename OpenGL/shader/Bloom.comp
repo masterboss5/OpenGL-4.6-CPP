@@ -1,0 +1,47 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D sourceHDR;
+layout(rgba16f, binding = 0) uniform coherent image2D bloomOutput;
+uniform uint sourceMip;
+uniform uint operation;
+
+vec3 sampleTent(vec2 uv, vec2 texelSize, uint mip)
+{
+    vec3 result = textureLod(sourceHDR, uv, float(mip)).rgb * 0.25;
+    result += textureLod(sourceHDR, uv + vec2(texelSize.x, 0.0), float(mip)).rgb * 0.125;
+    result += textureLod(sourceHDR, uv - vec2(texelSize.x, 0.0), float(mip)).rgb * 0.125;
+    result += textureLod(sourceHDR, uv + vec2(0.0, texelSize.y), float(mip)).rgb * 0.125;
+    result += textureLod(sourceHDR, uv - vec2(0.0, texelSize.y), float(mip)).rgb * 0.125;
+    result += textureLod(sourceHDR, uv + texelSize, float(mip)).rgb * 0.0625;
+    result += textureLod(sourceHDR, uv - texelSize, float(mip)).rgb * 0.0625;
+    result += textureLod(sourceHDR, uv + vec2(texelSize.x, -texelSize.y), float(mip)).rgb * 0.0625;
+    result += textureLod(sourceHDR, uv + vec2(-texelSize.x, texelSize.y), float(mip)).rgb * 0.0625;
+    return result;
+}
+
+void main()
+{
+    ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputExtent = imageSize(bloomOutput);
+    if (any(greaterThanEqual(coordinate, outputExtent))) return;
+
+    vec2 uv = (vec2(coordinate) + 0.5) / vec2(outputExtent);
+    ivec2 sourceExtent = textureSize(sourceHDR, int(sourceMip));
+    vec3 filtered = sampleTent(uv, 1.0 / vec2(sourceExtent), sourceMip);
+    if (operation == 0U)
+    {
+        // Karis-style prefilter at the first level; later levels only filter.
+        if (sourceMip == 0U)
+        {
+            float brightness = max(max(filtered.r, filtered.g), filtered.b);
+            filtered *= max(brightness - 1.0, 0.0) / max(brightness, 0.00001);
+        }
+        imageStore(bloomOutput, coordinate, vec4(filtered, 1.0));
+    }
+    else
+    {
+        vec3 currentLevel = imageLoad(bloomOutput, coordinate).rgb;
+        imageStore(bloomOutput, coordinate, vec4(currentLevel + filtered, 1.0));
+    }
+}

@@ -1,0 +1,87 @@
+#version 460 core
+
+layout(local_size_x = 64) in;
+
+struct LightRecord
+{
+    vec4 positionAndRange;
+    vec4 directionAndType;
+    vec4 colorAndIntensity;
+    vec4 spotAnglesAndShadow;
+};
+struct ClusterHeader
+{
+    uint offset;
+    uint count;
+    uint pad0;
+    uint pad1;
+};
+
+layout(std140, binding = 0) uniform FrameConstants
+{
+    mat4 projection;
+    mat4 view;
+    mat4 viewProjection;
+    mat4 previousViewProjection;
+    mat4 inverseViewProjection;
+    vec4 cameraPositionAndNear;
+    vec4 renderExtentAndFar;
+    uvec4 countsAndFrame;
+};
+
+layout(std430, binding = 2) readonly buffer Lights { LightRecord lights[]; };
+layout(std430, binding = 3) writeonly buffer ClusterHeaders { ClusterHeader headers[]; };
+layout(std430, binding = 4) writeonly buffer ClusterIndices { uint indices[]; };
+
+uniform uint lightCount;
+uniform uint clusterCount;
+
+const uint TileCountX = 32U;
+const uint TileCountY = 18U;
+const uint DepthSliceCount = 24U;
+const uint MaxLightsPerCluster = 64U;
+
+float sliceDepth(uint slice)
+{
+    return cameraPositionAndNear.w * pow(renderExtentAndFar.z / cameraPositionAndNear.w, float(slice) / float(DepthSliceCount));
+}
+
+bool intersectsCluster(LightRecord light, uint tileX, uint tileY, uint depthSlice)
+{
+    if (light.directionAndType.w == 0.0) return true;
+
+    vec4 viewPosition = view * vec4(light.positionAndRange.xyz, 1.0);
+    float lightDepth = -viewPosition.z;
+    float radius = light.positionAndRange.w;
+    float sliceNear = sliceDepth(depthSlice);
+    float sliceFar = sliceDepth(depthSlice + 1U);
+    if (lightDepth + radius < sliceNear || lightDepth - radius > sliceFar) return false;
+
+    vec4 clipPosition = projection * viewPosition;
+    if (clipPosition.w <= 0.0) return true; // Conservative inclusion around the eye plane.
+    vec2 centerNdc = clipPosition.xy / clipPosition.w;
+    vec2 radiusNdc = vec2(radius * abs(projection[0][0]), radius * abs(projection[1][1])) / max(lightDepth, 0.0001);
+    vec2 tileMinimum = vec2(float(tileX) / float(TileCountX), float(tileY) / float(TileCountY)) * 2.0 - 1.0;
+    vec2 tileMaximum = vec2(float(tileX + 1U) / float(TileCountX), float(tileY + 1U) / float(TileCountY)) * 2.0 - 1.0;
+    vec2 closestPoint = clamp(centerNdc, tileMinimum, tileMaximum);
+    vec2 normalizedDistance = (closestPoint - centerNdc) / max(radiusNdc, vec2(0.0001));
+    return dot(normalizedDistance, normalizedDistance) <= 1.0;
+}
+
+void main()
+{
+    uint clusterIndex = gl_GlobalInvocationID.x;
+    if (clusterIndex >= clusterCount) return;
+
+    uint tileX = clusterIndex % TileCountX;
+    uint tileY = (clusterIndex / TileCountX) % TileCountY;
+    uint depthSlice = clusterIndex / (TileCountX * TileCountY);
+    uint offset = clusterIndex * MaxLightsPerCluster;
+    uint count = 0U;
+    for (uint lightIndex = 0U; lightIndex < lightCount; ++lightIndex)
+    {
+        if (!intersectsCluster(lights[lightIndex], tileX, tileY, depthSlice)) continue;
+        if (count < MaxLightsPerCluster) indices[offset + count++] = lightIndex;
+    }
+    headers[clusterIndex] = ClusterHeader(offset, count, 0U, 0U);
+}

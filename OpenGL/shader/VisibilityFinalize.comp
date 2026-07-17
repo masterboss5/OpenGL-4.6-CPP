@@ -1,0 +1,37 @@
+#version 460 core
+
+// Applies each block's prefix to local offsets, initializes scatter cursors,
+// and writes the final compact base instances into indirect commands.
+layout(local_size_x = 256) in;
+
+struct IndirectCommand
+{
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int baseVertex;
+    uint baseInstance;
+};
+
+layout(std430, binding = 6) buffer VisibilityScratch { uint scratch[]; };
+layout(std430, binding = 7) buffer IndirectCommands { IndirectCommand commands[]; };
+
+uniform uint batchCount;
+uniform uint scratchCapacity;
+
+void main()
+{
+    uint batchIndex = gl_GlobalInvocationID.x;
+    if (batchIndex >= batchCount) return;
+
+    uint countOffset = scratchCapacity;
+    uint localOffsetOffset = scratchCapacity * 2U;
+    uint cursorOffset = scratchCapacity * 3U;
+    uint blockOffsetOffset = scratchCapacity * 4U + 256U;
+    uint blockIndex = batchIndex / 256U;
+    uint count = scratch[countOffset + batchIndex];
+    uint compactBaseInstance = scratch[blockOffsetOffset + blockIndex] + scratch[localOffsetOffset + batchIndex];
+    scratch[cursorOffset + batchIndex] = 0U;
+    commands[batchIndex].instanceCount = count;
+    commands[batchIndex].baseInstance = compactBaseInstance;
+}

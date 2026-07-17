@@ -7,8 +7,7 @@ namespace resource
 		TEXTURE_2D,
 		MATERIAL,
 		MODEL,
-		VERTEX_SHADER,
-		FRAGMENT_SHADER,
-		COMPUTE_SHADER
+		SHADER_SOURCE,
+		COUNT
 	};
 }

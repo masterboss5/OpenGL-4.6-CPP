@@ -1,0 +1,211 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D gbufferBaseColor;
+layout(binding = 1) uniform sampler2D gbufferNormalRoughness;
+layout(binding = 2) uniform sampler2D gbufferMaterial;
+layout(binding = 3) uniform sampler2D depthTexture;
+layout(binding = 4) uniform sampler2DArray directionalShadowMap;
+layout(binding = 5) uniform sampler2DArray spotShadowMap;
+layout(binding = 6) uniform samplerCubeArray pointShadowMap;
+layout(rgba16f, binding = 0) uniform writeonly image2D outputLighting;
+
+layout(std140, binding = 0) uniform FrameConstants
+{
+    mat4 projection;
+    mat4 view;
+    mat4 viewProjection;
+    mat4 previousViewProjection;
+    mat4 inverseViewProjection;
+    vec4 cameraPositionAndNear;
+    vec4 renderExtentAndFar;
+    uvec4 countsAndFrame;
+};
+
+struct LightRecord
+{
+    vec4 positionAndRange;
+    vec4 directionAndType;
+    vec4 colorAndIntensity;
+    vec4 spotAnglesAndShadow;
+};
+struct ClusterHeader
+{
+    uint offset;
+    uint count;
+    uint pad0;
+    uint pad1;
+};
+struct ShadowRecord
+{
+    mat4 viewProjection;
+    vec4 atlasScaleBias;
+    vec4 depthBiasAndFilter;
+};
+layout(std430, binding = 2) readonly buffer Lights { LightRecord lights[]; };
+layout(std430, binding = 3) readonly buffer ClusterHeaders { ClusterHeader headers[]; };
+layout(std430, binding = 4) readonly buffer ClusterIndices { uint indices[]; };
+layout(std430, binding = 8) readonly buffer ShadowData { ShadowRecord shadows[]; };
+
+uniform uint lightCount;
+uniform uint clusterCount;
+
+const float Pi = 3.14159265359;
+
+vec3 reconstructWorldPosition(ivec2 coordinate, ivec2 extent, float depth)
+{
+    vec2 uv = (vec2(coordinate) + vec2(0.5)) / vec2(extent);
+    vec4 world = inverseViewProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return world.xyz / max(world.w, 0.00001);
+}
+
+float distributionGGX(vec3 normal, vec3 halfVector, float roughness)
+{
+    float roughnessSquared = roughness * roughness;
+    float a2 = roughnessSquared * roughnessSquared;
+    float nDotH = max(dot(normal, halfVector), 0.0);
+    float denominator = nDotH * nDotH * (a2 - 1.0) + 1.0;
+    return a2 / max(Pi * denominator * denominator, 0.00001);
+}
+
+float geometrySchlickGGX(float nDotDirection, float roughness)
+{
+    float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+    return nDotDirection / max(nDotDirection * (1.0 - k) + k, 0.00001);
+}
+
+float geometrySmith(vec3 normal, vec3 viewDirection, vec3 lightDirection, float roughness)
+{
+    return geometrySchlickGGX(max(dot(normal, viewDirection), 0.0), roughness) * geometrySchlickGGX(max(dot(normal, lightDirection), 0.0), roughness);
+}
+
+vec3 fresnelSchlick(float cosine, vec3 f0)
+{
+    return f0 + (1.0 - f0) * pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
+}
+
+float samplePcfShadow(sampler2DArray shadowMap, vec4 lightClip, uint layer, float bias)
+{
+    vec3 projection = lightClip.xyz / max(lightClip.w, 0.00001);
+    vec2 uv = projection.xy * 0.5 + 0.5;
+    if (projection.z <= 0.0 || projection.z >= 1.0 || any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
+    float occlusion = 0.0;
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            float storedDepth = textureOffset(shadowMap, vec3(uv, float(layer)), ivec2(x, y)).r;
+            occlusion += projection.z - bias > storedDepth ? 1.0 : 0.0;
+        }
+    }
+    return 1.0 - occlusion / 9.0;
+}
+
+float directionalShadow(vec3 worldPosition, float viewDepth, float nDotL)
+{
+    uint cascade = viewDepth < 25.0 ? 0U : viewDepth < 75.0 ? 1U : viewDepth < 200.0 ? 2U : 3U;
+    ShadowRecord shadow = shadows[cascade];
+    return samplePcfShadow(directionalShadowMap, shadow.viewProjection * vec4(worldPosition, 1.0), cascade, max(shadow.depthBiasAndFilter.x * (1.0 - nDotL), shadow.depthBiasAndFilter.x));
+}
+
+float spotShadow(vec3 worldPosition, uint spotIndex, float nDotL)
+{
+    ShadowRecord shadow = shadows[4U + spotIndex];
+    return samplePcfShadow(spotShadowMap, shadow.viewProjection * vec4(worldPosition, 1.0), spotIndex, max(shadow.depthBiasAndFilter.x * (1.0 - nDotL), shadow.depthBiasAndFilter.x));
+}
+
+float pointShadow(vec3 worldPosition, LightRecord light, uint pointIndex, float nDotL)
+{
+    ShadowRecord shadow = shadows[68U + pointIndex * 6U];
+    vec3 fromLight = worldPosition - light.positionAndRange.xyz;
+    float distanceToLight = length(fromLight);
+    float nearPlane = 0.1;
+    float farPlane = shadow.depthBiasAndFilter.z;
+    float referenceDepth = farPlane * (distanceToLight - nearPlane) / max(distanceToLight * (farPlane - nearPlane), 0.00001);
+    float storedDepth = texture(pointShadowMap, vec4(normalize(fromLight), float(pointIndex))).r;
+    float bias = max(shadow.depthBiasAndFilter.x * (1.0 - nDotL), shadow.depthBiasAndFilter.x);
+    return referenceDepth - bias > storedDepth ? 0.0 : 1.0;
+}
+
+void main()
+{
+    ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(outputLighting);
+    if (any(greaterThanEqual(coordinate, extent))) return;
+
+    vec4 baseColorSample = texelFetch(gbufferBaseColor, coordinate, 0);
+    float depth = texelFetch(depthTexture, coordinate, 0).r;
+    // Reversed-Z clears depth to zero. These pixels contain no opaque geometry.
+    if (depth <= 0.0) { imageStore(outputLighting, coordinate, vec4(0.0)); return; }
+
+    vec4 normalRoughness = texelFetch(gbufferNormalRoughness, coordinate, 0);
+    vec4 material = texelFetch(gbufferMaterial, coordinate, 0);
+    vec3 normal = normalize(normalRoughness.xyz * 2.0 - 1.0);
+    float roughness = clamp(normalRoughness.w, 0.045, 1.0);
+    float metallic = clamp(material.w, 0.0, 1.0);
+    vec3 worldPosition = reconstructWorldPosition(coordinate, extent, depth);
+    vec3 viewDirection = normalize(cameraPositionAndNear.xyz - worldPosition);
+    vec3 f0 = mix(vec3(0.04), baseColorSample.rgb, metallic);
+
+    const uint tilesX = 32U;
+    const uint tilesY = 18U;
+    const uint depthSlices = 24U;
+    uint tileX = min(uint(coordinate.x) * tilesX / uint(extent.x), tilesX - 1U);
+    uint tileY = min(uint(coordinate.y) * tilesY / uint(extent.y), tilesY - 1U);
+    float viewDepth = max(-(view * vec4(worldPosition, 1.0)).z, cameraPositionAndNear.w);
+    float logarithmicSlice = log(viewDepth / cameraPositionAndNear.w) / log(renderExtentAndFar.z / cameraPositionAndNear.w);
+    uint slice = min(uint(clamp(logarithmicSlice, 0.0, 0.99999) * float(depthSlices)), depthSlices - 1U);
+    uint clusterIndex = min(tileX + tileY * tilesX + slice * tilesX * tilesY, max(clusterCount, 1U) - 1U);
+    ClusterHeader header = headers[clusterIndex];
+
+    vec3 outgoingRadiance = vec3(0.0);
+    for (uint index = 0U; index < header.count; ++index)
+    {
+        uint lightIndex = indices[header.offset + index];
+        if (lightIndex >= lightCount) continue;
+        LightRecord light = lights[lightIndex];
+        vec3 lightDirection;
+        float attenuation = 1.0;
+        if (light.directionAndType.w == 0.0)
+        {
+            lightDirection = normalize(-light.directionAndType.xyz);
+        }
+        else
+        {
+            vec3 toLight = light.positionAndRange.xyz - worldPosition;
+            float distanceToLight = length(toLight);
+            if (distanceToLight >= light.positionAndRange.w) continue;
+            lightDirection = toLight / max(distanceToLight, 0.00001);
+            attenuation = 1.0 / max(distanceToLight * distanceToLight, 0.01);
+            attenuation *= pow(clamp(1.0 - distanceToLight / light.positionAndRange.w, 0.0, 1.0), 2.0);
+            if (light.directionAndType.w == 2.0)
+            {
+                float spotCosine = dot(normalize(worldPosition - light.positionAndRange.xyz), normalize(light.directionAndType.xyz));
+                attenuation *= smoothstep(light.spotAnglesAndShadow.y, light.spotAnglesAndShadow.x, spotCosine);
+            }
+        }
+
+        float nDotL = max(dot(normal, lightDirection), 0.0);
+        if (nDotL <= 0.0) continue;
+        vec3 halfVector = normalize(viewDirection + lightDirection);
+        vec3 fresnel = fresnelSchlick(max(dot(halfVector, viewDirection), 0.0), f0);
+        float distribution = distributionGGX(normal, halfVector, roughness);
+        float geometry = geometrySmith(normal, viewDirection, lightDirection, roughness);
+        vec3 specular = distribution * geometry * fresnel / max(4.0 * max(dot(normal, viewDirection), 0.0) * nDotL, 0.0001);
+        vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
+        vec3 radiance = light.colorAndIntensity.rgb * light.colorAndIntensity.a * attenuation;
+        float shadowVisibility = 1.0;
+        if (light.spotAnglesAndShadow.w >= 0.0)
+        {
+            const uint shadowIndex = uint(light.spotAnglesAndShadow.w);
+            if (light.directionAndType.w == 0.0) shadowVisibility = directionalShadow(worldPosition, viewDepth, nDotL);
+            else if (light.directionAndType.w == 1.0) shadowVisibility = pointShadow(worldPosition, light, shadowIndex, nDotL);
+            else if (light.directionAndType.w == 2.0) shadowVisibility = spotShadow(worldPosition, shadowIndex, nDotL);
+        }
+        outgoingRadiance += (diffuseWeight * baseColorSample.rgb / Pi + specular) * radiance * nDotL * shadowVisibility;
+    }
+
+    vec3 ambient = baseColorSample.rgb * (1.0 - metallic) * 0.025;
+    imageStore(outputLighting, coordinate, vec4(ambient + outgoingRadiance + material.rgb, baseColorSample.a));
+}

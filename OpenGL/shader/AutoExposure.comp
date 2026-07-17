@@ -1,0 +1,29 @@
+#version 460 core
+
+layout(local_size_x = 1, local_size_y = 1) in;
+
+layout(binding = 0) uniform sampler2D sourceHDR;
+layout(r32f, binding = 0) uniform coherent image2D exposureOutput;
+uniform uint historyValid;
+
+void main()
+{
+    ivec2 extent = textureSize(sourceHDR, 0);
+    const int SampleDimension = 64;
+    float logLuminanceSum = 0.0;
+    for (int y = 0; y < SampleDimension; ++y)
+    {
+        for (int x = 0; x < SampleDimension; ++x)
+        {
+            ivec2 coordinate = ivec2((x * extent.x) / SampleDimension, (y * extent.y) / SampleDimension);
+            vec3 color = texelFetch(sourceHDR, min(coordinate, extent - 1), 0).rgb;
+            float luminance = max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 0.0001);
+            logLuminanceSum += log(luminance);
+        }
+    }
+    float averageLuminance = exp(logLuminanceSum / float(SampleDimension * SampleDimension));
+    float targetExposure = clamp(0.18 / averageLuminance, 0.0625, 16.0);
+    float priorExposure = historyValid != 0U ? imageLoad(exposureOutput, ivec2(0)).r : targetExposure;
+    float adaptedExposure = mix(priorExposure, targetExposure, 0.08);
+    imageStore(exposureOutput, ivec2(0), vec4(adaptedExposure));
+}

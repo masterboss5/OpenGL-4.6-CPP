@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <unordered_map>
 #include <functional>
+#include "src/types.h"
 
 namespace core
 {
@@ -13,10 +14,13 @@ namespace core
 class Window final {
 private:
 	std::string title;
-	unsigned int height;
-	unsigned int width;
+	uint32 height;
+	uint32 width;
 	bool isFullscreen = false;	
-	float frameDeltaTime = 0.0f;
+	float32 frameDeltaTime = 0.0f;
+
+	static void framebufferSizeCallback(GLFWwindow* window, int width, int height);
+	void setFramebufferExtent(uint32 width, uint32 height);
 public:
 	GLFWwindow* window = nullptr;
 	static inline Window* windowPtr = nullptr;
@@ -30,19 +34,19 @@ public:
 
 	void swapBuffers();
 	void updateViewport();
-	void setWidth(unsigned int);
-	unsigned int getWidth();	
-	void setHeight(unsigned int);
-	unsigned int getHeight();
-	float getAspectRatio() const;
+	void setWidth(uint32 width);
+	uint32 getWidth() const;	
+	void setHeight(uint32 height);
+	uint32 getHeight() const;
+	float32 getAspectRatio() const;
 	void setTitle(const std::string&);
 	std::string getTitle();
 	bool getIsFullscreen();
 	bool shouldClose();
-	void closeWindow();
+	void closeWindow() const;
 	void makeContextCurrent();
 	void pollEvents();
 	void clearColor(); //TODO: parameters
 	void uncapFPS();
-	float getFrameDeltaTime() const;
+	float32 getFrameDeltaTime() const;
 };

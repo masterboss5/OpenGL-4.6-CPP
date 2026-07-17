@@ -1,30 +1,52 @@
 #include "Texture2DImporter.h"
 
-bool resource::importer::Texture2DImporter::canImport(const std::filesystem::path& path)
+#include <limits>
+#include <memory>
+
+#include "stb_image.h"
+#include "src/resource/asset/Texture2DAsset.h"
+
+bool resource::importer::Texture2DImporter::canImport(const std::filesystem::path& path) const
 {
-    bool extension = path.extension().string() == ".png";
-    return extension;
+	const std::string extension = getNormalizedExtension(path);
+	return extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga";
 }
 
-resource::AssetType resource::importer::Texture2DImporter::getAssetType() const
+resource::AssetType resource::importer::Texture2DImporter::getAssetType() const noexcept
 {
-    return resource::AssetType::TEXTURE_2D;
+	return AssetType::TEXTURE_2D;
 }
 
-resource::Asset* resource::importer::Texture2DImporter::import(const std::filesystem::path& path)
+resource::importer::AssetImportResult resource::importer::Texture2DImporter::importCpu(const std::filesystem::path& path) const
 {
-    renderer::texture::Texture2DCreationInfo source;
-	uint8* pixels = stbi_load(path.string().c_str(), &source.width, &source.height, &source.channels, 4);
-	source.pixels = pixels;
+	this->validateImportRequest(path);
 
-    if (source.pixels == nullptr)
-    {
-        LOG_ERROR("Failed to load 2D texture from path: " + path.string());
-		return nullptr;
-    }
+	int32 width = 0;
+	int32 height = 0;
+	int32 channels = 0;
+	stbi_uc* sourcePixels = stbi_load(path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+	if (sourcePixels == nullptr)
+	{
+		const auto* failureReason = stbi_failure_reason();
+		throw AssetImageDecodeException(AssetType::TEXTURE_2D, path, failureReason == nullptr ? "Image decoder did not provide a diagnostic" : failureReason);
+	}
+	std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> ownedPixels(sourcePixels, stbi_image_free);
 
-	renderer::texture::Texture2D* texture = new renderer::texture::Texture2D(path.filename().string(), source);
-	stbi_image_free(pixels);
+	if (width <= 0 || height <= 0)
+	{
+		throw AssetContentValidationException(AssetType::TEXTURE_2D, path, "Decoded image has invalid dimensions");
+	}
 
-    return texture;
+	const size_t widthInBytes = static_cast<size_t>(width);
+	const size_t heightInBytes = static_cast<size_t>(height);
+	constexpr size_t rgbaChannelCount = 4;
+	if (widthInBytes > std::numeric_limits<size_t>::max() / heightInBytes / rgbaChannelCount)
+	{
+		throw AssetContentValidationException(AssetType::TEXTURE_2D, path, "Decoded image dimensions overflow the CPU pixel buffer size");
+	}
+
+	const size_t byteCount = widthInBytes * heightInBytes * rgbaChannelCount;
+	std::vector<uint8> pixels(ownedPixels.get(), ownedPixels.get() + byteCount);
+
+	return AssetImportResult(AssetPtr<Texture2DAsset>::make(path.filename().string(), width, height, static_cast<int32>(rgbaChannelCount), std::move(pixels)));
 }

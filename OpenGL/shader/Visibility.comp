@@ -1,0 +1,76 @@
+#version 460 core
+
+// Phase 1 of GPU visibility: classify candidates and accumulate per-batch
+// counts. The subsequent prefix and scatter phases compact the output ranges.
+layout(local_size_x = 64) in;
+
+struct InstanceRecord
+{
+    mat4 transform;
+    mat4 previousTransform;
+    vec4 worldBounds;
+    uint materialIndex;
+    uint objectID;
+    uint batchIndex;
+    uint flags;
+};
+
+layout(std430, binding = 5) readonly buffer CandidateInstances { InstanceRecord candidates[]; };
+layout(std430, binding = 6) buffer VisibilityScratch { uint scratch[]; };
+
+layout(std140, binding = 0) uniform FrameConstants
+{
+    mat4 projection;
+    mat4 view;
+    mat4 viewProjection;
+    mat4 previousViewProjection;
+    mat4 inverseViewProjection;
+    vec4 cameraPositionAndNear;
+    vec4 renderExtentAndFar;
+    uvec4 countsAndFrame;
+};
+
+layout(binding = 0) uniform sampler2D previousHierarchicalDepth;
+uniform uint candidateCount;
+uniform uint pyramidMipCount;
+uniform uint historyValid;
+uniform uint scratchCapacity;
+
+bool intersectsFrustum(vec4 clipCenter, float radius)
+{
+    float conservativeRadius = radius * max(abs(viewProjection[0][0]), max(abs(viewProjection[1][1]), abs(viewProjection[2][2])));
+    return clipCenter.x >= -clipCenter.w - conservativeRadius && clipCenter.x <= clipCenter.w + conservativeRadius &&
+           clipCenter.y >= -clipCenter.w - conservativeRadius && clipCenter.y <= clipCenter.w + conservativeRadius &&
+           clipCenter.z >= -conservativeRadius && clipCenter.z <= clipCenter.w + conservativeRadius;
+}
+
+bool isOccludedByPreviousDepth(vec4 clipCenter, float worldRadius)
+{
+    if (historyValid == 0U || clipCenter.w <= 0.0) return false;
+
+    vec2 centerNdc = clipCenter.xy / clipCenter.w;
+    float radiusNdc = worldRadius * max(abs(viewProjection[0][0]), abs(viewProjection[1][1])) / max(abs(clipCenter.w), 0.0001);
+    vec2 minimumUV = clamp(centerNdc * 0.5 + 0.5 - vec2(radiusNdc * 0.5), vec2(0.0), vec2(1.0));
+    vec2 maximumUV = clamp(centerNdc * 0.5 + 0.5 + vec2(radiusNdc * 0.5), vec2(0.0), vec2(1.0));
+    vec2 pixelSpan = max((maximumUV - minimumUV) * renderExtentAndFar.xy, vec2(1.0));
+    uint mip = min(uint(floor(log2(max(pixelSpan.x, pixelSpan.y)))), pyramidMipCount - 1U);
+    ivec2 mipExtent = textureSize(previousHierarchicalDepth, int(mip));
+    ivec2 minimumCoordinate = clamp(ivec2(floor(minimumUV * vec2(mipExtent))), ivec2(0), mipExtent - 1);
+    ivec2 maximumCoordinate = clamp(ivec2(floor(maximumUV * vec2(mipExtent))), ivec2(0), mipExtent - 1);
+
+    float closestOccluder = min(min(texelFetch(previousHierarchicalDepth, minimumCoordinate, int(mip)).r, texelFetch(previousHierarchicalDepth, ivec2(maximumCoordinate.x, minimumCoordinate.y), int(mip)).r), min(texelFetch(previousHierarchicalDepth, ivec2(minimumCoordinate.x, maximumCoordinate.y), int(mip)).r, texelFetch(previousHierarchicalDepth, maximumCoordinate, int(mip)).r));
+    float closestObjectDepth = clamp(clipCenter.z / clipCenter.w + worldRadius / max(abs(clipCenter.w), 0.0001), 0.0, 1.0);
+    return closestObjectDepth <= closestOccluder;
+}
+
+void main()
+{
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    if (candidateIndex >= candidateCount) return;
+
+    InstanceRecord instance = candidates[candidateIndex];
+    vec4 clipCenter = viewProjection * vec4(instance.worldBounds.xyz, 1.0);
+    bool visible = intersectsFrustum(clipCenter, instance.worldBounds.w) && !isOccludedByPreviousDepth(clipCenter, instance.worldBounds.w);
+    scratch[candidateIndex] = visible ? 1U : 0U;
+    if (visible) atomicAdd(scratch[scratchCapacity + instance.batchIndex], 1U);
+}

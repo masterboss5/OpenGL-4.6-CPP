@@ -1,5 +1,6 @@
 #include "Camera.h"
 #include <iostream>
+#include <ext/matrix_clip_space.hpp>
 #include "src/core/input/InputManager.h"
 
 Camera::Camera(float sensitivity, float FOV, float nearPlane, float farPlane) : yaw(0.0f), pitch(0.0f), sensitivity(sensitivity), FOV(FOV), nearPlane(nearPlane), farPlane(farPlane)
@@ -79,7 +80,9 @@ glm::mat4 Camera::getViewMatrix() const
 
 glm::mat4 Camera::getProjectionMatrix(const Window& window) const
 {
-	return glm::perspective(glm::radians(this->FOV), window.getAspectRatio(), this->nearPlane, this->farPlane);
+	// The renderer uses GL_ZERO_TO_ONE and reversed-Z.  Swapping near/far gives
+	// near geometry a depth of one and moves precision toward the camera.
+	return glm::perspectiveRH_ZO(glm::radians(this->FOV), window.getAspectRatio(), this->farPlane, this->nearPlane);
 }
 
 void Camera::updateCameraVectors()

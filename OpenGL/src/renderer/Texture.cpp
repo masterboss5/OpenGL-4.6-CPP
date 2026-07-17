@@ -1,15 +1,14 @@
 #include "Texture.h"
 
 Texture::Texture(const std::string& path) {
+	if (path.empty()) return;
 	this->pixels = stbi_load(path.c_str(), &this->width, &this->height, &this->channels, 4);
-	std::cout << "Loaded texture: " << path << " (" << this->width << "x" << this->height << ", " << this->channels << " channels)" << std::endl;
 
 	if (!this->pixels) {
 		std::cerr << "[Texture] stbi_load failed for '" << path << "': " << stbi_failure_reason() << "\n";
-		this->textureHandle = 0;
-		this->textureID = 0;
 		return;
 	}
+	std::cout << "Loaded texture: " << path << " (" << this->width << "x" << this->height << ", " << this->channels << " channels)" << std::endl;
 
 	glGenTextures(1, &this->textureID);
 	glBindTexture(GL_TEXTURE_2D, this->textureID);
