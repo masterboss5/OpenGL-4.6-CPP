@@ -12,7 +12,11 @@ struct InstanceRecord
     uint materialIndex;
     uint objectID;
     uint batchIndex;
+	uint skinPaletteOffset;
+	uint previousSkinPaletteOffset;
     uint flags;
+	uint morphWeightOffset;
+	uint morphWeightCount;
 };
 
 layout(std430, binding = 5) readonly buffer CandidateInstances { InstanceRecord candidates[]; };
@@ -28,6 +32,7 @@ layout(std140, binding = 0) uniform FrameConstants
     vec4 cameraPositionAndNear;
     vec4 renderExtentAndFar;
     uvec4 countsAndFrame;
+	vec4 backgroundColor;
 };
 
 layout(binding = 0) uniform sampler2D previousHierarchicalDepth;
@@ -36,9 +41,9 @@ uniform uint pyramidMipCount;
 uniform uint historyValid;
 uniform uint scratchCapacity;
 
-bool intersectsFrustum(vec4 clipCenter, float radius)
+bool intersectsFrustum(vec4 clipCenter, float radius, mat4 clipFromWorld)
 {
-    float conservativeRadius = radius * max(abs(viewProjection[0][0]), max(abs(viewProjection[1][1]), abs(viewProjection[2][2])));
+    float conservativeRadius = radius * max(abs(clipFromWorld[0][0]), max(abs(clipFromWorld[1][1]), abs(clipFromWorld[2][2])));
     return clipCenter.x >= -clipCenter.w - conservativeRadius && clipCenter.x <= clipCenter.w + conservativeRadius &&
            clipCenter.y >= -clipCenter.w - conservativeRadius && clipCenter.y <= clipCenter.w + conservativeRadius &&
            clipCenter.z >= -conservativeRadius && clipCenter.z <= clipCenter.w + conservativeRadius;
@@ -49,7 +54,7 @@ bool isOccludedByPreviousDepth(vec4 clipCenter, float worldRadius)
     if (historyValid == 0U || clipCenter.w <= 0.0) return false;
 
     vec2 centerNdc = clipCenter.xy / clipCenter.w;
-    float radiusNdc = worldRadius * max(abs(viewProjection[0][0]), abs(viewProjection[1][1])) / max(abs(clipCenter.w), 0.0001);
+    float radiusNdc = worldRadius * max(abs(previousViewProjection[0][0]), abs(previousViewProjection[1][1])) / max(abs(clipCenter.w), 0.0001);
     vec2 minimumUV = clamp(centerNdc * 0.5 + 0.5 - vec2(radiusNdc * 0.5), vec2(0.0), vec2(1.0));
     vec2 maximumUV = clamp(centerNdc * 0.5 + 0.5 + vec2(radiusNdc * 0.5), vec2(0.0), vec2(1.0));
     vec2 pixelSpan = max((maximumUV - minimumUV) * renderExtentAndFar.xy, vec2(1.0));
@@ -69,8 +74,15 @@ void main()
     if (candidateIndex >= candidateCount) return;
 
     InstanceRecord instance = candidates[candidateIndex];
-    vec4 clipCenter = viewProjection * vec4(instance.worldBounds.xyz, 1.0);
-    bool visible = intersectsFrustum(clipCenter, instance.worldBounds.w) && !isOccludedByPreviousDepth(clipCenter, instance.worldBounds.w);
+    vec4 currentClipCenter = viewProjection * vec4(instance.worldBounds.xyz, 1.0);
+    vec4 previousClipCenter = previousViewProjection * vec4(instance.worldBounds.xyz, 1.0);
+    bool transformMoved = any(greaterThan(abs(instance.transform[0] - instance.previousTransform[0]), vec4(0.00001))) ||
+                          any(greaterThan(abs(instance.transform[1] - instance.previousTransform[1]), vec4(0.00001))) ||
+                          any(greaterThan(abs(instance.transform[2] - instance.previousTransform[2]), vec4(0.00001))) ||
+                          any(greaterThan(abs(instance.transform[3] - instance.previousTransform[3]), vec4(0.00001)));
+    bool deforms = (instance.flags & 6U) != 0U;
+    bool occluded = !transformMoved && !deforms && isOccludedByPreviousDepth(previousClipCenter, instance.worldBounds.w);
+    bool visible = intersectsFrustum(currentClipCenter, instance.worldBounds.w, viewProjection) && !occluded;
     scratch[candidateIndex] = visible ? 1U : 0U;
     if (visible) atomicAdd(scratch[scratchCapacity + instance.batchIndex], 1U);
 }

@@ -1,78 +1,56 @@
 #pragma once
-#include<array>
-#include "src/types.h"
+
 #include "src/concepts.h"
-#include "src/component/object/CObjectComponent.h"
+
 #include "src/component/Components.h"
-#include <utility>
+#include "src/component/object/CObjectComponent.h"
+#include "src/scene/SceneHandles.h"
+#include "src/types.h"
+
+#include <array>
 
 namespace world
 {
-	class Object
-	{
-	private:
-		uint32 componentsAttached {};
-		std::array<components::CObjectComponent*, components::COBJECT_COMPONENTS> components {};
-	public:
-		explicit Object();
-		virtual ~Object();
-
-		Object(Object&) = delete;
-		Object& operator=(Object&) = delete;
-		Object(Object&&) = delete;
-		Object& operator=(Object&&) = delete;
-
-		template<typename T, typename... Args> requires isCObjectComponent<T>
-		void addComponent(Args&&... args)
-		{
-			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID < components::COBJECT_COMPONENTS,
-				"Object component type id exceeded component storage");
-
-			if (this->components[TYPE_ID] != nullptr)
-			{
-				return;
-			}
-
-			//TODO later add better allocator
-			T* newComponent = new T(this, std::forward<Args>(args)...);
-			this->components[TYPE_ID] = newComponent;
-			this->componentsAttached++;
-			newComponent->onAttachment();
-		}
-		
-		template<typename T> requires isCObjectComponent<T>
-		[[nodiscard]] T* getComponent() const
-		{
-			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID < components::COBJECT_COMPONENTS,
-				"Object component type id exceeded component storage");
-
-			if (this->components[TYPE_ID] != nullptr)
-			{
-				return static_cast<T*>(this->components[TYPE_ID]);
-			}
-
-			return nullptr;
-		}
-
-		template<typename T> requires isCObjectComponent<T>
-		[[nodiscard]] bool hasComponent() const
-		{
-			constexpr std::size_t TYPE_ID = T::TYPE_ID;
-			static_assert(TYPE_ID < components::COBJECT_COMPONENTS,
-				"Object component type id exceeded component storage");
-
-			if (this->components[TYPE_ID] == nullptr)
-			{
-				return false;
-			}
-
-			return true;
-		}
-
-		[[nodiscard]] uint32 getComponentsAttached() const;
-
-		//
-	};
+class Scene;
+namespace detail
+{
+template <typename T> class DenseGenerationalPool;
 }
+
+class Object final
+{
+	friend class Scene;
+	friend class detail::DenseGenerationalPool<Object>;
+
+  public:
+	Object(const Object &) = delete;
+	Object &operator=(const Object &) = delete;
+	Object(Object &&) noexcept = default;
+	Object &operator=(Object &&) noexcept = default;
+	~Object() noexcept = default;
+
+	[[nodiscard]] ObjectHandle GetHandle() const noexcept
+	{
+		return this->Self;
+	}
+	[[nodiscard]] uint32 GetComponentsAttached() const noexcept
+	{
+		return this->ComponentsAttached;
+	}
+
+	template <IsCObjectComponent T> [[nodiscard]] bool HasComponent() const noexcept
+	{
+		static_assert(T::TypeID < components::CObjectComponents);
+		return this->Components[T::TypeID] != nullptr;
+	}
+
+  private:
+	ObjectHandle Self;
+	uint32 ComponentsAttached = 0;
+	std::array<components::CObjectComponent *, components::CObjectComponents> Components{};
+
+	explicit Object(ObjectHandle Self) noexcept : Self(Self)
+	{
+	}
+};
+} // namespace world

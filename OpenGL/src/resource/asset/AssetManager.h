@@ -1,69 +1,79 @@
 #pragma once
 
+#include "src/concepts.h"
+#include "src/resource/asset/AssetHandle.h"
+#include "src/resource/asset/importer/AssetImporter.h"
+
 #include <array>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
-
-#include "src/concepts.h"
-#include "src/resource/asset/AssetHandle.h"
-#include "src/resource/asset/importer/AssetImporter.h"
+#include <unordered_set>
 
 namespace resource
 {
-	class AssetManager final
+class AssetManager final
+{
+  public:
+	AssetManager();
+	~AssetManager();
+	AssetManager(const AssetManager &) = delete;
+	AssetManager &operator=(const AssetManager &) = delete;
+
+	template <IsAssetImporter ImporterType> void AddAssetImporter()
 	{
-	public:
-		AssetManager();
-		~AssetManager() = default;
-		AssetManager(const AssetManager&) = delete;
-		AssetManager& operator=(const AssetManager&) = delete;
-
-		template<typename ImporterType> requires IsAssetImporter<ImporterType>
-		void addAssetImporter()
+		auto Importer = std::make_shared<ImporterType>();
+		const usize Index = static_cast<usize>(Importer->GetAssetType());
+		if (Index >= this->AssetImporters.size())
 		{
-			auto importer = std::make_unique<ImporterType>();
-			const size_t index = static_cast<size_t>(importer->getAssetType());
-			if (index >= this->assetImporters.size())
-			{
-				throw std::out_of_range("Asset importer type exceeds the importer registry");
-			}
-
-			std::scoped_lock lock(this->mutex);
-			this->assetImporters[index] = std::move(importer);
+			throw std::out_of_range("Asset importer type exceeds the importer registry");
 		}
 
-		template<typename T> requires IsAsset<T>
-		[[nodiscard]] AssetHandle<T> getAsset(AssetType type, const std::filesystem::path& path)
-		{
-			AssetRecord* record = this->loadRecord(type, path, false);
-			return AssetHandle<T>(record == nullptr ? nullptr : dynamic_cast<T*>(record->asset.get()), this);
-		}
+		std::scoped_lock Lock(this->Mutex);
+		this->AssetImporters[Index] = std::move(Importer);
+	}
 
-		template<typename T> requires IsAsset<T>
-		[[nodiscard]] AssetHandle<T> reloadAsset(AssetType type, const std::filesystem::path& path)
-		{
-			AssetRecord* record = this->loadRecord(type, path, true);
-			return AssetHandle<T>(record == nullptr ? nullptr : dynamic_cast<T*>(record->asset.get()), this);
-		}
+	template <IsAsset T> [[nodiscard]] AssetHandle<T> GetAsset(AssetType Type, const std::filesystem::path &Path)
+	{
+		AssetRecord *Record = this->LoadRecord(Type, Path, false);
+		if (Record != nullptr)
+			(void)Record->Pin<T>();
+		return AssetHandle<T>(Record);
+	}
 
-		[[nodiscard]] bool realizeGpu(const AssetID& id);
-		[[nodiscard]] bool realizeGpu(AssetType type, const std::filesystem::path& path);
-		void realizeAllPendingGpu();
-		[[nodiscard]] size_t reloadChangedAssets();
+	template <IsAssetWithStaticType T> [[nodiscard]] AssetHandle<T> GetAsset(const std::filesystem::path &Path)
+	{
+		return this->GetAsset<T>(T::AssetType, Path);
+	}
 
-		[[nodiscard]] const AssetRecord* getRecord(AssetType type, const std::filesystem::path& path) const;
-		[[nodiscard]] static std::filesystem::path canonicalizePath(const std::filesystem::path& path);
-		[[nodiscard]] static AssetID makeAssetID(AssetType type, const std::filesystem::path& canonicalPath);
+	template <IsAsset T> [[nodiscard]] AssetHandle<T> ReloadAsset(AssetType Type, const std::filesystem::path &Path)
+	{
+		AssetRecord *Record = this->LoadRecord(Type, Path, true);
+		if (Record != nullptr)
+			(void)Record->Pin<T>();
+		return AssetHandle<T>(Record);
+	}
 
-	private:
-		static constexpr size_t IMPORTER_COUNT = static_cast<size_t>(AssetType::COUNT);
+	[[nodiscard]] bool RealizeGPU(pipeline::device::Device &Device, const AssetID &ID);
+	[[nodiscard]] bool RealizeGPU(pipeline::device::Device &Device, AssetType Type, const std::filesystem::path &Path);
+	void RealizeAllPendingGPU(pipeline::device::Device &Device);
+	[[nodiscard]] usize ReloadChangedAssets();
 
-		mutable std::mutex mutex;
-		std::unordered_map<AssetID, std::unique_ptr<AssetRecord>> records;
-		std::array<std::unique_ptr<importer::AssetImporter>, IMPORTER_COUNT> assetImporters {};
+	[[nodiscard]] const AssetRecord *GetRecord(AssetType Type, const std::filesystem::path &Path) const;
+	[[nodiscard]] static std::filesystem::path CanonicalizePath(const std::filesystem::path &Path);
+	[[nodiscard]] static AssetID MakeAssetID(AssetType Type, const std::filesystem::path &CanonicalPath);
 
-		[[nodiscard]] AssetRecord* loadRecord(AssetType type, const std::filesystem::path& path, bool forceReload);
-	};
-}
+  private:
+	static constexpr usize ImporterCount = static_cast<usize>(AssetType::Count);
+
+	mutable std::mutex Mutex;
+	std::unordered_map<AssetID, AssetRecord *> Records;
+	std::array<std::shared_ptr<importer::AssetImporter>, ImporterCount> AssetImporters{};
+	std::unordered_map<AssetID, std::unordered_set<AssetID>> ReverseDependencies;
+	std::unordered_map<AssetID, std::filesystem::path> DependencyPaths;
+
+	[[nodiscard]] AssetRecord *LoadRecord(AssetType Type, const std::filesystem::path &Path, bool ForceReload);
+	[[nodiscard]] AssetRecord *ReserveRecord(AssetType Type, const std::filesystem::path &Path);
+};
+} // namespace resource

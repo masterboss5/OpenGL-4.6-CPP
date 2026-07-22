@@ -2,74 +2,76 @@
 
 namespace resource::importer
 {
-	namespace
-	{
-		std::string buildMessage(const std::filesystem::path& sourcePath, const std::string& diagnostic)
-		{
-			return sourcePath.string() + ": " + diagnostic;
-		}
-	}
-
-	AssetImportException::AssetImportException(AssetType assetType, std::filesystem::path sourcePath, std::string diagnostic)
-		: std::runtime_error(buildMessage(sourcePath, diagnostic)),
-		assetType(assetType),
-		sourcePath(std::move(sourcePath)),
-		diagnostic(std::move(diagnostic))
-	{
-	}
-
-	AssetType AssetImportException::getAssetType() const noexcept
-	{
-		return this->assetType;
-	}
-
-	const std::filesystem::path& AssetImportException::getSourcePath() const noexcept
-	{
-		return this->sourcePath;
-	}
-
-	const std::string& AssetImportException::getDiagnostic() const noexcept
-	{
-		return this->diagnostic;
-	}
-
-	AssetNotFoundException::AssetNotFoundException(AssetType assetType, const std::filesystem::path& sourcePath)
-		: AssetImportException(assetType, sourcePath, "Asset source file does not exist")
-	{
-	}
-
-	AssetUnsupportedFormatException::AssetUnsupportedFormatException(AssetType assetType, const std::filesystem::path& sourcePath)
-		: AssetImportException(assetType, sourcePath, "Asset importer does not support this file format")
-	{
-	}
-
-	AssetFileReadException::AssetFileReadException(AssetType assetType, const std::filesystem::path& sourcePath, std::string diagnostic)
-		: AssetImportException(assetType, sourcePath, "Unable to read asset source: " + diagnostic)
-	{
-	}
-
-	AssetImageDecodeException::AssetImageDecodeException(AssetType assetType, const std::filesystem::path& sourcePath, std::string diagnostic)
-		: AssetImportException(assetType, sourcePath, "Unable to decode image: " + diagnostic)
-	{
-	}
-
-	AssetModelParseException::AssetModelParseException(AssetType assetType, const std::filesystem::path& sourcePath, std::string diagnostic)
-		: AssetImportException(assetType, sourcePath, "Unable to parse model: " + diagnostic)
-	{
-	}
-
-	AssetContentValidationException::AssetContentValidationException(AssetType assetType, const std::filesystem::path& sourcePath, std::string diagnostic)
-		: AssetImportException(assetType, sourcePath, "Imported asset content is invalid: " + diagnostic)
-	{
-	}
-
-	AssetImporterNotRegisteredException::AssetImporterNotRegisteredException(AssetType assetType, const std::filesystem::path& sourcePath)
-		: AssetImportException(assetType, sourcePath, "No importer is registered for this asset type")
-	{
-	}
-
-	AssetUnexpectedImportException::AssetUnexpectedImportException(AssetType assetType, const std::filesystem::path& sourcePath, std::string diagnostic)
-		: AssetImportException(assetType, sourcePath, "Unexpected importer failure: " + diagnostic)
-	{
-	}
+namespace
+{
+std::string BuildMessage(const std::filesystem::path &SourcePath, const std::string &Diagnostic)
+{
+	return SourcePath.string() + ": " + Diagnostic;
 }
+} // namespace
+
+AssetImportException::AssetImportException(resource::AssetType Type, std::filesystem::path SourcePath, std::string Diagnostic)
+	: std::runtime_error(BuildMessage(SourcePath, Diagnostic)), Type(Type), SourcePath(std::move(SourcePath)),
+	  Diagnostic(std::move(Diagnostic))
+{
+}
+
+AssetType AssetImportException::GetAssetType() const noexcept
+{
+	return this->Type;
+}
+
+const std::filesystem::path &AssetImportException::GetSourcePath() const noexcept
+{
+	return this->SourcePath;
+}
+
+const std::string &AssetImportException::GetDiagnostic() const noexcept
+{
+	return this->Diagnostic;
+}
+
+AssetNotFoundException::AssetNotFoundException(resource::AssetType Type, const std::filesystem::path &SourcePath)
+	: AssetImportException(Type, SourcePath, "Asset source file does not exist")
+{
+}
+
+AssetUnsupportedFormatException::AssetUnsupportedFormatException(resource::AssetType Type, const std::filesystem::path &SourcePath)
+	: AssetImportException(Type, SourcePath, "Asset importer does not support this file format")
+{
+}
+
+AssetFileReadException::AssetFileReadException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic)
+	: AssetImportException(Type, SourcePath, "Unable to read asset source: " + Diagnostic)
+{
+}
+
+AssetImageDecodeException::AssetImageDecodeException(resource::AssetType Type, const std::filesystem::path &SourcePath,
+													 std::string Diagnostic)
+	: AssetImportException(Type, SourcePath, "Unable to decode image: " + Diagnostic)
+{
+}
+
+AssetModelParseException::AssetModelParseException(resource::AssetType Type, const std::filesystem::path &SourcePath,
+												   std::string Diagnostic)
+	: AssetImportException(Type, SourcePath, "Unable to parse model: " + Diagnostic)
+{
+}
+
+AssetContentValidationException::AssetContentValidationException(resource::AssetType Type, const std::filesystem::path &SourcePath,
+																 std::string Diagnostic)
+	: AssetImportException(Type, SourcePath, "Imported asset content is invalid: " + Diagnostic)
+{
+}
+
+AssetImporterNotRegisteredException::AssetImporterNotRegisteredException(resource::AssetType Type, const std::filesystem::path &SourcePath)
+	: AssetImportException(Type, SourcePath, "No importer is registered for this asset type")
+{
+}
+
+AssetUnexpectedImportException::AssetUnexpectedImportException(resource::AssetType Type, const std::filesystem::path &SourcePath,
+															   std::string Diagnostic)
+	: AssetImportException(Type, SourcePath, "Unexpected importer failure: " + Diagnostic)
+{
+}
+} // namespace resource::importer

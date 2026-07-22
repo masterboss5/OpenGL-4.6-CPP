@@ -1,69 +1,122 @@
 #include "SceneCollection.h"
 
+#include <limits>
 #include <stdexcept>
 
-#include "StaticMeshObject.h"
-#include "src/renderer/StaticMesh.h"
-
-void SceneCollection::beginFrame(uint64 newFrameNumber)
+void SceneCollection::BeginFrame(uint64 NewFrameNumber)
 {
-	this->clear();
-	this->frameNumber = newFrameNumber;
+	this->Clear();
+	this->FrameNumber = NewFrameNumber;
 }
 
-void SceneCollection::submit(const StaticMeshObject& object, uint32 objectID, uint32 layerMask, uint64 revision, bool transparent)
+void SceneCollection::Submit(renderer::RenderItem Item)
 {
-	const StaticMesh* mesh = object.getGameObject();
-	if (mesh == nullptr)
-	{
-		throw std::invalid_argument("Cannot submit a StaticMeshObject without a StaticMesh");
-	}
-
-	glm::mat4 transform { 1.0f };
-	object.buildMatrix(transform);
-	const std::vector<float>& vertices = mesh->getVertices();
-	glm::vec3 minimum { 0.0f };
-	glm::vec3 maximum { 0.0f };
-	if (!vertices.empty())
-	{
-		minimum = glm::vec3(vertices[0], vertices[1], vertices[2]);
-		maximum = minimum;
-	for (std::size_t offset = 3; offset + 2 < vertices.size(); offset += 3)
-		{
-			const glm::vec3 position { vertices[offset], vertices[offset + 1], vertices[offset + 2] };
-			minimum = glm::min(minimum, position);
-			maximum = glm::max(maximum, position);
-		}
-	}
-	const glm::vec3 localCenter = (minimum + maximum) * 0.5f;
-	const glm::vec3 localExtent = (maximum - minimum) * 0.5f;
-	const glm::vec3 worldCenter = glm::vec3(transform * glm::vec4(localCenter, 1.0f));
-	const glm::vec3 scale { glm::length(glm::vec3(transform[0])), glm::length(glm::vec3(transform[1])), glm::length(glm::vec3(transform[2])) };
-	const float32 radius = glm::length(localExtent * scale);
-	this->submit({ .mesh = mesh, .transform = transform, .worldBounds = glm::vec4(worldCenter, radius), .objectID = objectID, .layerMask = layerMask, .revision = revision, .transparent = transparent });
-}
-
-void SceneCollection::submit(renderer::RenderItem item)
-{
-	if (this->sealed)
-	{
+	if (this->Sealed)
 		throw std::logic_error("SceneCollection cannot be modified after it is sealed");
-	}
-	if (item.mesh == nullptr)
+	if (Item.VertexArray == 0 || Item.VertexDescriptor == nullptr || Item.IndexCount == 0 || !Item.MaterialGeneration)
 	{
-		throw std::invalid_argument("RenderItem requires a mesh");
+		throw std::invalid_argument(
+			"RenderItem requires realized geometry, a vertex descriptor, an index range, and a material generation");
 	}
-	this->renderItems.push_back(std::move(item));
+	this->RenderItems.push_back(std::move(Item));
 }
 
-void SceneCollection::addDirectionalLight(const DirectionalLightSource& light) { if (sealed) throw std::logic_error("SceneCollection cannot be modified after it is sealed"); directionalLights.push_back(light); }
-void SceneCollection::addPointLight(const PointLightSource& light) { if (sealed) throw std::logic_error("SceneCollection cannot be modified after it is sealed"); pointLights.push_back(light); }
-void SceneCollection::addSpotLight(const SpotLightSource& light) { if (sealed) throw std::logic_error("SceneCollection cannot be modified after it is sealed"); spotLights.push_back(light); }
-void SceneCollection::seal() { this->sealed = true; }
-void SceneCollection::clear() { this->sealed = false; renderItems.clear(); directionalLights.clear(); pointLights.clear(); spotLights.clear(); }
-uint64 SceneCollection::getFrameNumber() const noexcept { return frameNumber; }
-bool SceneCollection::isSealed() const noexcept { return sealed; }
-const std::vector<renderer::RenderItem>& SceneCollection::getRenderItems() const noexcept { return renderItems; }
-const std::vector<DirectionalLightSource>& SceneCollection::getDirectionalLights() const noexcept { return directionalLights; }
-const std::vector<PointLightSource>& SceneCollection::getPointLights() const noexcept { return pointLights; }
-const std::vector<SpotLightSource>& SceneCollection::getSpotLights() const noexcept { return spotLights; }
+uint32 SceneCollection::AppendSkinningPalette(std::span<const glm::mat4> Current, std::span<const glm::mat4> Previous)
+{
+	if (this->Sealed)
+		throw std::logic_error("SceneCollection cannot be modified after it is sealed");
+	if (Current.empty() || Current.size() != Previous.size())
+		throw std::invalid_argument("Skinning palettes require equal non-empty current and previous poses");
+	if (this->SkinningMatrices.size() > std::numeric_limits<uint32>::max() - Current.size())
+		throw std::overflow_error("Skinning palette offset exceeds the GPU record range");
+	const uint32 Offset = static_cast<uint32>(this->SkinningMatrices.size());
+	for (usize Index = 0; Index < Current.size(); ++Index)
+		this->SkinningMatrices.push_back({Current[Index], Previous[Index]});
+	return Offset;
+}
+
+uint32 SceneCollection::AppendMorphWeights(std::span<const renderer::GPUMorphWeightRecord> Weights)
+{
+	if (this->Sealed)
+		throw std::logic_error("SceneCollection cannot be modified after it is sealed");
+	if (Weights.empty())
+		throw std::invalid_argument("Morph weight publication requires at least one active target");
+	if (this->MorphWeights.size() > std::numeric_limits<uint32>::max() - Weights.size())
+		throw std::overflow_error("Morph weight offset exceeds the GPU record range");
+	const uint32 Offset = static_cast<uint32>(this->MorphWeights.size());
+	this->MorphWeights.insert(this->MorphWeights.end(), Weights.begin(), Weights.end());
+	return Offset;
+}
+
+void SceneCollection::AddDirectionalLight(const DirectionalLightSource &Light)
+{
+	if (Sealed)
+		throw std::logic_error("SceneCollection cannot be modified after it is sealed");
+	DirectionalLights.push_back(Light);
+}
+void SceneCollection::AddPointLight(const PointLightSource &Light)
+{
+	if (Sealed)
+		throw std::logic_error("SceneCollection cannot be modified after it is sealed");
+	PointLights.push_back(Light);
+}
+void SceneCollection::AddSpotLight(const SpotLightSource &Light)
+{
+	if (Sealed)
+		throw std::logic_error("SceneCollection cannot be modified after it is sealed");
+	SpotLights.push_back(Light);
+}
+void SceneCollection::Seal()
+{
+	this->Sealed = true;
+}
+void SceneCollection::Clear()
+{
+	this->Sealed = false;
+	RenderItems.clear();
+	DirectionalLights.clear();
+	PointLights.clear();
+	SpotLights.clear();
+	SkinningMatrices.clear();
+	MorphWeights.clear();
+	AssetPins.clear();
+}
+
+std::vector<resource::AssetPtr<resource::Asset>> SceneCollection::ReleaseAssetPins() noexcept
+{
+	std::vector<resource::AssetPtr<resource::Asset>> Pins;
+	Pins.swap(this->AssetPins);
+	return Pins;
+}
+uint64 SceneCollection::GetFrameNumber() const noexcept
+{
+	return FrameNumber;
+}
+bool SceneCollection::IsSealed() const noexcept
+{
+	return Sealed;
+}
+const std::vector<renderer::RenderItem> &SceneCollection::GetRenderItems() const noexcept
+{
+	return RenderItems;
+}
+const std::vector<DirectionalLightSource> &SceneCollection::GetDirectionalLights() const noexcept
+{
+	return DirectionalLights;
+}
+const std::vector<PointLightSource> &SceneCollection::GetPointLights() const noexcept
+{
+	return PointLights;
+}
+const std::vector<SpotLightSource> &SceneCollection::GetSpotLights() const noexcept
+{
+	return SpotLights;
+}
+const std::vector<renderer::GPUSkinMatrixRecord> &SceneCollection::GetSkinningMatrices() const noexcept
+{
+	return SkinningMatrices;
+}
+const std::vector<renderer::GPUMorphWeightRecord> &SceneCollection::GetMorphWeights() const noexcept
+{
+	return MorphWeights;
+}

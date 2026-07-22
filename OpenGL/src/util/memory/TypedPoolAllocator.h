@@ -1,185 +1,159 @@
 #pragma once
-#include <utility>
+#include "src/concepts.h"
+#include "src/types.h"
+
 #include <cassert>
-#include "src/Types.h"
 #include <cstddef>
-#include <new>
-#include <type_traits>
-#include <stdexcept>
 #include <limits>
+#include <new>
 #include <span>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace memory
 {
-	template<typename T>
-	class TypedPoolAllocator final
+template <PoolAllocatable T> class TypedPoolAllocator final
+{
+  private:
+	std::byte *Buffer{nullptr};
+	const usize Capacity;
+	usize Count{0};
+
+  public:
+	explicit TypedPoolAllocator(usize Capacity) : Capacity(Capacity)
 	{
-		static_assert(std::is_nothrow_destructible_v<T>,
-			"TypedPoolAllocator requires T to be nothrow destructible");
-
-		static_assert(sizeof(T) > 0,
-			"T must be greater than 0 bytes");
-
-		static_assert(std::is_object_v<T>,
-			"T must be an object");
-
-		static_assert(!std::is_array_v<T>,
-			"TypedPoolAllocator does not support array element types");
-
-		static_assert(!std::is_const_v<T> && !std::is_volatile_v<T>,
-			"TypedPoolAllocator requires non-cv-qualified T");
-
-		static_assert(!std::is_abstract_v<T>,
-			"TypedPoolAllocator does not support abstract types");
-
-	private:
-		std::byte* buffer {nullptr};
-		const std::size_t capacity;
-		std::size_t count {0};
-	public:
-		explicit TypedPoolAllocator(std::size_t capacity)
-			: capacity(capacity)
+		if (Capacity == 0)
 		{
-			if (capacity == 0)
-			{
-				throw std::invalid_argument("TypedPoolAllocator capacity must be greater than zero");
-			}
-
-			if (capacity > std::numeric_limits<std::size_t>::max() / sizeof(T))
-			{
-				throw std::bad_array_new_length{};
-			}
-
-			this->buffer = static_cast<std::byte*>(
-				::operator new(capacity * sizeof(T), std::align_val_t{alignof(T)})
-			);
+			throw std::invalid_argument("TypedPoolAllocator capacity must be greater than zero");
 		}
 
-		~TypedPoolAllocator() noexcept
+		if (Capacity > std::numeric_limits<usize>::max() / sizeof(T))
 		{
-			this->reset();
-
-			if (this->buffer)
-			{
-				::operator delete(this->buffer, this->capacity * sizeof(T), std::align_val_t{alignof(T)});
-			}
+			throw std::bad_array_new_length{};
 		}
 
-		TypedPoolAllocator(const TypedPoolAllocator&) = delete;
-		TypedPoolAllocator& operator=(const TypedPoolAllocator&) = delete;
-		TypedPoolAllocator(TypedPoolAllocator&&) = delete;
-		TypedPoolAllocator& operator=(TypedPoolAllocator&&) = delete;
+		this->Buffer = static_cast<std::byte *>(::operator new(Capacity * sizeof(T), std::align_val_t{alignof(T)}));
+	}
 
-		template<typename... Args>
-		[[nodiscard]] T* allocate(Args&&... args)
+	~TypedPoolAllocator() noexcept
+	{
+		this->Reset();
+
+		if (this->Buffer)
 		{
-			if (this->count >= this->capacity)
-			{
-				throw std::bad_alloc {};
-			}
+			::operator delete(this->Buffer, this->Capacity * sizeof(T), std::align_val_t{alignof(T)});
+		}
+	}
 
-			T* slot = reinterpret_cast<T*>(this->buffer + this->count * sizeof(T));
-			::new (slot) T(std::forward<Args>(args)...);
-			this->count++;
+	TypedPoolAllocator(const TypedPoolAllocator &) = delete;
+	TypedPoolAllocator &operator=(const TypedPoolAllocator &) = delete;
+	TypedPoolAllocator(TypedPoolAllocator &&) = delete;
+	TypedPoolAllocator &operator=(TypedPoolAllocator &&) = delete;
 
-			return slot;
+	template <typename... ArgumentTypes> [[nodiscard]] T *Allocate(ArgumentTypes &&...Arguments)
+	{
+		if (this->Count >= this->Capacity)
+		{
+			throw std::bad_alloc{};
 		}
 
-		[[nodiscard]] std::size_t getCount() const noexcept
+		T *Slot = reinterpret_cast<T *>(this->Buffer + this->Count * sizeof(T));
+		::new (Slot) T(std::forward<ArgumentTypes>(Arguments)...);
+		this->Count++;
+
+		return Slot;
+	}
+
+	[[nodiscard]] usize GetCount() const noexcept
+	{
+		return this->Count;
+	}
+
+	[[nodiscard]] usize GetCapacity() const noexcept
+	{
+		return this->Capacity;
+	}
+
+	[[nodiscard]] usize GetRemainingCapacity() const noexcept
+	{
+		return this->Capacity - this->Count;
+	}
+
+	[[nodiscard]] bool IsFull() const noexcept
+	{
+		return this->Count >= this->Capacity;
+	}
+
+	[[nodiscard]] T &operator[](usize Index) noexcept
+	{
+		assert(Index < this->Count);
+		return *reinterpret_cast<T *>(this->Buffer + Index * sizeof(T));
+	}
+
+	[[nodiscard]] T &At(usize Index)
+	{
+		if (Index >= this->Count)
 		{
-			return this->count;
+			throw std::out_of_range("TypedPoolAllocator::at index out of range");
 		}
 
-		[[nodiscard]] std::size_t getCapacity() const noexcept
+		return *reinterpret_cast<T *>(this->Buffer + Index * sizeof(T));
+	}
+
+	[[nodiscard]] const T &operator[](usize Index) const noexcept
+	{
+		assert(Index < this->Count);
+		return *reinterpret_cast<const T *>(this->Buffer + Index * sizeof(T));
+	}
+
+	[[nodiscard]] const T &At(usize Index) const
+	{
+		if (Index >= this->Count)
 		{
-			return this->capacity;
+			throw std::out_of_range{"TypedPoolAllocator::at index out of range"};
 		}
 
-		[[nodiscard]] std::size_t getRemainingCapacity() const noexcept
+		return *reinterpret_cast<const T *>(this->Buffer + Index * sizeof(T));
+	}
+
+	[[nodiscard]] bool IsEmpty() const noexcept
+	{
+		return this->Count == 0;
+	}
+
+	[[nodiscard]] bool Contains(const T *Ptr) const noexcept
+	{
+		if (Ptr == nullptr)
 		{
-			return this->capacity - this->count;
+			return false;
 		}
 
-		[[nodiscard]] bool isFull() const noexcept
+		const T *Start = reinterpret_cast<const T *>(this->Buffer);
+		const T *End = Start + this->Count;
+
+		return std::less<const T *>{}(Ptr, End) && !std::less<const T *>{}(Ptr, Start);
+	}
+
+	void Reset() noexcept
+	{
+		for (usize I = this->Count; I > 0; --I)
 		{
-			return this->count >= this->capacity;
+			T *Ptr = reinterpret_cast<T *>(this->Buffer + (I - 1) * sizeof(T));
+			Ptr->~T();
 		}
 
-		[[nodiscard]] T& operator[](std::size_t index) noexcept
-		{
-			assert(index < this->count);
-			return *reinterpret_cast<T*>(this->buffer + index * sizeof(T));
-		}
+		this->Count = 0;
+	}
 
-		[[nodiscard]] T& at(std::size_t index)
-		{
-			if (index >= this->count)
-			{
-				throw std::out_of_range("TypedPoolAllocator::at index out of range");
-			}
+	[[nodiscard]] std::span<T> Span() noexcept
+	{
+		return std::span<T>(reinterpret_cast<T *>(this->Buffer), this->Count);
+	}
 
-			return *reinterpret_cast<T*>(this->buffer + index * sizeof(T));
-		}
-
-		[[nodiscard]] const T& operator[](std::size_t index) const noexcept
-		{
-			assert(index < this->count);
-			return *reinterpret_cast<const T*>(this->buffer + index * sizeof(T));
-		}
-
-		[[nodiscard]] const T& at(std::size_t index) const
-		{
-			if (index >= this->count)
-			{
-				throw std::out_of_range {"TypedPoolAllocator::at index out of range"};
-			}
-
-			return *reinterpret_cast<const T*>(this->buffer + index * sizeof(T));
-		}
-
-		[[nodiscard]] bool isEmpty() const noexcept
-		{
-			return this->count == 0;
-		}
-
-		[[nodiscard]] bool contains(const T* ptr) const noexcept
-		{
-			if (ptr == nullptr)
-			{
-				return false;
-			}
-
-			const T* start = reinterpret_cast<const T*>(this->buffer);
-			const T* end = start + this->count;
-
-			return std::less<const T*>{}(ptr, end) && !std::less<const T*>{}(ptr, start);
-		}
-
-		void reset() noexcept
-		{
-			for (std::size_t i = this->count; i > 0; --i)
-			{
-				T* ptr = reinterpret_cast<T*>(this->buffer + (i - 1) * sizeof(T));
-				ptr->~T();
-			}
-
-			this->count = 0;
-		}
-
-		[[nodiscard]] std::span<T> span() noexcept
-		{
-			return std::span<T>(
-				reinterpret_cast<T*>(this->buffer),
-				this->count
-			);
-		}
-
-		[[nodiscard]] std::span<const T> span() const noexcept
-		{
-			return std::span<const T>(
-				reinterpret_cast<const T*>(this->buffer),
-				this->count
-			);
-		}
-	};
-}
+	[[nodiscard]] std::span<const T> Span() const noexcept
+	{
+		return std::span<const T>(reinterpret_cast<const T *>(this->Buffer), this->Count);
+	}
+};
+} // namespace memory

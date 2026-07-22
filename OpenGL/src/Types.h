@@ -1,21 +1,26 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
-typedef std::string string;
-typedef std::string_view string_view;
+using string = std::string;
+using string_view = std::string_view;
 
-typedef int8_t int8;
-typedef int16_t int16;
-typedef int32_t int32;
-typedef int64_t int64;
+using int8 = std::int8_t;
+using int16 = std::int16_t;
+using int32 = std::int32_t;
+using int64 = std::int64_t;
 
-typedef uint8_t uint8;
-typedef uint16_t uint16;
-typedef uint32_t uint32;
-typedef uint64_t uint64;
+using uint8 = std::uint8_t;
+using uint16 = std::uint16_t;
+using uint32 = std::uint32_t;
+using uint64 = std::uint64_t;
 
-typedef float float32;
-typedef double float64;
+using usize = std::size_t;
+using isize = std::ptrdiff_t;
 
-typedef uint8 ShaderBytecode;
+using float32 = float;
+using float64 = double;
+
+using ShaderBytecode = uint8;

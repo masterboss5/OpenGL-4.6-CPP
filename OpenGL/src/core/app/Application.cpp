@@ -1,69 +1,102 @@
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
-#include <stdexcept>
 #include "Application.h"
-#include "src/pipeline/device/OpenGLRuntime.h"
+
+#include "src/pipeline/device/Device.h"
 #include "src/renderer/RenderCoreValidation.h"
+
+#include <GL/glew.h>
+#include <stdexcept>
 
 namespace core
 {
-	Application::Application(WindowSpecification windowSpecification)
+Application::Application(ApplicationSpecification Specification)
+	: DeterministicRenderValidation(Specification.DeterministicRenderValidation)
+{
+	this->Window = &this->WindowManager.CreateWindow(Specification.Window);
+	pipeline::device::Device &Device = this->WindowManager.GetDevice(*this->Window);
+	(void)Device.RequireCurrentContext();
+	glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+	glClearDepth(0.0);
+	glDepthFunc(GL_GREATER);
+	if (this->Window->IsSRGBPresentationCapable())
+		glEnable(GL_FRAMEBUFFER_SRGB);
+	else
+		glDisable(GL_FRAMEBUFFER_SRGB);
+	Device.CheckErrors("Application render convention initialization");
+	if (this->DeterministicRenderValidation)
+		renderer::validation::RunDeterministicRenderCoreChecks(Device);
+	(void)this->Window->SetPresentationMode(PresentationMode::Off);
+	this->Window->SetCursorMode(CursorMode::Relative);
+}
+
+Application::Application(WindowSpecification WindowSpecification)
+	: Application(ApplicationSpecification{.Window = std::move(WindowSpecification)})
+{
+}
+
+Application::~Application()
+{
+	this->Layers.clear();
+}
+
+void Application::Main()
+{
+	this->Running = true;
+	while (this->Running)
 	{
-		glfwInit();
-		if (pipeline::device::isHeadlessPresentationValidationEnabled()) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
-		glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-		glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
-		glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-		glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-		this->window = std::make_unique<Window>(windowSpecification);
-		this->window->makeContextCurrent();
-		this->window->uncapFPS();
-		glewExperimental = GL_TRUE;
-		if (glewInit() != GLEW_OK)
+		const FrameTiming Timing = this->FrameClock.Tick();
+		this->WindowManager.PollEvents();
+		this->InputSystem.BeginFrame(this->WindowManager);
+		for (const WindowEvent &Event : this->WindowManager.ConsumeEvents())
 		{
-			throw std::runtime_error("Failed to initialize the OpenGL 4.6 function dispatch");
+			if (Event.Window == this->Window->GetID() && Event.Type == WindowEventType::CloseRequested)
+				this->Running = false;
 		}
-		glGetError(); // GLEW may leave a harmless GL_INVALID_ENUM behind.
-		pipeline::device::configureDebugOutput();
-		glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
-		glClearDepth(0.0);
+		this->Running = this->Running && !this->Window->ShouldClose();
+		if (!this->Running)
+			break;
+
+		pipeline::device::Device &Device = this->WindowManager.GetDevice(*this->Window);
+		Device.ValidateStatus();
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glEnable(GL_DEPTH_TEST);
 		glDepthFunc(GL_GREATER);
-		if (pipeline::device::isDeterministicRenderCoreValidationEnabled()) renderer::validation::runDeterministicRenderCoreChecks();
-		core::input::InputManager::getInstance()->lockMouse();
-	}
+		Device.CheckErrors("Application frame initialization");
 
-	void Application::main()
-	{
+		const ApplicationFrame Frame{.Timing = Timing,
+									 .Window = this->Window->GetID(),
+									 .FramebufferExtent = this->Window->GetFramebufferExtent(),
+									 .Input = &this->InputSystem.GetSnapshot(this->Window->GetID())};
 
-
-
-		this->running = true;
-		while (this->running)
+		for (const auto &Layer : this->Layers)
 		{
-			this->running = !this->window->shouldClose();
-			core::input::InputManager::getInstance()->update();
-			this->window->pollEvents();
-			this->window->clearColor();
-			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-			glEnable(GL_DEPTH_TEST);
-			glDepthFunc(GL_GREATER);
-
-			for (const auto& layer : this->layers)
-			{
-				layer->run();
-			}
-
-			this->window->swapBuffers();
+			Layer->Run(Frame);
 		}
-	}
 
-	void Application::stop()
-	{
-		this->running = false;
-	}
-
-	size_t Application::getLayerCount() const
-	{
-		return this->layers.size();
+		this->Window->Present();
 	}
 }
+
+void Application::Stop()
+{
+	this->Running = false;
+}
+
+usize Application::GetLayerCount() const
+{
+	return this->Layers.size();
+}
+
+Window &Application::GetPrimaryWindow() const
+{
+	return *this->Window;
+}
+WindowManager &Application::GetWindowManager() noexcept
+{
+	return this->WindowManager;
+}
+input::InputSystem &Application::GetInputSystem() noexcept
+{
+	return this->InputSystem;
+}
+} // namespace core

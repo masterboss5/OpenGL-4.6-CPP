@@ -4,11 +4,11 @@
 
 namespace resource::importer
 {
-	class Texture2DImporter final : public AssetImporter
-	{
-	public:
-		[[nodiscard]] bool canImport(const std::filesystem::path& path) const override;
-		[[nodiscard]] AssetType getAssetType() const noexcept override;
-		[[nodiscard]] AssetImportResult importCpu(const std::filesystem::path& path) const override;
-	};
-}
+class Texture2DImporter final : public AssetImporter
+{
+  public:
+	[[nodiscard]] bool CanImport(const std::filesystem::path &Path) const override;
+	[[nodiscard]] AssetType GetAssetType() const noexcept override;
+	[[nodiscard]] AssetImportResult ImportCPU(const std::filesystem::path &Path, AssetImportContext &Context) const override;
+};
+} // namespace resource::importer

@@ -1,32 +1,35 @@
 #pragma once
-#include <glm.hpp>
-#include "src/core/input/Window.h"
-#include <GLFW/glfw3.h>
-#include <gtc/matrix_transform.hpp>
+#include "src/core/input/InputTypes.h"
+#include "src/core/window/WindowTypes.h"
+#include "src/types.h"
+
 #include <algorithm>
+#include <glm.hpp>
+#include <gtc/matrix_transform.hpp>
 
 class Camera final
 {
-public:
-	glm::vec3 position;
-	glm::vec3 front;
-	glm::vec3 up;
-	glm::vec3 right;
-	glm::vec3 worldUp;
-public:
-	float yaw;
-	float pitch;
-	float sensitivity;
-	float FOV;
-	float nearPlane;
-	float farPlane;
+  public:
+	glm::vec3 Position;
+	glm::vec3 Front;
+	glm::vec3 Up;
+	glm::vec3 Right;
+	glm::vec3 WorldUp;
 
-	Camera(float sensitivity, float FOV, float nearPlane, float farPlane);
+  public:
+	float32 Yaw;
+	float32 Pitch;
+	float32 Sensitivity;
+	float32 FOV;
+	float32 NearPlane;
+	float32 FarPlane;
 
-	void update(const Window& window, float deltaTime);
-	glm::mat4 getViewMatrix() const;
-	glm::mat4 getProjectionMatrix(const Window& window) const;
-	void updateCameraVectors();
-	float getYaw() const;
-	float getPitch() const;
+	Camera(float32 Sensitivity, float32 FOV, float32 NearPlane, float32 FarPlane);
+
+	void Update(const core::input::InputSnapshot &Input, float32 DeltaTime);
+	[[nodiscard]] glm::mat4 GetViewMatrix() const;
+	[[nodiscard]] glm::mat4 GetProjectionMatrix(core::WindowExtent Extent) const;
+	void UpdateCameraVectors();
+	[[nodiscard]] float32 GetYaw() const;
+	[[nodiscard]] float32 GetPitch() const;
 };

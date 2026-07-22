@@ -1,5 +1,8 @@
 #pragma once
 
+#include "src/pipeline/buffer/VertexBuffer.h"
+#include "src/types.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -7,80 +10,74 @@
 #include <string>
 #include <vector>
 
-#include "src/pipeline/buffer/VertexBuffer.h"
-#include "src/types.h"
-
 namespace renderer
 {
-	enum class VertexAttributeDataType : std::uint8_t
-	{
-		Float16,
-		Float32,
-		Float64,
-		Int8,
-		UInt8,
-		Int16,
-		UInt16,
-		Int32,
-		UInt32
-	};
+enum class VertexAttributeDataType : uint8
+{
+	Float16,
+	Float32,
+	Float64,
+	Int8,
+	UInt8,
+	Int16,
+	UInt16,
+	Int32,
+	UInt32
+};
 
-	enum class VertexAttributeInput : std::uint8_t
-	{
-		FloatingPoint,
-		Integer
-	};
+enum class VertexAttributeInput : uint8
+{
+	FloatingPoint,
+	Integer
+};
 
-	enum class VertexInputRate : std::uint8_t
-	{
-		PerVertex,
-		PerInstance
-	};
+enum class VertexInputRate : uint8
+{
+	PerVertex,
+	PerInstance
+};
 
-	struct VertexBindingDescriptor final
-	{
-		GLuint bindingIndex = 0;
-		std::size_t strideInBytes = 0;
-		VertexInputRate inputRate = VertexInputRate::PerVertex;
-		GLuint instanceStepRate = 0;
-	};
+struct VertexBindingDescriptor final
+{
+	GLuint BindingIndex = 0;
+	usize StrideInBytes = 0;
+	VertexInputRate InputRate = VertexInputRate::PerVertex;
+	GLuint InstanceStepRate = 0;
+};
 
-	struct VertexAttributeDescriptor final
-	{
-		std::string semantic;
-		GLuint semanticIndex = 0;
-		GLuint location = 0;
-		GLuint bindingIndex = 0;
-		VertexAttributeDataType dataType = VertexAttributeDataType::Float32;
-		GLuint componentCount = 0;
-		bool normalized = false;
-		VertexAttributeInput input = VertexAttributeInput::FloatingPoint;
-		std::size_t relativeOffsetInBytes = 0;
-	};
+struct VertexAttributeDescriptor final
+{
+	std::string Semantic;
+	GLuint SemanticIndex = 0;
+	GLuint Location = 0;
+	GLuint BindingIndex = 0;
+	VertexAttributeDataType DataType = VertexAttributeDataType::Float32;
+	GLuint ComponentCount = 0;
+	bool Normalized = false;
+	VertexAttributeInput Input = VertexAttributeInput::FloatingPoint;
+	usize RelativeOffsetInBytes = 0;
+};
 
-	class VertexDescriptor final
-	{
-	public:
-		VertexDescriptor(
-			std::span<const VertexBindingDescriptor> bindings,
-			std::span<const VertexAttributeDescriptor> attributes);
-		VertexDescriptor(
-			std::initializer_list<VertexBindingDescriptor> bindings,
-			std::initializer_list<VertexAttributeDescriptor> attributes);
+class VertexDescriptor final
+{
+  public:
+	VertexDescriptor(std::span<const VertexBindingDescriptor> Bindings, std::span<const VertexAttributeDescriptor> Attributes);
+	VertexDescriptor(std::initializer_list<VertexBindingDescriptor> Bindings, std::initializer_list<VertexAttributeDescriptor> Attributes);
 
-		void applyToVertexArray(GLuint vertexArrayID) const;
-		void bindVertexBuffer(GLuint vertexArrayID, GLuint bindingIndex, const VertexBuffer& buffer, std::size_t offsetInBytes = 0) const;
+	void ApplyToVertexArray(pipeline::device::Device &Device, GLuint VertexArrayID) const;
+	void BindVertexBuffer(pipeline::device::Device &Device, GLuint VertexArrayID, GLuint BindingIndex, const VertexBuffer &Buffer,
+						  usize OffsetInBytes = 0) const;
 
-		[[nodiscard]] const VertexBindingDescriptor& getBinding(GLuint bindingIndex) const;
-		[[nodiscard]] std::span<const VertexBindingDescriptor> getBindings() const noexcept;
-		[[nodiscard]] std::span<const VertexAttributeDescriptor> getAttributes() const noexcept;
-		[[nodiscard]] uint64 getLayoutHash() const noexcept;
+	[[nodiscard]] const VertexBindingDescriptor &GetBinding(GLuint BindingIndex) const;
+	[[nodiscard]] std::span<const VertexBindingDescriptor> GetBindings() const noexcept;
+	[[nodiscard]] std::span<const VertexAttributeDescriptor> GetAttributes() const noexcept;
+	[[nodiscard]] uint64 GetLayoutHash() const noexcept;
 
-	private:
-		std::vector<VertexBindingDescriptor> bindings;
-		std::vector<VertexAttributeDescriptor> attributes;
+  private:
+	std::vector<VertexBindingDescriptor> Bindings;
+	std::vector<VertexAttributeDescriptor> Attributes;
 
-		void validate() const;
-		[[nodiscard]] const VertexBindingDescriptor* findBinding(GLuint bindingIndex) const noexcept;
-	};
-}
+	void Validate() const;
+	[[nodiscard]] const VertexBindingDescriptor *FindBinding(GLuint BindingIndex) const noexcept;
+};
+} // namespace renderer

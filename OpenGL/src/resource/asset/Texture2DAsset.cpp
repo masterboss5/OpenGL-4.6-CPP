@@ -1,54 +1,64 @@
 #include "Texture2DAsset.h"
 
-#include "src/pipeline/device/OpenGLRuntime.h"
+#include "src/pipeline/device/Device.h"
 
-resource::Texture2DAsset::Texture2DAsset(std::string name, int32 width, int32 height, int32 channels, std::vector<uint8> pixels)
-	: Asset(util::UUID::generateRandomUUID()),
-	name(std::move(name)),
-	width(width),
-	height(height),
-	channels(channels),
-	pixels(std::move(pixels))
+resource::Texture2DAsset::Texture2DAsset(std::string Name, int32 Width, int32 Height, int32 Channels, std::vector<uint8> Pixels)
+	: Asset(util::UUID::GenerateRandomUUID()), Name(std::move(Name)), Width(Width), Height(Height), Channels(Channels),
+	  Pixels(std::move(Pixels))
 {
 }
 
-bool resource::Texture2DAsset::requiresGpuRealization() const noexcept
+bool resource::Texture2DAsset::RequiresGPURealization() const noexcept
 {
 	return true;
 }
 
-resource::AssetGpuRealizationResult resource::Texture2DAsset::realizeGpu()
+resource::AssetGPURealizationResult resource::Texture2DAsset::RealizeGPU(pipeline::device::Device &Device)
 {
-	if (this->gpuTexture != nullptr)
+	if (this->GPUTexture != nullptr)
 	{
 		return {};
 	}
-	if (this->width <= 0 || this->height <= 0 || this->pixels.empty())
+	if (this->Width <= 0 || this->Height <= 0 || this->Pixels.empty())
 	{
-		return { .succeeded = false, .error = "Texture CPU data is invalid" };
+		return {.Succeeded = false, .Error = "Texture CPU data is invalid"};
 	}
 
 	try
 	{
-		pipeline::device::requireOpenGL46Context();
-		renderer::texture::Texture2DSpecification specification = renderer::texture::Texture2DSpecification::DEFAULT_INSTANCE;
-		renderer::texture::Texture2DCreationInfo creationInfo {
-			.pixels = this->pixels.data(),
-			.width = this->width,
-			.height = this->height,
-			.channels = this->channels,
-			.specification = specification
-		};
-		this->gpuTexture = std::make_unique<renderer::texture::Texture2D>(this->name, creationInfo);
+		(void)Device.RequireCurrentContext();
+		renderer::texture::Texture2DSpecification Specification = renderer::texture::Texture2DSpecification::DefaultInstance;
+		renderer::texture::Texture2DCreationInfo CreationInfo{.Pixels = this->Pixels.data(),
+															  .Width = this->Width,
+															  .Height = this->Height,
+															  .Channels = this->Channels,
+															  .Specification = Specification};
+		this->GPUTexture = std::make_unique<renderer::texture::Texture2D>(Device, this->Name, CreationInfo);
 		return {};
 	}
-	catch (const std::exception& exception)
+	catch (const std::exception &Exception)
 	{
-		return { .succeeded = false, .error = exception.what() };
+		return {.Succeeded = false, .Error = Exception.what()};
 	}
 }
 
-int32 resource::Texture2DAsset::getWidth() const noexcept { return this->width; }
-int32 resource::Texture2DAsset::getHeight() const noexcept { return this->height; }
-int32 resource::Texture2DAsset::getChannels() const noexcept { return this->channels; }
-const renderer::texture::Texture2D* resource::Texture2DAsset::getGpuTexture() const noexcept { return this->gpuTexture.get(); }
+int32 resource::Texture2DAsset::GetWidth() const noexcept
+{
+	return this->Width;
+}
+int32 resource::Texture2DAsset::GetHeight() const noexcept
+{
+	return this->Height;
+}
+int32 resource::Texture2DAsset::GetChannels() const noexcept
+{
+	return this->Channels;
+}
+std::span<const uint8> resource::Texture2DAsset::GetPixels() const noexcept
+{
+	return this->Pixels;
+}
+const renderer::texture::Texture2D *resource::Texture2DAsset::GetGPUTexture() const noexcept
+{
+	return this->GPUTexture.get();
+}

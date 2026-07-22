@@ -1,470 +1,927 @@
 #include "OpenGLRenderer.h"
 
+#include "src/core/window/Window.h"
+#include "src/pipeline/device/Device.h"
+#include "src/renderer/SceneExtractor.h"
+#include "src/resource/asset/AssetManager.h"
+#include "src/scene/Camera.h"
+#include "src/scene/Scene.h"
+
 #include <bit>
+#include <cmath>
 #include <cstring>
+#include <gtc/matrix_transform.hpp>
+#include <gtc/type_ptr.hpp>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
-
-#include <gtc/matrix_transform.hpp>
-#include <gtc/type_ptr.hpp>
-
-#include "StaticMesh.h"
-#include "src/core/input/Window.h"
-#include "src/pipeline/device/OpenGLRuntime.h"
-#include "src/scene/Camera.h"
-#include "src/scene/StaticMeshObject.h"
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace
 {
-	constexpr uint32 MaximumRenderItems = 65'536;
-	constexpr uint32 DirectionalShadowCascadeCount = 4;
-	constexpr uint32 MaximumSpotShadowCount = 64;
-	constexpr uint32 MaximumPointShadowFaceCount = 96;
-	constexpr uint32 MaximumShadowRecords = DirectionalShadowCascadeCount + MaximumSpotShadowCount + MaximumPointShadowFaceCount;
-	constexpr uint64 HashSeed = 1469598103934665603ULL;
-	constexpr uint64 HashPrime = 1099511628211ULL;
-	[[nodiscard]] uint64 hashValue(uint64 hash, uint32 value) noexcept { return (hash ^ value) * HashPrime; }
-	[[nodiscard]] uint64 hashMatrix(uint64 hash, const glm::mat4& matrix) noexcept
+constexpr uint32 MaximumRenderItems = 65'536;
+constexpr uint32 MaximumSkinMatrices = 262'144;
+constexpr uint32 MaximumMorphWeights = 262'144;
+constexpr uint32 MaximumLights = 100;
+constexpr uint64 HashSeed = 1469598103934665603ULL;
+constexpr uint64 HashPrime = 1099511628211ULL;
+[[nodiscard]] uint64 HashValue(uint64 Hash, uint32 Value) noexcept
+{
+	return (Hash ^ Value) * HashPrime;
+}
+[[nodiscard]] uint64 HashValue(uint64 Hash, const uint64 Value) noexcept
+{
+	Hash = HashValue(Hash, static_cast<uint32>(Value));
+	return HashValue(Hash, static_cast<uint32>(Value >> 32U));
+}
+[[nodiscard]] uint64 HashBytes(uint64 Hash, const void *Data, const usize Size) noexcept
+{
+	const auto *Bytes = static_cast<const uint8 *>(Data);
+	for (usize Index = 0; Index < Size; ++Index)
 	{
-		const float32* const values = glm::value_ptr(matrix);
-		for (uint32 index = 0; index < 16; ++index) hash = hashValue(hash, std::bit_cast<uint32>(values[index]));
-		return hash;
+		Hash ^= Bytes[Index];
+		Hash *= HashPrime;
 	}
-	[[nodiscard]] uint64 calculateShadowCasterSignature(const renderer::RenderPreparationResult& prepared) noexcept
+	return Hash;
+}
+[[nodiscard]] uint64 HashMatrix(uint64 Hash, const glm::mat4 &Matrix) noexcept
+{
+	const float32 *const Values = glm::value_ptr(Matrix);
+	for (uint32 Index = 0; Index < 16; ++Index)
+		Hash = HashValue(Hash, std::bit_cast<uint32>(Values[Index]));
+	return Hash;
+}
+[[nodiscard]] uint64 CalculateShadowCasterSignature(const SceneCollection &Collection) noexcept
+{
+	uint64 Hash = HashSeed;
+	for (const renderer::RenderItem &Item : Collection.GetRenderItems())
 	{
-		uint64 hash = HashSeed;
-		for (const renderer::PreparedInstance& instance : prepared.candidateInstances)
-		{
-			hash = hashValue(hash, instance.objectID);
-			hash = hashMatrix(hash, instance.transform);
-			hash = hashValue(hash, std::bit_cast<uint32>(instance.worldBounds.x));
-			hash = hashValue(hash, std::bit_cast<uint32>(instance.worldBounds.y));
-			hash = hashValue(hash, std::bit_cast<uint32>(instance.worldBounds.z));
-			hash = hashValue(hash, std::bit_cast<uint32>(instance.worldBounds.w));
-		}
-		for (const renderer::RenderBatch& batch : prepared.batches)
-		{
-			hash = hashValue(hash, batch.vertexArray);
-			hash = hashValue(hash, batch.indexCount);
-			hash = hashValue(hash, batch.firstIndex);
-		}
-		return hash;
+		if (!Item.CastsShadows)
+			continue;
+		Hash = HashValue(Hash, Item.ObjectID);
+		Hash = HashValue(Hash, Item.Revision);
+		Hash = HashValue(Hash, Item.VertexArray);
+		Hash = HashValue(Hash, Item.FirstIndex);
+		Hash = HashValue(Hash, Item.IndexCount);
+		Hash = HashValue(Hash, static_cast<uint32>(Item.BaseVertex));
+		Hash = HashValue(Hash, Item.MorphDeltaBuffer);
+		Hash = HashValue(Hash, Item.MorphVertexCount);
+		Hash = HashValue(Hash, Item.SkinPaletteOffset);
+		Hash = HashValue(Hash, Item.MorphWeightOffset);
+		Hash = HashValue(Hash, Item.MorphWeightCount);
+		Hash = HashValue(Hash, Item.Skinned ? 1U : 0U);
+		Hash = HashValue(Hash, Item.Masked ? 1U : 0U);
+		Hash = HashValue(Hash, Item.TwoSided ? 1U : 0U);
+		Hash = HashMatrix(Hash, Item.Transform);
+		Hash = HashBytes(Hash, &Item.WorldBounds, sizeof(Item.WorldBounds));
+		Hash = HashBytes(Hash, &Item.Material, sizeof(Item.Material));
 	}
+	const auto &SkinMatrices = Collection.GetSkinningMatrices();
+	Hash = HashBytes(Hash, SkinMatrices.data(), SkinMatrices.size() * sizeof(renderer::GPUSkinMatrixRecord));
+	const auto &MorphWeights = Collection.GetMorphWeights();
+	Hash = HashBytes(Hash, MorphWeights.data(), MorphWeights.size() * sizeof(renderer::GPUMorphWeightRecord));
+	return Hash;
+}
+[[nodiscard]] GLenum ToOpenGlIndexFormat(const renderer::RenderIndexFormat Format) noexcept
+{
+	return Format == renderer::RenderIndexFormat::UInt16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+}
+[[nodiscard]] uint32 IndexElementSize(const renderer::RenderIndexFormat Format) noexcept
+{
+	return Format == renderer::RenderIndexFormat::UInt16 ? sizeof(uint16) : sizeof(uint32);
 }
 
-OpenGLRenderer::OpenGLRenderer()
-	: lightBufferManager(100)
+void CopyToMappedBuffer(const renderer::FrameBufferSlice &Destination, const void *Source, const uint64 SizeInBytes,
+						std::string_view ResourceName)
 {
-	this->headlessPresentationValidation = pipeline::device::isHeadlessPresentationValidationEnabled();
-	glCreateBuffers(1, &frameConstantsUBO);
-	glNamedBufferStorage(frameConstantsUBO, sizeof(renderer::GpuFrameConstants), nullptr, GL_DYNAMIC_STORAGE_BIT);
-	glCreateBuffers(1, &materialSSBO);
-	glNamedBufferStorage(materialSSBO, sizeof(renderer::GpuMaterialRecord) * MaximumRenderItems, nullptr, GL_DYNAMIC_STORAGE_BIT);
-	glCreateBuffers(1, &shadowDataSSBO);
-	glNamedBufferStorage(shadowDataSSBO, sizeof(renderer::GpuShadowRecord) * MaximumShadowRecords, nullptr, GL_DYNAMIC_STORAGE_BIT);
-	glCreateFramebuffers(1, &shadowFramebuffer);
-	this->frameResources = std::make_unique<renderer::FrameResourceRing>(sizeof(renderer::PreparedInstance) * MaximumRenderItems, sizeof(renderer::PreparedInstance) * MaximumRenderItems, sizeof(renderer::RenderCommand) * MaximumRenderItems, sizeof(renderer::RenderBatch) * MaximumRenderItems, sizeof(uint32) * (MaximumRenderItems * 4U + 512U));
+	if (SizeInBytes == 0)
+		return;
+	if (Source == nullptr)
+		throw std::invalid_argument(std::string(ResourceName) + " upload source is null");
+	if (Destination.MappedMemory == nullptr || Destination.Buffer == 0)
+		throw std::runtime_error(std::string(ResourceName) + " frame buffer is unavailable");
+	if (SizeInBytes > Destination.CapacityInBytes)
+		throw std::overflow_error(std::string(ResourceName) + " frame buffer capacity exceeded");
+	std::memcpy(Destination.MappedMemory, Source, static_cast<usize>(SizeInBytes));
+}
+
+template <typename Callback> class ScopeExit final
+{
+  public:
+	explicit ScopeExit(Callback &&Function) noexcept(std::is_nothrow_move_constructible_v<Callback>) : Function(std::move(Function))
+	{
+	}
+	~ScopeExit() noexcept
+	{
+		if (this->Active)
+			this->Function();
+	}
+	ScopeExit(const ScopeExit &) = delete;
+	ScopeExit &operator=(const ScopeExit &) = delete;
+	void Release() noexcept
+	{
+		this->Active = false;
+	}
+
+  private:
+	Callback Function;
+	bool Active = true;
+};
+
+template <typename Callback> [[nodiscard]] auto MakeScopeExit(Callback &&Function)
+{
+	return ScopeExit<std::decay_t<Callback>>(std::forward<Callback>(Function));
+}
+} // namespace
+
+OpenGLRenderer::OpenGLRenderer(pipeline::device::Device &Device, const bool HeadlessPresentationValidation)
+	: Device(&Device), HeadlessPresentationValidation(HeadlessPresentationValidation), MeshGPUCache(Device),
+	  LightBufferManager(MaximumLights), RenderGraph(Device)
+{
+	(void)this->Device->RequireCurrentContext();
+	glCreateFramebuffers(1, &ShadowFramebuffer);
+	this->FrameResources = std::make_unique<renderer::FrameResourceRing>(
+		Device,
+		renderer::FrameResourceCapacitySpecification{.FrameConstants = sizeof(renderer::GPUFrameConstants),
+													 .Materials = sizeof(renderer::GPUMaterialRecord) * MaximumRenderItems,
+													 .ShadowData = sizeof(renderer::GPUShadowRecord) * renderer::MaximumShadowRecordCount,
+													 .Lights = sizeof(renderer::GPULightRecord) * MaximumLights,
+													 .CandidateInstances = sizeof(renderer::PreparedInstance) * MaximumRenderItems,
+													 .ShadowInstances = sizeof(renderer::PreparedInstance) * MaximumRenderItems,
+													 .VisibleInstances = sizeof(renderer::PreparedInstance) * MaximumRenderItems,
+													 .IndirectCommands = sizeof(renderer::RenderCommand) * MaximumRenderItems,
+													 .BatchMetadata = sizeof(renderer::RenderBatch) * MaximumRenderItems,
+													 .VisibilityScratch = sizeof(uint32) * (MaximumRenderItems * 4U + 512U),
+													 .SkinMatrices = sizeof(renderer::GPUSkinMatrixRecord) * MaximumSkinMatrices,
+													 .MorphWeights = sizeof(renderer::GPUMorphWeightRecord) * MaximumMorphWeights});
+	this->Device->CheckErrors("OpenGLRenderer creation");
 }
 
 OpenGLRenderer::~OpenGLRenderer()
 {
-	if (shadowFramebuffer != 0) glDeleteFramebuffers(1, &shadowFramebuffer);
-	if (shadowDataSSBO != 0) glDeleteBuffers(1, &shadowDataSSBO);
-	if (materialSSBO != 0) glDeleteBuffers(1, &materialSSBO);
-	if (frameConstantsUBO != 0) glDeleteBuffers(1, &frameConstantsUBO);
+	this->FrameResources.reset();
+	if (ShadowFramebuffer != 0 && this->Device != nullptr && this->Device->CanIssueCommands())
+		glDeleteFramebuffers(1, &ShadowFramebuffer);
+	ShadowFramebuffer = 0;
 }
 
-uint32 OpenGLRenderer::getDrawCount() const noexcept { return drawCount; }
-uint32 OpenGLRenderer::getObjectsDrawn() const noexcept { return objectsDrawn; }
-
-void OpenGLRenderer::render(const StaticMeshObject& worldObject)
+uint32 OpenGLRenderer::GetDrawCount() const noexcept
 {
-	if (!collectingFrame)
+	return DrawCount;
+}
+uint32 OpenGLRenderer::GetObjectsDrawn() const noexcept
+{
+	return ObjectsDrawn;
+}
+
+void OpenGLRenderer::SetBackgroundColor(const glm::vec3 &Color)
+{
+	if (!std::isfinite(Color.x) || !std::isfinite(Color.y) || !std::isfinite(Color.z) || glm::any(glm::lessThan(Color, glm::vec3(0.0f))))
 	{
-		sceneCollection.beginFrame(frameNumber);
-		collectingFrame = true;
+		throw std::invalid_argument("Renderer background color must contain finite non-negative linear values");
 	}
-	sceneCollection.submit(worldObject, objectsDrawn);
-	++objectsDrawn;
+	this->BackgroundColor = Color;
 }
 
-void OpenGLRenderer::uploadFrameConstants(const Camera& camera, const Window& window)
+const glm::vec3 &OpenGLRenderer::GetBackgroundColor() const noexcept
 {
-	const glm::mat4 projection = camera.getProjectionMatrix(window);
-	const glm::mat4 view = camera.getViewMatrix();
-	const glm::mat4 viewProjection = projection * view;
-	const renderer::GpuFrameConstants frame { .projection = projection, .view = view, .viewProjection = viewProjection, .previousViewProjection = previousViewProjection, .inverseViewProjection = glm::inverse(viewProjection), .cameraPositionAndNear = glm::vec4(camera.position, camera.nearPlane), .renderExtentAndFar = glm::vec4(static_cast<float32>(window.getWidth()), static_cast<float32>(window.getHeight()), camera.farPlane, 0.0f), .countsAndFrame = glm::uvec4(0, 0, 0, static_cast<uint32>(frameNumber)) };
-	glNamedBufferSubData(frameConstantsUBO, 0, sizeof(renderer::GpuFrameConstants), &frame);
-	glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameConstantsUBO);
-	previousViewProjection = frame.viewProjection;
+	return this->BackgroundColor;
 }
 
-void OpenGLRenderer::renderScene(const pipeline::shader::GraphicsPipeline& pipeline, const Camera& camera, const Window& window)
+void OpenGLRenderer::Render(const world::Scene &Scene, resource::AssetManager &Assets, const Camera &Camera)
 {
-	if (!collectingFrame)
+	if (CollectingFrame)
+		throw std::logic_error("OpenGLRenderer accepts one Scene extraction per frame");
+	Assets.RealizeAllPendingGPU(*this->Device);
+	SceneCollection.BeginFrame(FrameNumber);
+	this->CurrentRenderTransforms.clear();
+	renderer::SceneExtractor Extractor(*this->Device, this->MeshGPUCache, Assets, this->PreviousRenderTransforms,
+									   this->CurrentRenderTransforms);
+	Extractor.Extract(Scene, Camera, SceneCollection);
+	this->PreviousRenderTransforms.swap(this->CurrentRenderTransforms);
+	this->ObjectsDrawn = Scene.GetObjectCount();
+	CollectingFrame = true;
+}
+
+void OpenGLRenderer::UploadFrameConstants(const Camera &Camera, const core::WindowExtent Extent, renderer::FrameResources &FrameResources)
+{
+	const glm::mat4 Projection = Camera.GetProjectionMatrix(Extent);
+	const glm::mat4 View = Camera.GetViewMatrix();
+	const glm::mat4 ViewProjection = Projection * View;
+	const renderer::GPUFrameConstants Frame{
+		.Projection = Projection,
+		.View = View,
+		.ViewProjection = ViewProjection,
+		.PreviousViewProjection = PreviousViewProjection,
+		.InverseViewProjection = glm::inverse(ViewProjection),
+		.CameraPositionAndNear = glm::vec4(Camera.Position, Camera.NearPlane),
+		.RenderExtentAndFar = glm::vec4(static_cast<float32>(Extent.Width), static_cast<float32>(Extent.Height), Camera.FarPlane, 0.0f),
+		.CountsAndFrame = glm::uvec4(0, 0, 0, static_cast<uint32>(FrameNumber)),
+		.BackgroundColor = glm::vec4(this->BackgroundColor, 1.0f)};
+	CopyToMappedBuffer(FrameResources.FrameConstants, &Frame, sizeof(Frame), "frame constants");
+	glBindBufferBase(GL_UNIFORM_BUFFER, static_cast<GLuint>(renderer::RendererBinding::FrameConstants),
+					 FrameResources.FrameConstants.Buffer);
+	PreviousViewProjection = Frame.ViewProjection;
+}
+
+void OpenGLRenderer::RenderScene(const pipeline::shader::GraphicsPipeline &Pipeline, const Camera &Camera, core::Window &Window)
+{
+	if (!CollectingFrame)
 	{
 		return;
 	}
-	sceneCollection.seal();
-	this->uploadFrameConstants(camera, window);
-	this->drawCount = 0;
-	const renderer::RenderPreparationResult prepared = scenePreparation.prepare(sceneCollection, camera.getProjectionMatrix(window) * camera.getViewMatrix(), 0, 0);
-	if (prepared.candidateInstances.size() > MaximumRenderItems || prepared.candidateCommands.size() > MaximumRenderItems)
+	auto Recovery = MakeScopeExit([this]() noexcept { this->RecoverFailedFrame(); });
+	const core::WindowExtent Extent = Window.GetFramebufferExtent();
+	if (!Extent.IsValid())
+		return;
+	SceneCollection.Seal();
+	this->DrawCount = 0;
+	const renderer::RenderPreparationResult Prepared =
+		ScenePreparation.Prepare(SceneCollection, Camera.GetProjectionMatrix(Extent) * Camera.GetViewMatrix(), 0, 0);
+	if (Prepared.CandidateInstances.size() > MaximumRenderItems || Prepared.CandidateCommands.size() > MaximumRenderItems)
 	{
 		throw std::runtime_error("Renderer frame capacity exceeded; increase MaximumRenderItems before submitting more geometry");
 	}
 
-	renderer::FrameResources& frame = frameResources->acquire(frameNumber);
-	if (!prepared.candidateInstances.empty())
+	renderer::FrameResources &Frame = FrameResources->Acquire(FrameNumber);
+	this->UploadFrameConstants(Camera, Extent, Frame);
+	const std::span<const renderer::GPULightRecord> LightRecords = this->LightBufferManager.GetGPURecords();
+	CopyToMappedBuffer(Frame.Lights, LightRecords.data(), LightRecords.size_bytes(), "lights");
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Lights), Frame.Lights.Buffer);
+	this->MeshGPUCache.Collect(FrameNumber, renderer::FrameResourceRing::FrameCount);
+	if (SceneCollection.GetSkinningMatrices().size() > MaximumSkinMatrices)
+		throw std::runtime_error("Renderer skinning palette capacity exceeded");
+	CopyToMappedBuffer(Frame.SkinMatrices, SceneCollection.GetSkinningMatrices().data(),
+					   SceneCollection.GetSkinningMatrices().size() * sizeof(renderer::GPUSkinMatrixRecord), "skin matrices");
+	if (SceneCollection.GetMorphWeights().size() > MaximumMorphWeights)
+		throw std::runtime_error("Renderer morph weight capacity exceeded");
+	CopyToMappedBuffer(Frame.MorphWeights, SceneCollection.GetMorphWeights().data(),
+					   SceneCollection.GetMorphWeights().size() * sizeof(renderer::GPUMorphWeightRecord), "morph weights");
+	if (!Prepared.CandidateInstances.empty())
 	{
-		const uint64 instanceBytes = static_cast<uint64>(prepared.candidateInstances.size() * sizeof(renderer::PreparedInstance));
-		std::memcpy(frame.candidateInstances.mappedMemory, prepared.candidateInstances.data(), static_cast<std::size_t>(instanceBytes));
-		std::memcpy(frame.visibleInstances.mappedMemory, prepared.candidateInstances.data(), static_cast<std::size_t>(instanceBytes));
+		const uint64 InstanceBytes = static_cast<uint64>(Prepared.CandidateInstances.size() * sizeof(renderer::PreparedInstance));
+		CopyToMappedBuffer(Frame.CandidateInstances, Prepared.CandidateInstances.data(), InstanceBytes, "candidate instances");
+		CopyToMappedBuffer(Frame.VisibleInstances, Prepared.CandidateInstances.data(), InstanceBytes, "visible instances");
 	}
-	if (!prepared.candidateCommands.empty()) std::memcpy(frame.indirectCommands.mappedMemory, prepared.candidateCommands.data(), prepared.candidateCommands.size() * sizeof(renderer::RenderCommand));
-	if (!prepared.batches.empty()) std::memcpy(frame.batchMetadata.mappedMemory, prepared.batches.data(), prepared.batches.size() * sizeof(renderer::RenderBatch));
-	if (prepared.materials.size() > MaximumRenderItems) throw std::runtime_error("Renderer material capacity exceeded; increase MaximumRenderItems before submitting more materials");
-	std::vector<renderer::GpuMaterialRecord> gpuMaterials;
-	gpuMaterials.reserve(prepared.materials.size());
-	for (const Material* material : prepared.materials) gpuMaterials.push_back({ .baseColorTexture = material->diffuseTexture.getHandle(), .normalTexture = material->normalTexture.getHandle(), .metallicRoughnessTexture = material->roughnessTexture.getHandle(), .occlusionTexture = material->ambientOcclusionTexture.getHandle(), .emissiveTexture = material->emissiveTexture.getHandle(), .transmissionTexture = 0, .baseColorFactor = glm::vec4(1.0f), .emissiveAndMetallic = glm::vec4(0.0f), .roughnessTransmissionIor = glm::vec4(material->shininess, 0.0f, 1.5f, 0.0f) });
-	if (!gpuMaterials.empty()) glNamedBufferSubData(materialSSBO, 0, gpuMaterials.size() * sizeof(renderer::GpuMaterialRecord), gpuMaterials.data());
+	CopyToMappedBuffer(Frame.IndirectCommands, Prepared.CandidateCommands.data(),
+					   Prepared.CandidateCommands.size() * sizeof(renderer::RenderCommand), "indirect commands");
+	CopyToMappedBuffer(Frame.BatchMetadata, Prepared.Batches.data(), Prepared.Batches.size() * sizeof(renderer::RenderBatch),
+					   "batch metadata");
+	if (Prepared.Materials.size() > MaximumRenderItems)
+		throw std::runtime_error("Renderer material capacity exceeded; increase MaximumRenderItems before submitting more materials");
+	CopyToMappedBuffer(Frame.Materials, Prepared.Materials.data(), Prepared.Materials.size() * sizeof(renderer::GPUMaterialRecord),
+					   "materials");
 	glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, frame.visibleInstances.buffer);
-	glBindBuffer(GL_DRAW_INDIRECT_BUFFER, frame.indirectCommands.buffer);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, materialSSBO);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, Frame.VisibleInstances.Buffer);
+	glBindBuffer(GL_DRAW_INDIRECT_BUFFER, Frame.IndirectCommands.Buffer);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Materials), Frame.Materials.Buffer);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::SkinMatrices), Frame.SkinMatrices.Buffer);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::MorphWeights), Frame.MorphWeights.Buffer);
 
-	pipeline.bind();
-	for (uint32 batchIndex = 0; batchIndex < prepared.batches.size(); ++batchIndex)
+	Pipeline.Bind();
+	for (uint32 BatchIndex = 0; BatchIndex < Prepared.Batches.size(); ++BatchIndex)
 	{
-		const renderer::RenderBatch& batch = prepared.batches[batchIndex];
-		const StaticMesh* mesh = nullptr;
-		for (const renderer::RenderItem& item : sceneCollection.getRenderItems()) if (item.mesh != nullptr && item.mesh->getVAO() == batch.vertexArray) { mesh = item.mesh; break; }
-		if (mesh == nullptr) continue;
-		const Material& material = mesh->getMaterial();
-		const renderer::GpuMaterialRecord gpuMaterial { .baseColorTexture = material.diffuseTexture.getHandle(), .normalTexture = material.normalTexture.getHandle(), .metallicRoughnessTexture = material.roughnessTexture.getHandle(), .occlusionTexture = material.ambientOcclusionTexture.getHandle(), .emissiveTexture = material.emissiveTexture.getHandle(), .transmissionTexture = 0, .baseColorFactor = glm::vec4(1.0f), .emissiveAndMetallic = glm::vec4(0.0f), .roughnessTransmissionIor = glm::vec4(material.shininess, 0.0f, 1.5f, 0.0f) };
-		glNamedBufferSubData(materialSSBO, 0, sizeof(renderer::GpuMaterialRecord), &gpuMaterial);
-		glBindVertexArray(batch.vertexArray);
-		const uintptr_t offset = static_cast<uintptr_t>(batchIndex) * sizeof(renderer::RenderCommand);
-		glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, reinterpret_cast<const void*>(offset), 1, sizeof(renderer::RenderCommand));
-		++drawCount;
+		const renderer::RenderBatch &Batch = Prepared.Batches[BatchIndex];
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::MorphDeltas), Batch.MorphDeltaBuffer);
+		glBindVertexArray(Batch.VertexArray);
+		const uintptr_t Offset = static_cast<uintptr_t>(BatchIndex) * sizeof(renderer::RenderCommand);
+		glMultiDrawElementsIndirect(GL_TRIANGLES, ToOpenGlIndexFormat(Batch.IndexFormat), reinterpret_cast<const void *>(Offset), 1,
+									sizeof(renderer::RenderCommand));
+		++DrawCount;
 	}
 
-	frameResources->retire();
-	++frameNumber;
-	collectingFrame = false;
-	sceneCollection.clear();
-	objectsDrawn = 0;
+	FrameResources->Retire(SceneCollection.ReleaseAssetPins());
+	++FrameNumber;
+	CollectingFrame = false;
+	SceneCollection.Clear();
+	ObjectsDrawn = 0;
+	Recovery.Release();
 }
 
-void OpenGLRenderer::renderScene(const renderer::RenderPassPipelineSet& pipelines, const Camera& camera, const Window& window)
+void OpenGLRenderer::RenderScene(const renderer::RenderPassPipelineSet &Pipelines, const Camera &Camera, core::Window &Window)
 {
-	if (!collectingFrame) return;
-	const bool cameraCut = hasPreviousCameraState && (glm::distance(camera.position, previousCameraPosition) > 2.0f || glm::dot(glm::normalize(camera.front), glm::normalize(previousCameraFront)) < 0.95f);
-	if (cameraCut)
+	if (!CollectingFrame)
+		return;
+	auto Recovery = MakeScopeExit([this]() noexcept { this->RecoverFailedFrame(); });
+	const core::WindowExtent WindowExtent = Window.GetFramebufferExtent();
+	if (!WindowExtent.IsValid())
+		return;
+	const bool CameraCut = HasPreviousCameraState && (glm::distance(Camera.Position, PreviousCameraPosition) > 2.0f ||
+													  glm::dot(glm::normalize(Camera.Front), glm::normalize(PreviousCameraFront)) < 0.95f);
+	if (CameraCut)
 	{
-		hierarchicalDepthHistoryValid = false;
-		temporalHistoryValid = false;
+		HierarchicalDepthHistoryValid = false;
+		TemporalHistoryValid = false;
 	}
-	sceneCollection.seal();
-	this->uploadFrameConstants(camera, window);
-	this->drawCount = 0;
-	const renderer::RenderPreparationResult prepared = scenePreparation.prepare(sceneCollection, camera.getProjectionMatrix(window) * camera.getViewMatrix(), 0, 0);
-	const renderer::RenderPreparationResult shadowPrepared = scenePreparation.prepare(sceneCollection, glm::mat4(1.0f), 0, 0, false);
-	const uint64 shadowCasterSignature = calculateShadowCasterSignature(shadowPrepared);
-	if (prepared.candidateInstances.size() > MaximumRenderItems || prepared.candidateCommands.size() > MaximumRenderItems || shadowPrepared.candidateInstances.size() > MaximumRenderItems || shadowPrepared.candidateCommands.size() > MaximumRenderItems) throw std::runtime_error("Renderer frame capacity exceeded; increase MaximumRenderItems before submitting more geometry");
+	SceneCollection.Seal();
+	this->DrawCount = 0;
+	const renderer::RenderPreparationResult Prepared =
+		ScenePreparation.Prepare(SceneCollection, Camera.GetProjectionMatrix(WindowExtent) * Camera.GetViewMatrix(), 0, 0);
+	const renderer::RenderPreparationResult ShadowPrepared = ScenePreparation.Prepare(SceneCollection, glm::mat4(1.0f), 0, 0, false, true);
+	const uint64 ShadowCasterSignature = CalculateShadowCasterSignature(SceneCollection);
+	if (Prepared.CandidateInstances.size() > MaximumRenderItems || Prepared.CandidateCommands.size() > MaximumRenderItems ||
+		ShadowPrepared.CandidateInstances.size() > MaximumRenderItems || ShadowPrepared.CandidateCommands.size() > MaximumRenderItems)
+		throw std::runtime_error("Renderer frame capacity exceeded; increase MaximumRenderItems before submitting more geometry");
 
-	renderer::FrameResources& frame = frameResources->acquire(frameNumber);
-	const uint64 instanceBytes = static_cast<uint64>(prepared.candidateInstances.size() * sizeof(renderer::PreparedInstance));
-	if (instanceBytes != 0) { std::memcpy(frame.candidateInstances.mappedMemory, prepared.candidateInstances.data(), static_cast<std::size_t>(instanceBytes)); std::memcpy(frame.visibleInstances.mappedMemory, prepared.candidateInstances.data(), static_cast<std::size_t>(instanceBytes)); }
-	const uint64 shadowInstanceBytes = static_cast<uint64>(shadowPrepared.candidateInstances.size() * sizeof(renderer::PreparedInstance));
-	if (shadowInstanceBytes != 0) std::memcpy(frame.visibleInstances.mappedMemory, shadowPrepared.candidateInstances.data(), static_cast<std::size_t>(shadowInstanceBytes));
-	if (!prepared.candidateCommands.empty()) std::memcpy(frame.indirectCommands.mappedMemory, prepared.candidateCommands.data(), prepared.candidateCommands.size() * sizeof(renderer::RenderCommand));
-	if (!prepared.batches.empty()) std::memcpy(frame.batchMetadata.mappedMemory, prepared.batches.data(), prepared.batches.size() * sizeof(renderer::RenderBatch));
+	renderer::FrameResources &Frame = FrameResources->Acquire(FrameNumber);
+	this->UploadFrameConstants(Camera, WindowExtent, Frame);
+	const std::span<const renderer::GPULightRecord> LightRecords = this->LightBufferManager.GetGPURecords();
+	CopyToMappedBuffer(Frame.Lights, LightRecords.data(), LightRecords.size_bytes(), "lights");
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Lights), Frame.Lights.Buffer);
+	this->MeshGPUCache.Collect(FrameNumber, renderer::FrameResourceRing::FrameCount);
+	if (SceneCollection.GetSkinningMatrices().size() > MaximumSkinMatrices)
+		throw std::runtime_error("Renderer skinning palette capacity exceeded");
+	CopyToMappedBuffer(Frame.SkinMatrices, SceneCollection.GetSkinningMatrices().data(),
+					   SceneCollection.GetSkinningMatrices().size() * sizeof(renderer::GPUSkinMatrixRecord), "skin matrices");
+	if (SceneCollection.GetMorphWeights().size() > MaximumMorphWeights)
+		throw std::runtime_error("Renderer morph weight capacity exceeded");
+	CopyToMappedBuffer(Frame.MorphWeights, SceneCollection.GetMorphWeights().data(),
+					   SceneCollection.GetMorphWeights().size() * sizeof(renderer::GPUMorphWeightRecord), "morph weights");
+	const uint64 InstanceBytes = static_cast<uint64>(Prepared.CandidateInstances.size() * sizeof(renderer::PreparedInstance));
+	if (InstanceBytes != 0)
+	{
+		CopyToMappedBuffer(Frame.CandidateInstances, Prepared.CandidateInstances.data(), InstanceBytes, "candidate instances");
+		CopyToMappedBuffer(Frame.VisibleInstances, Prepared.CandidateInstances.data(), InstanceBytes, "visible instances");
+	}
+	const uint64 ShadowInstanceBytes = static_cast<uint64>(ShadowPrepared.CandidateInstances.size() * sizeof(renderer::PreparedInstance));
+	if (ShadowInstanceBytes != 0)
+		CopyToMappedBuffer(Frame.ShadowInstances, ShadowPrepared.CandidateInstances.data(), ShadowInstanceBytes, "shadow instances");
+	CopyToMappedBuffer(Frame.IndirectCommands, Prepared.CandidateCommands.data(),
+					   Prepared.CandidateCommands.size() * sizeof(renderer::RenderCommand), "indirect commands");
+	CopyToMappedBuffer(Frame.BatchMetadata, Prepared.Batches.data(), Prepared.Batches.size() * sizeof(renderer::RenderBatch),
+					   "batch metadata");
 	// Visibility compaction writes the final per-batch instance counts directly
 	// into DrawElementsIndirectCommand. Each command starts empty every frame.
-	for (uint32 commandIndex = 0; commandIndex < prepared.candidateCommands.size(); ++commandIndex)
+	for (uint32 CommandIndex = 0; CommandIndex < Prepared.CandidateCommands.size(); ++CommandIndex)
 	{
-		static_cast<renderer::RenderCommand*>(frame.indirectCommands.mappedMemory)[commandIndex].instanceCount = 0;
+		static_cast<renderer::RenderCommand *>(Frame.IndirectCommands.MappedMemory)[CommandIndex].InstanceCount = 0;
 	}
-	if (prepared.materials.size() > MaximumRenderItems) throw std::runtime_error("Renderer material capacity exceeded; increase MaximumRenderItems before submitting more materials");
-	std::vector<renderer::GpuMaterialRecord> gpuMaterials;
-	gpuMaterials.reserve(prepared.materials.size());
-	for (const Material* material : prepared.materials)
-	{
-		gpuMaterials.push_back({
-			.baseColorTexture = material->diffuseTexture.getHandle(),
-			.normalTexture = material->normalTexture.getHandle(),
-			.metallicRoughnessTexture = material->roughnessTexture.getHandle(),
-			.occlusionTexture = material->ambientOcclusionTexture.getHandle(),
-			.emissiveTexture = material->emissiveTexture.getHandle(),
-			.transmissionTexture = 0,
-			.baseColorFactor = glm::vec4(1.0f),
-			.emissiveAndMetallic = glm::vec4(0.0f),
-			.roughnessTransmissionIor = glm::vec4(material->shininess, 0.0f, 1.5f, 0.0f)
-		});
-	}
-	if (!gpuMaterials.empty()) glNamedBufferSubData(materialSSBO, 0, static_cast<GLsizeiptr>(gpuMaterials.size() * sizeof(renderer::GpuMaterialRecord)), gpuMaterials.data());
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Materials), materialSSBO);
+	if (Prepared.Materials.size() > MaximumRenderItems)
+		throw std::runtime_error("Renderer material capacity exceeded; increase MaximumRenderItems before submitting more materials");
+	CopyToMappedBuffer(Frame.Materials, Prepared.Materials.data(), Prepared.Materials.size() * sizeof(renderer::GPUMaterialRecord),
+					   "materials");
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Materials), Frame.Materials.Buffer);
 	glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 
-	std::vector<renderer::GpuShadowRecord> shadowRecords(MaximumShadowRecords);
-	uint32 directionalCascadeCount = 0;
-	uint32 spotShadowCount = 0;
-	uint32 pointShadowFaceCount = 0;
-	const std::vector<DirectionalLightSource>& directionalLights = lightBufferManager.getDirectionalLights();
-	if (!directionalLights.empty())
+	std::vector<renderer::GPUShadowRecord> ShadowRecords(renderer::MaximumShadowRecordCount);
+	uint32 DirectionalCascadeCount = 0;
+	uint32 SpotShadowCount = 0;
+	uint32 PointShadowFaceCount = 0;
+	const std::vector<DirectionalLightSource> &DirectionalLights = LightBufferManager.GetDirectionalLights();
+	if (!DirectionalLights.empty())
 	{
-		constexpr std::array<float32, DirectionalShadowCascadeCount> cascadeRadii { 25.0f, 75.0f, 200.0f, 500.0f };
-		const glm::vec3 direction = glm::normalize(directionalLights.front().direction);
-		for (uint32 cascade = 0; cascade < DirectionalShadowCascadeCount; ++cascade)
+		constexpr std::array<float32, renderer::DirectionalShadowCascadeCount> CascadeRadii{25.0f, 75.0f, 200.0f, 500.0f};
+		const glm::vec3 Direction = glm::normalize(DirectionalLights.front().Direction);
+		for (uint32 Cascade = 0; Cascade < renderer::DirectionalShadowCascadeCount; ++Cascade)
 		{
-			const float32 radius = cascadeRadii[cascade];
-			const glm::vec3 center = camera.position + camera.front * (radius * 0.5f);
-			const glm::mat4 lightView = glm::lookAt(center - direction * (radius * 2.0f), center, glm::abs(direction.y) > 0.95f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 1.0f, 0.0f));
-			shadowRecords[cascade] = { .viewProjection = glm::orthoRH_ZO(-radius, radius, -radius, radius, 0.1f, radius * 4.0f) * lightView, .atlasScaleBias = glm::vec4(1.0f, 1.0f, static_cast<float32>(cascade), 0.0f), .depthBiasAndFilter = glm::vec4(0.0015f, 0.0035f, radius, 0.0f) };
+			const float32 Radius = CascadeRadii[Cascade];
+			const glm::vec3 Center = Camera.Position + Camera.Front * (Radius * 0.5f);
+			const glm::mat4 LightView =
+				glm::lookAt(Center - Direction * (Radius * 2.0f), Center,
+							glm::abs(Direction.y) > 0.95f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 1.0f, 0.0f));
+			ShadowRecords[Cascade] = {.ViewProjection = glm::orthoRH_ZO(-Radius, Radius, -Radius, Radius, 0.1f, Radius * 4.0f) * LightView,
+									  .AtlasScaleBias = glm::vec4(1.0f, 1.0f, static_cast<float32>(Cascade), 0.0f),
+									  .DepthBiasAndFilter = glm::vec4(0.0015f, 0.0035f, Radius, 0.0f)};
 		}
-		directionalCascadeCount = DirectionalShadowCascadeCount;
+		DirectionalCascadeCount = renderer::DirectionalShadowCascadeCount;
 	}
-	const std::vector<SpotLightSource>& spotLights = lightBufferManager.getSpotLights();
-	spotShadowCount = std::min(static_cast<uint32>(spotLights.size()), MaximumSpotShadowCount);
-	for (uint32 spotIndex = 0; spotIndex < spotShadowCount; ++spotIndex)
+	const std::vector<SpotLightSource> &SpotLights = LightBufferManager.GetSpotLights();
+	SpotShadowCount = std::min(static_cast<uint32>(SpotLights.size()), renderer::MaximumSpotShadowCount);
+	for (uint32 SpotIndex = 0; SpotIndex < SpotShadowCount; ++SpotIndex)
 	{
-		const SpotLightSource& light = spotLights[spotIndex];
-		const glm::vec3 direction = glm::normalize(light.direction);
-		const glm::vec3 up = glm::abs(direction.y) > 0.95f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
-		const float32 range = 1000.0f;
-		shadowRecords[DirectionalShadowCascadeCount + spotIndex] = { .viewProjection = glm::perspectiveRH_ZO(glm::acos(glm::clamp(light.outerCutOff, -1.0f, 1.0f)) * 2.0f, 1.0f, 0.1f, range) * glm::lookAt(light.position, light.position + direction, up), .atlasScaleBias = glm::vec4(1.0f, 1.0f, static_cast<float32>(spotIndex), 0.0f), .depthBiasAndFilter = glm::vec4(0.001f, 0.003f, range, 0.0f) };
+		const SpotLightSource &Light = SpotLights[SpotIndex];
+		const glm::vec3 Direction = glm::normalize(Light.Direction);
+		const glm::vec3 Up = glm::abs(Direction.y) > 0.95f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+		const float32 Range = 1000.0f;
+		ShadowRecords[renderer::DirectionalShadowCascadeCount + SpotIndex] = {
+			.ViewProjection = glm::perspectiveRH_ZO(glm::acos(glm::clamp(Light.OuterCutOff, -1.0f, 1.0f)) * 2.0f, 1.0f, 0.1f, Range) *
+							  glm::lookAt(Light.Position, Light.Position + Direction, Up),
+			.AtlasScaleBias = glm::vec4(1.0f, 1.0f, static_cast<float32>(SpotIndex), 0.0f),
+			.DepthBiasAndFilter = glm::vec4(0.001f, 0.003f, Range, 0.0f)};
 	}
-	const std::vector<PointLightSource>& pointLights = lightBufferManager.getPointLights();
-	const uint32 pointShadowCount = std::min(static_cast<uint32>(pointLights.size()), MaximumPointShadowFaceCount / 6U);
-	constexpr std::array<glm::vec3, 6> pointFaceDirections { glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, -1.0f) };
-	constexpr std::array<glm::vec3, 6> pointFaceUps { glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f) };
-	for (uint32 pointIndex = 0; pointIndex < pointShadowCount; ++pointIndex)
+	const std::vector<PointLightSource> &PointLights = LightBufferManager.GetPointLights();
+	const uint32 PointShadowCount = std::min(static_cast<uint32>(PointLights.size()), renderer::MaximumPointShadowCount);
+	constexpr std::array<glm::vec3, 6> PointFaceDirections{glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f),
+														   glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f),
+														   glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 0.0f, -1.0f)};
+	constexpr std::array<glm::vec3, 6> PointFaceUps{glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f),
+													glm::vec3(0.0f, 0.0f, 1.0f),  glm::vec3(0.0f, 0.0f, -1.0f),
+													glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f)};
+	for (uint32 PointIndex = 0; PointIndex < PointShadowCount; ++PointIndex)
 	{
-		constexpr float32 range = 1000.0f;
-		for (uint32 face = 0; face < 6; ++face)
+		constexpr float32 Range = 1000.0f;
+		for (uint32 Face = 0; Face < 6; ++Face)
 		{
-			const uint32 recordIndex = DirectionalShadowCascadeCount + MaximumSpotShadowCount + pointIndex * 6U + face;
-			shadowRecords[recordIndex] = { .viewProjection = glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f, 0.1f, range) * glm::lookAt(pointLights[pointIndex].position, pointLights[pointIndex].position + pointFaceDirections[face], pointFaceUps[face]), .atlasScaleBias = glm::vec4(1.0f, 1.0f, static_cast<float32>(pointIndex * 6U + face), 0.0f), .depthBiasAndFilter = glm::vec4(0.002f, 0.004f, range, 0.0f) };
+			const uint32 RecordIndex = renderer::DirectionalShadowCascadeCount + renderer::MaximumSpotShadowCount + PointIndex * 6U + Face;
+			ShadowRecords[RecordIndex] = {.ViewProjection =
+											  glm::perspectiveRH_ZO(glm::radians(90.0f), 1.0f, 0.1f, Range) *
+											  glm::lookAt(PointLights[PointIndex].Position,
+														  PointLights[PointIndex].Position + PointFaceDirections[Face], PointFaceUps[Face]),
+										  .AtlasScaleBias = glm::vec4(1.0f, 1.0f, static_cast<float32>(PointIndex * 6U + Face), 0.0f),
+										  .DepthBiasAndFilter = glm::vec4(0.002f, 0.004f, Range, 0.0f)};
 		}
 	}
-	pointShadowFaceCount = pointShadowCount * 6U;
-	glNamedBufferSubData(shadowDataSSBO, 0, static_cast<GLsizeiptr>(shadowRecords.size() * sizeof(renderer::GpuShadowRecord)), shadowRecords.data());
+	PointShadowFaceCount = PointShadowCount * 6U;
+	CopyToMappedBuffer(Frame.ShadowData, ShadowRecords.data(), ShadowRecords.size() * sizeof(renderer::GPUShadowRecord), "shadow data");
 
-	const renderer::graph::Extent2D extent { window.getWidth(), window.getHeight() };
-	renderGraph.beginFrame(extent);
-	auto import = [this](string name, const renderer::FrameBufferSlice& slice) { return renderGraph.importBuffer({ .debugName = std::move(name), .sizeInBytes = slice.capacityInBytes, .storageFlags = GL_DYNAMIC_STORAGE_BIT }, slice.buffer); };
-	const renderer::HybridDeferredFrameInputs inputs { .extent = extent, .candidateInstances = import("CandidateInstances", frame.candidateInstances), .visibleInstances = import("VisibleInstances", frame.visibleInstances), .indirectCommands = import("IndirectCommands", frame.indirectCommands), .batchMetadata = import("BatchMetadata", frame.batchMetadata), .visibilityScratch = import("VisibilityScratch", frame.visibilityScratch) };
-
-	auto dispatch = [](const pipeline::shader::ComputePipeline& pipeline, renderer::graph::RenderGraphContext& context, renderer::graph::TextureHandle output) { const renderer::graph::Extent2D size = context.getExtent(output); pipeline.bind(); glDispatchCompute((size.width + 7U) / 8U, (size.height + 7U) / 8U, 1); glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT); };
-	auto drawBatches = [this, &prepared, &frame](renderer::graph::RenderGraphContext& context, const pipeline::shader::GraphicsPipeline& pipeline, renderer::RenderPassClass requiredPass) {
-		context.validateGraphicsPipelineTargets(pipeline);
-		pipeline.bind(); glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameConstantsUBO); glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, frame.visibleInstances.buffer); glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, materialSSBO); glBindBuffer(GL_DRAW_INDIRECT_BUFFER, frame.indirectCommands.buffer);
-		for (uint32 batchIndex = 0; batchIndex < prepared.batches.size(); ++batchIndex) { const renderer::RenderBatch& batch = prepared.batches[batchIndex]; if (batch.passClass != requiredPass) continue; if (batch.vertexDescriptor == nullptr) throw std::logic_error("RenderBatch is missing its VertexDescriptor"); pipeline.validateVertexDescriptor(*batch.vertexDescriptor); glBindVertexArray(batch.vertexArray); const uintptr_t offset = static_cast<uintptr_t>(batchIndex) * sizeof(renderer::RenderCommand); glMultiDrawElementsIndirect(pipeline.getGLTopology(), GL_UNSIGNED_INT, reinterpret_cast<const void*>(offset), 1, sizeof(renderer::RenderCommand)); ++drawCount; }
+	const renderer::graph::Extent2D Extent{WindowExtent.Width, WindowExtent.Height};
+	RenderGraph.BeginFrame(Extent);
+	auto Import = [this](string Name, const renderer::FrameBufferSlice &Slice)
+	{
+		return RenderGraph.ImportBuffer(
+			{.DebugName = std::move(Name), .SizeInBytes = Slice.CapacityInBytes, .StorageFlags = GL_DYNAMIC_STORAGE_BIT}, Slice.Buffer);
 	};
+	const renderer::HybridDeferredFrameInputs Inputs{.Extent = Extent,
+													 .CandidateInstances = Import("CandidateInstances", Frame.CandidateInstances),
+													 .ShadowInstances = Import("ShadowInstances", Frame.ShadowInstances),
+													 .VisibleInstances = Import("VisibleInstances", Frame.VisibleInstances),
+													 .IndirectCommands = Import("IndirectCommands", Frame.IndirectCommands),
+													 .BatchMetadata = Import("BatchMetadata", Frame.BatchMetadata),
+													 .VisibilityScratch = Import("VisibilityScratch", Frame.VisibilityScratch),
+													 .TemporalHistoryWriteIndex = static_cast<uint32>(FrameNumber & 1U)};
 
-	const auto renderShadowLayers = [this, &pipelines, &frame, &shadowPrepared, &shadowRecords, shadowCasterSignature](GLuint texture, uint32 firstLayer, uint32 layerCount, uint32 firstRecord, renderer::graph::Extent2D shadowExtent) {
-		if (layerCount == 0) return;
-		pipelines.shadowDepth.bind();
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Instances), frame.visibleInstances.buffer);
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ShadowData), shadowDataSSBO);
-		glNamedFramebufferDrawBuffer(shadowFramebuffer, GL_NONE);
-		glNamedFramebufferReadBuffer(shadowFramebuffer, GL_NONE);
-		auto* const shadowVisibleInstances = static_cast<renderer::PreparedInstance*>(frame.visibleInstances.mappedMemory);
-		for (uint32 layer = 0; layer < layerCount; ++layer)
+	auto Dispatch = [](const pipeline::shader::ComputePipeline &Pipeline, renderer::graph::RenderGraphContext &Context,
+					   renderer::graph::TextureHandle Output)
+	{
+		const renderer::graph::Extent2D Size = Context.GetExtent(Output);
+		Pipeline.Bind();
+		glDispatchCompute((Size.Width + 7U) / 8U, (Size.Height + 7U) / 8U, 1);
+		glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT |
+						GL_TEXTURE_FETCH_BARRIER_BIT);
+	};
+	auto DrawBatches = [this, &Prepared, &Frame](renderer::graph::RenderGraphContext &Context,
+												 const pipeline::shader::GraphicsPipeline &Pipeline, renderer::RenderPassClass RequiredPass)
+	{
+		Context.ValidateGraphicsPipelineTargets(Pipeline);
+		Pipeline.Bind();
+		glBindBufferBase(GL_UNIFORM_BUFFER, static_cast<GLuint>(renderer::RendererBinding::FrameConstants), Frame.FrameConstants.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, Frame.VisibleInstances.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Materials), Frame.Materials.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::SkinMatrices), Frame.SkinMatrices.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::MorphWeights), Frame.MorphWeights.Buffer);
+		glBindBuffer(GL_DRAW_INDIRECT_BUFFER, Frame.IndirectCommands.Buffer);
+		bool TwoSidedState = false;
+		for (uint32 BatchIndex = 0; BatchIndex < Prepared.Batches.size(); ++BatchIndex)
 		{
-			const renderer::GpuShadowRecord& shadowView = shadowRecords.at(firstRecord + layer);
-			uint64 shadowSignature = hashMatrix(hashValue(shadowCasterSignature, static_cast<uint32>(texture)), shadowView.viewProjection);
-			shadowSignature = hashValue(shadowSignature, firstLayer + layer);
-			const uint32 cacheKey = firstRecord + layer;
-			ShadowLayerCacheEntry& cachedLayer = this->shadowLayerCache[cacheKey];
-			if (cachedLayer.valid && cachedLayer.texture == texture && cachedLayer.layer == firstLayer + layer && cachedLayer.signature == shadowSignature) continue;
-			glNamedFramebufferTextureLayer(shadowFramebuffer, GL_DEPTH_ATTACHMENT, texture, 0, static_cast<GLint>(firstLayer + layer));
-			if (glCheckNamedFramebufferStatus(shadowFramebuffer, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) throw std::runtime_error("Shadow framebuffer is incomplete");
-			glBindFramebuffer(GL_FRAMEBUFFER, shadowFramebuffer);
-			glViewport(0, 0, static_cast<GLsizei>(shadowExtent.width), static_cast<GLsizei>(shadowExtent.height));
-			glClearDepth(1.0); glClear(GL_DEPTH_BUFFER_BIT);
-			pipelines.shadowDepth.setVertexUniformUInt("shadowViewIndex", firstRecord + layer);
-			for (const renderer::RenderBatch& batch : shadowPrepared.batches)
+			const renderer::RenderBatch &Batch = Prepared.Batches[BatchIndex];
+			if (Batch.PassClass != RequiredPass)
+				continue;
+			if (Batch.VertexDescriptor == nullptr)
+				throw std::logic_error("RenderBatch is missing its VertexDescriptor");
+			Pipeline.ValidateVertexDescriptor(*Batch.VertexDescriptor);
+			if (Batch.TwoSided != TwoSidedState)
 			{
-				if (batch.passClass == renderer::RenderPassClass::Transparency) continue;
-				if (batch.vertexDescriptor == nullptr) throw std::logic_error("RenderBatch is missing its VertexDescriptor");
-				pipelines.shadowDepth.validateVertexDescriptor(*batch.vertexDescriptor);
-				uint32 visibleCount = 0;
-				for (uint32 candidateOffset = 0; candidateOffset < batch.candidateCount; ++candidateOffset)
-				{
-					const renderer::PreparedInstance& candidate = shadowPrepared.candidateInstances[batch.firstCandidate + candidateOffset];
-					if (!renderer::ScenePreparation::intersectsFrustum(candidate.worldBounds, shadowView.viewProjection)) continue;
-					shadowVisibleInstances[batch.firstCandidate + visibleCount] = candidate;
-					++visibleCount;
-				}
-				if (visibleCount == 0) continue;
-				glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
-				glBindVertexArray(batch.vertexArray);
-				glDrawElementsInstancedBaseVertexBaseInstance(pipelines.shadowDepth.getGLTopology(), static_cast<GLsizei>(batch.indexCount), GL_UNSIGNED_INT, reinterpret_cast<const void*>(static_cast<uintptr_t>(batch.firstIndex) * sizeof(uint32)), static_cast<GLsizei>(visibleCount), batch.baseVertex, batch.firstCandidate);
+				if (Batch.TwoSided)
+					glDisable(GL_CULL_FACE);
+				else if (Pipeline.GetDescriptor().State.Rasterizer.CullMode != pipeline::shader::CullMode::None)
+					glEnable(GL_CULL_FACE);
+				TwoSidedState = Batch.TwoSided;
 			}
-			cachedLayer = { .texture = texture, .layer = firstLayer + layer, .signature = shadowSignature, .valid = true };
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::MorphDeltas), Batch.MorphDeltaBuffer);
+			glBindVertexArray(Batch.VertexArray);
+			const uintptr_t Offset = static_cast<uintptr_t>(BatchIndex) * sizeof(renderer::RenderCommand);
+			glMultiDrawElementsIndirect(Pipeline.GetGLTopology(), ToOpenGlIndexFormat(Batch.IndexFormat),
+										reinterpret_cast<const void *>(Offset), 1, sizeof(renderer::RenderCommand));
+			++DrawCount;
 		}
 	};
 
-	const renderer::HybridDeferredPassCallbacks callbacks {
-		.directionalShadows = [&renderShadowLayers, directionalCascadeCount](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { renderShadowLayers(context.getTexture(resources.directionalShadowAtlas), 0, directionalCascadeCount, 0, context.getExtent(resources.directionalShadowAtlas)); },
-		.spotShadows = [&renderShadowLayers, spotShadowCount](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { renderShadowLayers(context.getTexture(resources.spotShadowAtlas), 0, spotShadowCount, DirectionalShadowCascadeCount, context.getExtent(resources.spotShadowAtlas)); },
-		.pointShadows = [&renderShadowLayers, pointShadowFaceCount](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { renderShadowLayers(context.getTexture(resources.pointShadowArray), 0, pointShadowFaceCount, DirectionalShadowCascadeCount + MaximumSpotShadowCount, context.getExtent(resources.pointShadowArray)); },
-		.mainVisibility = [this, &pipelines, &frame, &prepared](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) {
-			const uint32 zero = 0;
-			const uint32 candidateCount = static_cast<uint32>(prepared.candidateInstances.size());
-			const uint32 batchCount = static_cast<uint32>(prepared.batches.size());
-			const uint32 pyramidMipCount = static_cast<uint32>(std::bit_width(std::max(context.getExtent(resources.hierarchicalDepth).width, context.getExtent(resources.hierarchicalDepth).height)));
-			const bool historyMatchesExtent = hierarchicalDepthHistoryValid && hierarchicalDepthHistoryExtent.width == context.getExtent(resources.hierarchicalDepth).width && hierarchicalDepthHistoryExtent.height == context.getExtent(resources.hierarchicalDepth).height;
-			glClearNamedBufferData(frame.visibilityScratch.buffer, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &zero);
-			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Candidates), frame.candidateInstances.buffer);
-			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Instances), frame.visibleInstances.buffer);
-			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::VisibilityScratch), frame.visibilityScratch.buffer);
-			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::IndirectCommands), frame.indirectCommands.buffer);
-			glBindTextureUnit(0, context.getTexture(resources.hierarchicalDepth));
-			if (candidateCount == 0 || batchCount == 0) return;
-			pipelines.visibilityCull.setUniformUInt("candidateCount", candidateCount);
-			pipelines.visibilityCull.setUniformUInt("pyramidMipCount", pyramidMipCount);
-			pipelines.visibilityCull.setUniformUInt("historyValid", historyMatchesExtent ? 1U : 0U);
-			pipelines.visibilityCull.setUniformUInt("scratchCapacity", MaximumRenderItems);
-			pipelines.visibilityCull.bind();
-			glDispatchCompute((candidateCount + 63U) / 64U, 1, 1);
+	const auto RenderShadowLayers = [this, &Pipelines, &Frame, &ShadowPrepared, &ShadowRecords,
+									 ShadowCasterSignature](GLuint Texture, uint32 FirstLayer, uint32 LayerCount, uint32 FirstRecord,
+															renderer::graph::Extent2D ShadowExtent)
+	{
+		if (LayerCount == 0)
+			return;
+		Pipelines.ShadowDepth.Bind();
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Instances), Frame.ShadowInstances.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Materials), Frame.Materials.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ShadowData), Frame.ShadowData.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::SkinMatrices), Frame.SkinMatrices.Buffer);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::MorphWeights), Frame.MorphWeights.Buffer);
+		glNamedFramebufferDrawBuffer(ShadowFramebuffer, GL_NONE);
+		glNamedFramebufferReadBuffer(ShadowFramebuffer, GL_NONE);
+		bool TwoSidedState = false;
+		for (uint32 Layer = 0; Layer < LayerCount; ++Layer)
+		{
+			const renderer::GPUShadowRecord &ShadowView = ShadowRecords.at(FirstRecord + Layer);
+			uint64 ShadowSignature = HashMatrix(HashValue(ShadowCasterSignature, static_cast<uint32>(Texture)), ShadowView.ViewProjection);
+			ShadowSignature = HashValue(ShadowSignature, FirstLayer + Layer);
+			const uint32 CacheKey = FirstRecord + Layer;
+			ShadowLayerCacheEntry &CachedLayer = this->ShadowLayerCache[CacheKey];
+			if (CachedLayer.Valid && CachedLayer.Texture == Texture && CachedLayer.Layer == FirstLayer + Layer &&
+				CachedLayer.Signature == ShadowSignature)
+				continue;
+			glNamedFramebufferTextureLayer(ShadowFramebuffer, GL_DEPTH_ATTACHMENT, Texture, 0, static_cast<GLint>(FirstLayer + Layer));
+			if (glCheckNamedFramebufferStatus(ShadowFramebuffer, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+				throw std::runtime_error("Shadow framebuffer is incomplete");
+			glBindFramebuffer(GL_FRAMEBUFFER, ShadowFramebuffer);
+			glViewport(0, 0, static_cast<GLsizei>(ShadowExtent.Width), static_cast<GLsizei>(ShadowExtent.Height));
+			glClearDepth(1.0);
+			glClear(GL_DEPTH_BUFFER_BIT);
+			Pipelines.ShadowDepth.SetVertexUniformUInt("shadowViewIndex", FirstRecord + Layer);
+			for (const renderer::RenderBatch &Batch : ShadowPrepared.Batches)
+			{
+				if (Batch.PassClass == renderer::RenderPassClass::Transparency)
+					continue;
+				if (Batch.VertexDescriptor == nullptr)
+					throw std::logic_error("RenderBatch is missing its VertexDescriptor");
+				Pipelines.ShadowDepth.ValidateVertexDescriptor(*Batch.VertexDescriptor);
+				if (Batch.TwoSided != TwoSidedState)
+				{
+					if (Batch.TwoSided)
+						glDisable(GL_CULL_FACE);
+					else if (Pipelines.ShadowDepth.GetDescriptor().State.Rasterizer.CullMode != pipeline::shader::CullMode::None)
+						glEnable(GL_CULL_FACE);
+					TwoSidedState = Batch.TwoSided;
+				}
+				glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::MorphDeltas),
+								 Batch.MorphDeltaBuffer);
+				glBindVertexArray(Batch.VertexArray);
+				glDrawElementsInstancedBaseVertexBaseInstance(
+					Pipelines.ShadowDepth.GetGLTopology(), static_cast<GLsizei>(Batch.IndexCount), ToOpenGlIndexFormat(Batch.IndexFormat),
+					reinterpret_cast<const void *>(static_cast<uintptr_t>(Batch.FirstIndex) * IndexElementSize(Batch.IndexFormat)),
+					static_cast<GLsizei>(Batch.CandidateCount), Batch.BaseVertex, Batch.FirstCandidate);
+			}
+			CachedLayer = {.Texture = Texture, .Layer = FirstLayer + Layer, .Signature = ShadowSignature, .Valid = true};
+		}
+	};
+
+	const renderer::HybridDeferredPassCallbacks Callbacks{
+		.DirectionalShadows =
+			[&RenderShadowLayers, DirectionalCascadeCount](renderer::graph::RenderGraphContext &Context,
+														   const renderer::HybridDeferredFrameResources &Resources)
+		{
+			RenderShadowLayers(Context.GetTexture(Resources.DirectionalShadowAtlas), 0, DirectionalCascadeCount, 0,
+							   Context.GetExtent(Resources.DirectionalShadowAtlas));
+		},
+		.SpotShadows =
+			[&RenderShadowLayers, SpotShadowCount](renderer::graph::RenderGraphContext &Context,
+												   const renderer::HybridDeferredFrameResources &Resources)
+		{
+			RenderShadowLayers(Context.GetTexture(Resources.SpotShadowAtlas), 0, SpotShadowCount, renderer::DirectionalShadowCascadeCount,
+							   Context.GetExtent(Resources.SpotShadowAtlas));
+		},
+		.PointShadows =
+			[&RenderShadowLayers, PointShadowFaceCount](renderer::graph::RenderGraphContext &Context,
+														const renderer::HybridDeferredFrameResources &Resources)
+		{
+			RenderShadowLayers(Context.GetTexture(Resources.PointShadowArray), 0, PointShadowFaceCount,
+							   renderer::DirectionalShadowCascadeCount + renderer::MaximumSpotShadowCount,
+							   Context.GetExtent(Resources.PointShadowArray));
+		},
+		.MainVisibility =
+			[this, &Pipelines, &Frame, &Prepared](renderer::graph::RenderGraphContext &Context,
+												  const renderer::HybridDeferredFrameResources &Resources)
+		{
+			const uint32 Zero = 0;
+			const uint32 CandidateCount = static_cast<uint32>(Prepared.CandidateInstances.size());
+			const uint32 BatchCount = static_cast<uint32>(Prepared.Batches.size());
+			const uint32 PyramidMipCount = static_cast<uint32>(std::bit_width(
+				std::max(Context.GetExtent(Resources.HierarchicalDepth).Width, Context.GetExtent(Resources.HierarchicalDepth).Height)));
+			const bool HistoryMatchesExtent =
+				HierarchicalDepthHistoryValid &&
+				HierarchicalDepthHistoryExtent.Width == Context.GetExtent(Resources.HierarchicalDepth).Width &&
+				HierarchicalDepthHistoryExtent.Height == Context.GetExtent(Resources.HierarchicalDepth).Height;
+			glClearNamedBufferData(Frame.VisibilityScratch.Buffer, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &Zero);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Candidates),
+							 Frame.CandidateInstances.Buffer);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Instances),
+							 Frame.VisibleInstances.Buffer);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::VisibilityScratch),
+							 Frame.VisibilityScratch.Buffer);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::IndirectCommands),
+							 Frame.IndirectCommands.Buffer);
+			glBindTextureUnit(0, Context.GetTexture(Resources.HierarchicalDepth));
+			if (CandidateCount == 0 || BatchCount == 0)
+				return;
+			Pipelines.VisibilityCull.SetUniformUInt("candidateCount", CandidateCount);
+			Pipelines.VisibilityCull.SetUniformUInt("pyramidMipCount", PyramidMipCount);
+			Pipelines.VisibilityCull.SetUniformUInt("historyValid", HistoryMatchesExtent ? 1U : 0U);
+			Pipelines.VisibilityCull.SetUniformUInt("scratchCapacity", MaximumRenderItems);
+			Pipelines.VisibilityCull.Bind();
+			glDispatchCompute((CandidateCount + 63U) / 64U, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-			const uint32 visibilityScanBlockCount = (batchCount + 255U) / 256U;
-			pipelines.visibilityPrefixScan.setUniformUInt("batchCount", batchCount);
-			pipelines.visibilityPrefixScan.setUniformUInt("scratchCapacity", MaximumRenderItems);
-			pipelines.visibilityPrefixScan.bind();
-			glDispatchCompute(visibilityScanBlockCount, 1, 1);
+			const uint32 VisibilityScanBlockCount = (BatchCount + 255U) / 256U;
+			Pipelines.VisibilityPrefixScan.SetUniformUInt("batchCount", BatchCount);
+			Pipelines.VisibilityPrefixScan.SetUniformUInt("scratchCapacity", MaximumRenderItems);
+			Pipelines.VisibilityPrefixScan.Bind();
+			glDispatchCompute(VisibilityScanBlockCount, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-			pipelines.visibilityBlockPrefixScan.setUniformUInt("blockCount", visibilityScanBlockCount);
-			pipelines.visibilityBlockPrefixScan.setUniformUInt("scratchCapacity", MaximumRenderItems);
-			pipelines.visibilityBlockPrefixScan.bind();
+			Pipelines.VisibilityBlockPrefixScan.SetUniformUInt("blockCount", VisibilityScanBlockCount);
+			Pipelines.VisibilityBlockPrefixScan.SetUniformUInt("scratchCapacity", MaximumRenderItems);
+			Pipelines.VisibilityBlockPrefixScan.Bind();
 			glDispatchCompute(1, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-			pipelines.visibilityFinalize.setUniformUInt("batchCount", batchCount);
-			pipelines.visibilityFinalize.setUniformUInt("scratchCapacity", MaximumRenderItems);
-			pipelines.visibilityFinalize.bind();
-			glDispatchCompute(visibilityScanBlockCount, 1, 1);
+			Pipelines.VisibilityFinalize.SetUniformUInt("batchCount", BatchCount);
+			Pipelines.VisibilityFinalize.SetUniformUInt("scratchCapacity", MaximumRenderItems);
+			Pipelines.VisibilityFinalize.Bind();
+			glDispatchCompute(VisibilityScanBlockCount, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-			pipelines.visibilityScatter.setUniformUInt("candidateCount", candidateCount);
-			pipelines.visibilityScatter.setUniformUInt("scratchCapacity", MaximumRenderItems);
-			pipelines.visibilityScatter.bind();
-			glDispatchCompute((candidateCount + 63U) / 64U, 1, 1);
+			Pipelines.VisibilityScatter.SetUniformUInt("candidateCount", CandidateCount);
+			Pipelines.VisibilityScatter.SetUniformUInt("scratchCapacity", MaximumRenderItems);
+			Pipelines.VisibilityScatter.Bind();
+			glDispatchCompute((CandidateCount + 63U) / 64U, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 		},
-		.depthPrepass = [&pipelines, &drawBatches](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources&) { drawBatches(context, pipelines.depthPrepass, renderer::RenderPassClass::GBuffer); },
-		.hierarchicalDepth = [&pipelines, extent](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) {
-			const GLuint depthTexture = context.getTexture(resources.depth);
-			const GLuint pyramidTexture = context.getTexture(resources.hierarchicalDepth);
-			const uint32 mipCount = static_cast<uint32>(std::bit_width(std::max(extent.width, extent.height)));
-			pipelines.hierarchicalDepth.bind();
-			for (uint32 mip = 0; mip < mipCount; ++mip)
+		.DepthPrepass =
+			[&Pipelines, &DrawBatches](renderer::graph::RenderGraphContext &Context, const renderer::HybridDeferredFrameResources &)
+		{ DrawBatches(Context, Pipelines.DepthPrepass, renderer::RenderPassClass::GBuffer); },
+		.HierarchicalDepth =
+			[&Pipelines, Extent](renderer::graph::RenderGraphContext &Context, const renderer::HybridDeferredFrameResources &Resources)
+		{
+			const GLuint DepthTexture = Context.GetTexture(Resources.Depth);
+			const GLuint PyramidTexture = Context.GetTexture(Resources.HierarchicalDepth);
+			const uint32 MipCount = static_cast<uint32>(std::bit_width(std::max(Extent.Width, Extent.Height)));
+			Pipelines.HierarchicalDepth.Bind();
+			for (uint32 Mip = 0; Mip < MipCount; ++Mip)
 			{
-				const uint32 outputWidth = std::max(1U, extent.width >> mip);
-				const uint32 outputHeight = std::max(1U, extent.height >> mip);
-				const uint32 sourceWidth = mip == 0 ? extent.width : std::max(1U, extent.width >> (mip - 1U));
-				const uint32 sourceHeight = mip == 0 ? extent.height : std::max(1U, extent.height >> (mip - 1U));
-				glBindTextureUnit(0, mip == 0 ? depthTexture : pyramidTexture);
-				glBindImageTexture(0, pyramidTexture, static_cast<GLint>(mip), GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
-				pipelines.hierarchicalDepth.setUniformUInt2("sourceExtent", sourceWidth, sourceHeight);
-				pipelines.hierarchicalDepth.setUniformUInt("sourceMip", mip == 0 ? 0U : mip - 1U);
-				pipelines.hierarchicalDepth.setUniformUInt("sourceScale", mip == 0 ? 1U : 2U);
-				glDispatchCompute((outputWidth + 7U) / 8U, (outputHeight + 7U) / 8U, 1);
+				const uint32 OutputWidth = std::max(1U, Extent.Width >> Mip);
+				const uint32 OutputHeight = std::max(1U, Extent.Height >> Mip);
+				const uint32 SourceWidth = Mip == 0 ? Extent.Width : std::max(1U, Extent.Width >> (Mip - 1U));
+				const uint32 SourceHeight = Mip == 0 ? Extent.Height : std::max(1U, Extent.Height >> (Mip - 1U));
+				glBindTextureUnit(0, Mip == 0 ? DepthTexture : PyramidTexture);
+				glBindImageTexture(0, PyramidTexture, static_cast<GLint>(Mip), GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+				Pipelines.HierarchicalDepth.SetUniformUInt2("sourceExtent", SourceWidth, SourceHeight);
+				Pipelines.HierarchicalDepth.SetUniformUInt("sourceMip", Mip == 0 ? 0U : Mip - 1U);
+				Pipelines.HierarchicalDepth.SetUniformUInt("sourceScale", Mip == 0 ? 1U : 2U);
+				glDispatchCompute((OutputWidth + 7U) / 8U, (OutputHeight + 7U) / 8U, 1);
 				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 			}
 		},
-		.gbuffer = [this, &pipelines, &drawBatches](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { drawBatches(context, pipelines.gbuffer, renderer::RenderPassClass::GBuffer); if (this->headlessPresentationValidation && !this->presentationValidated) { this->validateHeadlessDepthCoverage(context.getTexture(resources.depth), context.getExtent(resources.depth)); this->validateHeadlessColorCoverage(context.getTexture(resources.gbufferBaseColor), context.getExtent(resources.gbufferBaseColor), "G-buffer base color"); this->validateHeadlessColorCoverage(context.getTexture(resources.gbufferNormalRoughness), context.getExtent(resources.gbufferNormalRoughness), "G-buffer normal"); } },
-		.clusteredLights = [this, &pipelines](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { constexpr uint32 clusterCount = 32U * 18U * 24U; glBindBufferBase(GL_UNIFORM_BUFFER, static_cast<GLuint>(renderer::RendererBinding::FrameConstants), frameConstantsUBO); glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterHeaders), context.getBuffer(resources.clusterHeaders)); glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterIndices), context.getBuffer(resources.clusterIndices)); pipelines.clusteredLights.setUniformUInt("lightCount", static_cast<uint32>(this->lightBufferManager.getTotalLightSourceCount())); pipelines.clusteredLights.setUniformUInt("clusterCount", clusterCount); pipelines.clusteredLights.bind(); glDispatchCompute((clusterCount + 63U) / 64U, 1, 1); glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT); },
-		.deferredLighting = [this, &pipelines, &dispatch](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { constexpr uint32 clusterCount = 32U * 18U * 24U; glBindBufferBase(GL_UNIFORM_BUFFER, static_cast<GLuint>(renderer::RendererBinding::FrameConstants), frameConstantsUBO); glBindTextureUnit(0, context.getTexture(resources.gbufferBaseColor)); glBindTextureUnit(1, context.getTexture(resources.gbufferNormalRoughness)); glBindTextureUnit(2, context.getTexture(resources.gbufferMaterial)); glBindTextureUnit(3, context.getTexture(resources.depth)); glBindTextureUnit(4, context.getTexture(resources.directionalShadowAtlas)); glBindTextureUnit(5, context.getTexture(resources.spotShadowAtlas)); glBindTextureUnit(6, context.getTexture(resources.pointShadowArray)); glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ShadowData), shadowDataSSBO); glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterHeaders), context.getBuffer(resources.clusterHeaders)); glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterIndices), context.getBuffer(resources.clusterIndices)); pipelines.deferredLighting.setUniformUInt("lightCount", static_cast<uint32>(this->lightBufferManager.getTotalLightSourceCount())); pipelines.deferredLighting.setUniformUInt("clusterCount", clusterCount); glBindImageTexture(0, context.getTexture(resources.hdrLighting), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F); dispatch(pipelines.deferredLighting, context, resources.hdrLighting); if (this->headlessPresentationValidation) this->validateHeadlessColorCoverage(context.getTexture(resources.hdrLighting), context.getExtent(resources.hdrLighting), "deferred HDR"); },
-		.weightedOIT = [&pipelines, &drawBatches](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources&) { drawBatches(context, pipelines.transparentOIT, renderer::RenderPassClass::Transparency); },
-		.oitComposition = [&pipelines, &dispatch](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { glBindTextureUnit(0, context.getTexture(resources.hdrLighting)); glBindTextureUnit(1, context.getTexture(resources.transparencyAccumulation)); glBindTextureUnit(2, context.getTexture(resources.transparencyRevealage)); glBindImageTexture(0, context.getTexture(resources.compositedHDR), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F); dispatch(pipelines.oitComposition, context, resources.compositedHDR); },
-		.temporalAA = [this, &pipelines, &dispatch](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { const renderer::graph::Extent2D extent = context.getExtent(resources.taaResolved); const bool historyMatchesExtent = temporalHistoryValid && temporalHistoryExtent.width == extent.width && temporalHistoryExtent.height == extent.height; glBindTextureUnit(0, context.getTexture(resources.compositedHDR)); glBindTextureUnit(1, context.getTexture(resources.taaHistory)); glBindTextureUnit(2, context.getTexture(resources.velocity)); pipelines.temporalAA.setUniformUInt("historyValid", historyMatchesExtent ? 1U : 0U); glBindImageTexture(0, context.getTexture(resources.taaHistory), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F); glBindImageTexture(1, context.getTexture(resources.taaResolved), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F); dispatch(pipelines.temporalAA, context, resources.taaResolved); if (this->headlessPresentationValidation) this->validateHeadlessColorCoverage(context.getTexture(resources.taaResolved), extent, "TAA resolve"); },
-		.exposureAndBloom = [this, &pipelines](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { const renderer::graph::Extent2D extent = context.getExtent(resources.bloom); const uint32 mipCount = static_cast<uint32>(std::bit_width(std::max(extent.width, extent.height))); const GLuint bloomTexture = context.getTexture(resources.bloom); pipelines.autoExposure.bind(); glBindTextureUnit(0, context.getTexture(resources.taaResolved)); glBindImageTexture(0, context.getTexture(resources.exposure), 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32F); pipelines.autoExposure.setUniformUInt("historyValid", exposureHistoryValid ? 1U : 0U); glDispatchCompute(1, 1, 1); glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT); pipelines.bloom.bind(); for (uint32 mip = 0; mip < mipCount; ++mip) { const uint32 width = std::max(1U, extent.width >> mip); const uint32 height = std::max(1U, extent.height >> mip); glBindTextureUnit(0, mip == 0 ? context.getTexture(resources.taaResolved) : bloomTexture); glBindImageTexture(0, bloomTexture, static_cast<GLint>(mip), GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F); pipelines.bloom.setUniformUInt("sourceMip", mip == 0 ? 0U : mip - 1U); pipelines.bloom.setUniformUInt("operation", 0U); glDispatchCompute((width + 7U) / 8U, (height + 7U) / 8U, 1); glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT); } for (uint32 mip = mipCount - 1U; mip > 0U; --mip) { const uint32 outputMip = mip - 1U; const uint32 width = std::max(1U, extent.width >> outputMip); const uint32 height = std::max(1U, extent.height >> outputMip); glBindTextureUnit(0, bloomTexture); glBindImageTexture(0, bloomTexture, static_cast<GLint>(outputMip), GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F); pipelines.bloom.setUniformUInt("sourceMip", mip); pipelines.bloom.setUniformUInt("operation", 1U); glDispatchCompute((width + 7U) / 8U, (height + 7U) / 8U, 1); glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT); } },
-		.toneMapAndPresent = [&pipelines](renderer::graph::RenderGraphContext& context, const renderer::HybridDeferredFrameResources& resources) { glBindFramebuffer(GL_FRAMEBUFFER, 0); glBindTextureUnit(0, context.getTexture(resources.taaResolved)); glBindTextureUnit(1, context.getTexture(resources.bloom)); glBindTextureUnit(2, context.getTexture(resources.exposure)); pipelines.toneMap.bind(); glDrawArrays(GL_TRIANGLES, 0, 3); }
-	};
-	(void)hybridFrameGraph.build(renderGraph, inputs, callbacks);
-	renderGraph.compile();
-	renderGraph.execute();
-	this->validateHeadlessPresentation(window);
-	hierarchicalDepthHistoryExtent = extent;
-	hierarchicalDepthHistoryValid = true;
-	temporalHistoryExtent = extent;
-	temporalHistoryValid = true;
-	exposureHistoryValid = true;
-	previousCameraPosition = camera.position;
-	previousCameraFront = camera.front;
-	hasPreviousCameraState = true;
-	frameResources->retire(); ++frameNumber; collectingFrame = false; sceneCollection.clear(); objectsDrawn = 0;
+		.GBuffer =
+			[this, &Pipelines, &DrawBatches](renderer::graph::RenderGraphContext &Context,
+											 const renderer::HybridDeferredFrameResources &Resources)
+		{
+			DrawBatches(Context, Pipelines.GBuffer, renderer::RenderPassClass::GBuffer);
+			if (this->HeadlessPresentationValidation && !this->PresentationValidated)
+			{
+				this->ValidateHeadlessDepthCoverage(Context.GetTexture(Resources.Depth), Context.GetExtent(Resources.Depth));
+				this->ValidateHeadlessColorCoverage(Context.GetTexture(Resources.GBufferBaseColor),
+													Context.GetExtent(Resources.GBufferBaseColor), "G-buffer base color");
+				this->ValidateHeadlessColorCoverage(Context.GetTexture(Resources.GBufferNormalRoughness),
+													Context.GetExtent(Resources.GBufferNormalRoughness), "G-buffer normal");
+			}
+		},
+		.ClusteredLights =
+			[this, &Pipelines, &Frame](renderer::graph::RenderGraphContext &Context,
+									   const renderer::HybridDeferredFrameResources &Resources)
+		{
+			constexpr uint32 ClusterCount = 32U * 18U * 24U;
+			glBindBufferBase(GL_UNIFORM_BUFFER, static_cast<GLuint>(renderer::RendererBinding::FrameConstants),
+							 Frame.FrameConstants.Buffer);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Lights), Frame.Lights.Buffer);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterHeaders),
+							 Context.GetBuffer(Resources.ClusterHeaders));
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterIndices),
+							 Context.GetBuffer(Resources.ClusterIndices));
+			Pipelines.ClusteredLights.SetUniformUInt("lightCount",
+													 static_cast<uint32>(this->LightBufferManager.GetTotalLightSourceCount()));
+			Pipelines.ClusteredLights.SetUniformUInt("clusterCount", ClusterCount);
+			Pipelines.ClusteredLights.Bind();
+			glDispatchCompute((ClusterCount + 63U) / 64U, 1, 1);
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		},
+		.DeferredLighting =
+			[this, &Pipelines, &Dispatch, &Frame](renderer::graph::RenderGraphContext &Context,
+												  const renderer::HybridDeferredFrameResources &Resources)
+		{
+			constexpr uint32 ClusterCount = 32U * 18U * 24U;
+			glBindBufferBase(GL_UNIFORM_BUFFER, static_cast<GLuint>(renderer::RendererBinding::FrameConstants),
+							 Frame.FrameConstants.Buffer);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Lights), Frame.Lights.Buffer);
+			glBindTextureUnit(0, Context.GetTexture(Resources.GBufferBaseColor));
+			glBindTextureUnit(1, Context.GetTexture(Resources.GBufferNormalRoughness));
+			glBindTextureUnit(2, Context.GetTexture(Resources.GBufferMaterial));
+			glBindTextureUnit(3, Context.GetTexture(Resources.Depth));
+			glBindTextureUnit(4, Context.GetTexture(Resources.DirectionalShadowAtlas));
+			glBindTextureUnit(5, Context.GetTexture(Resources.SpotShadowAtlas));
+			glBindTextureUnit(6, Context.GetTexture(Resources.PointShadowArray));
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ShadowData), Frame.ShadowData.Buffer);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterHeaders),
+							 Context.GetBuffer(Resources.ClusterHeaders));
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::ClusterIndices),
+							 Context.GetBuffer(Resources.ClusterIndices));
+			Pipelines.DeferredLighting.SetUniformUInt("lightCount",
+													  static_cast<uint32>(this->LightBufferManager.GetTotalLightSourceCount()));
+			Pipelines.DeferredLighting.SetUniformUInt("clusterCount", ClusterCount);
+			glBindImageTexture(0, Context.GetTexture(Resources.HDRLighting), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+			Dispatch(Pipelines.DeferredLighting, Context, Resources.HDRLighting);
+			if (this->HeadlessPresentationValidation)
+				this->ValidateHeadlessColorCoverage(Context.GetTexture(Resources.HDRLighting), Context.GetExtent(Resources.HDRLighting),
+													"deferred HDR");
+		},
+		.WeightedOIT =
+			[&Pipelines, &DrawBatches](renderer::graph::RenderGraphContext &Context, const renderer::HybridDeferredFrameResources &)
+		{ DrawBatches(Context, Pipelines.TransparentOIT, renderer::RenderPassClass::Transparency); },
+		.OITComposition =
+			[&Pipelines, &Dispatch](renderer::graph::RenderGraphContext &Context, const renderer::HybridDeferredFrameResources &Resources)
+		{
+			glBindTextureUnit(0, Context.GetTexture(Resources.HDRLighting));
+			glBindTextureUnit(1, Context.GetTexture(Resources.TransparencyAccumulation));
+			glBindTextureUnit(2, Context.GetTexture(Resources.TransparencyRevealage));
+			glBindImageTexture(0, Context.GetTexture(Resources.CompositedHDR), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+			Dispatch(Pipelines.OITComposition, Context, Resources.CompositedHDR);
+		},
+		.TemporalAA =
+			[this, &Pipelines, &Dispatch](renderer::graph::RenderGraphContext &Context,
+										  const renderer::HybridDeferredFrameResources &Resources)
+		{
+			const renderer::graph::Extent2D Extent = Context.GetExtent(Resources.TAAResolved);
+			const bool HistoryMatchesExtent =
+				TemporalHistoryValid && TemporalHistoryExtent.Width == Extent.Width && TemporalHistoryExtent.Height == Extent.Height;
+			glBindTextureUnit(0, Context.GetTexture(Resources.CompositedHDR));
+			glBindTextureUnit(1, Context.GetTexture(Resources.TAAHistoryRead));
+			glBindTextureUnit(2, Context.GetTexture(Resources.Velocity));
+			Pipelines.TemporalAA.SetUniformUInt("historyValid", HistoryMatchesExtent ? 1U : 0U);
+			glBindImageTexture(0, Context.GetTexture(Resources.TAAHistoryWrite), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+			glBindImageTexture(1, Context.GetTexture(Resources.TAAResolved), 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+			Dispatch(Pipelines.TemporalAA, Context, Resources.TAAResolved);
+			if (this->HeadlessPresentationValidation)
+				this->ValidateHeadlessColorCoverage(Context.GetTexture(Resources.TAAResolved), Extent, "TAA resolve");
+		},
+		.ExposureAndBloom =
+			[this, &Pipelines](renderer::graph::RenderGraphContext &Context, const renderer::HybridDeferredFrameResources &Resources)
+		{
+			const renderer::graph::Extent2D Extent = Context.GetExtent(Resources.Bloom);
+			const uint32 MipCount = static_cast<uint32>(std::bit_width(std::max(Extent.Width, Extent.Height)));
+			const GLuint BloomTexture = Context.GetTexture(Resources.Bloom);
+			Pipelines.AutoExposure.Bind();
+			glBindTextureUnit(0, Context.GetTexture(Resources.TAAResolved));
+			glBindImageTexture(0, Context.GetTexture(Resources.Exposure), 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32F);
+			Pipelines.AutoExposure.SetUniformUInt("historyValid", ExposureHistoryValid ? 1U : 0U);
+			glDispatchCompute(1, 1, 1);
+			glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+			Pipelines.Bloom.Bind();
+			for (uint32 Mip = 0; Mip < MipCount; ++Mip)
+			{
+				const uint32 Width = std::max(1U, Extent.Width >> Mip);
+				const uint32 Height = std::max(1U, Extent.Height >> Mip);
+				glBindTextureUnit(0, Mip == 0 ? Context.GetTexture(Resources.TAAResolved) : BloomTexture);
+				glBindImageTexture(0, BloomTexture, static_cast<GLint>(Mip), GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+				Pipelines.Bloom.SetUniformUInt("sourceMip", Mip == 0 ? 0U : Mip - 1U);
+				Pipelines.Bloom.SetUniformUInt("operation", 0U);
+				glDispatchCompute((Width + 7U) / 8U, (Height + 7U) / 8U, 1);
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+			}
+			for (uint32 Mip = MipCount - 1U; Mip > 0U; --Mip)
+			{
+				const uint32 OutputMip = Mip - 1U;
+				const uint32 Width = std::max(1U, Extent.Width >> OutputMip);
+				const uint32 Height = std::max(1U, Extent.Height >> OutputMip);
+				glBindTextureUnit(0, BloomTexture);
+				glBindImageTexture(0, BloomTexture, static_cast<GLint>(OutputMip), GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
+				Pipelines.Bloom.SetUniformUInt("sourceMip", Mip);
+				Pipelines.Bloom.SetUniformUInt("operation", 1U);
+				glDispatchCompute((Width + 7U) / 8U, (Height + 7U) / 8U, 1);
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+			}
+		},
+		.ToneMapAndPresent =
+			[&Pipelines](renderer::graph::RenderGraphContext &Context, const renderer::HybridDeferredFrameResources &Resources)
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+			glBindTextureUnit(0, Context.GetTexture(Resources.TAAResolved));
+			glBindTextureUnit(1, Context.GetTexture(Resources.Bloom));
+			glBindTextureUnit(2, Context.GetTexture(Resources.Exposure));
+			Pipelines.ToneMap.Bind();
+			glDrawArrays(GL_TRIANGLES, 0, 3);
+		}};
+	(void)HybridFrameGraph.Build(RenderGraph, Inputs, Callbacks);
+	RenderGraph.Compile();
+	RenderGraph.Execute();
+	this->ValidateHeadlessPresentation(Window);
+	HierarchicalDepthHistoryExtent = Extent;
+	HierarchicalDepthHistoryValid = true;
+	TemporalHistoryExtent = Extent;
+	TemporalHistoryValid = true;
+	ExposureHistoryValid = true;
+	PreviousCameraPosition = Camera.Position;
+	PreviousCameraFront = Camera.Front;
+	HasPreviousCameraState = true;
+	FrameResources->Retire(SceneCollection.ReleaseAssetPins());
+	++FrameNumber;
+	CollectingFrame = false;
+	SceneCollection.Clear();
+	ObjectsDrawn = 0;
+	Recovery.Release();
 }
 
-void OpenGLRenderer::enableCulling() const { glEnable(GL_CULL_FACE); glCullFace(GL_BACK); glFrontFace(GL_CCW); }
-void OpenGLRenderer::disableCulling() const { glDisable(GL_CULL_FACE); }
-
-void OpenGLRenderer::validateHeadlessDepthCoverage(GLuint depthTexture, renderer::graph::Extent2D extent) const
+void OpenGLRenderer::RecoverFailedFrame() noexcept
 {
-	if (this->presentationValidated) return;
-	const uint64 pixelCount = static_cast<uint64>(extent.width) * static_cast<uint64>(extent.height);
-	if (pixelCount == 0 || pixelCount > static_cast<uint64>(std::numeric_limits<std::size_t>::max() / sizeof(float32))) throw std::runtime_error("Headless depth validation readback exceeds addressable memory");
-	std::vector<float32> depthValues(static_cast<std::size_t>(pixelCount));
-	glGetTextureSubImage(depthTexture, 0, 0, 0, 0, static_cast<GLsizei>(extent.width), static_cast<GLsizei>(extent.height), 1, GL_DEPTH_COMPONENT, GL_FLOAT, static_cast<GLsizei>(pixelCount * sizeof(float32)), depthValues.data());
-	pipeline::device::throwPendingOpenGLErrors("Headless G-buffer depth validation");
-	uint64 coveredPixelCount = 0;
-	for (const float32 depth : depthValues) if (depth > 0.0001f) ++coveredPixelCount;
-	if (coveredPixelCount == 0) throw std::runtime_error("Headless validation found no opaque depth coverage after the G-buffer pass");
-	std::cerr << "Headless G-buffer validation: " << coveredPixelCount << " covered pixels\n";
-}
-
-void OpenGLRenderer::validateHeadlessColorCoverage(GLuint colorTexture, renderer::graph::Extent2D extent, string_view stage) const
-{
-	if (this->presentationValidated) return;
-	const uint64 pixelCount = static_cast<uint64>(extent.width) * static_cast<uint64>(extent.height);
-	if (pixelCount == 0 || pixelCount > static_cast<uint64>(std::numeric_limits<std::size_t>::max() / (sizeof(float32) * 4U))) throw std::runtime_error("Headless color validation readback exceeds addressable memory");
-	const uint64 componentCount = pixelCount * 4U;
-	std::vector<float32> values(static_cast<std::size_t>(componentCount));
-	glGetTextureSubImage(colorTexture, 0, 0, 0, 0, static_cast<GLsizei>(extent.width), static_cast<GLsizei>(extent.height), 1, GL_RGBA, GL_FLOAT, static_cast<GLsizei>(componentCount * sizeof(float32)), values.data());
-	pipeline::device::throwPendingOpenGLErrors("Headless " + std::string(stage) + " validation");
-	uint64 litPixelCount = 0;
-	for (uint64 offset = 0; offset < componentCount; offset += 4U)
+	std::vector<resource::AssetPtr<resource::Asset>> Pins = this->SceneCollection.ReleaseAssetPins();
+	if (this->FrameResources != nullptr && this->FrameResources->IsAcquired())
 	{
-		if (values[static_cast<std::size_t>(offset)] > 0.001f || values[static_cast<std::size_t>(offset + 1U)] > 0.001f || values[static_cast<std::size_t>(offset + 2U)] > 0.001f) ++litPixelCount;
+		try
+		{
+			this->FrameResources->Retire(std::move(Pins));
+		}
+		catch (...)
+		{
+			this->FrameResources->Abandon(std::move(Pins));
+		}
 	}
-	if (litPixelCount == 0) throw std::runtime_error("Headless validation found no visible color in " + std::string(stage));
-	std::cerr << "Headless " << stage << " validation: " << litPixelCount << " lit pixels\n";
+	this->CollectingFrame = false;
+	this->SceneCollection.Clear();
+	this->ObjectsDrawn = 0;
+	this->HierarchicalDepthHistoryValid = false;
+	this->TemporalHistoryValid = false;
+	this->ExposureHistoryValid = false;
 }
 
-void OpenGLRenderer::validateHeadlessPresentation(const Window& window)
+void OpenGLRenderer::EnableCulling() const
 {
-	if (!this->headlessPresentationValidation || this->presentationValidated) return;
-	const uint32 width = window.getWidth();
-	const uint32 height = window.getHeight();
-	if (width == 0 || height == 0) throw std::runtime_error("Headless presentation validation requires a non-zero window extent");
-	const uint64 byteCount = static_cast<uint64>(width) * static_cast<uint64>(height) * 4U;
-	if (byteCount > static_cast<uint64>(std::numeric_limits<std::size_t>::max())) throw std::runtime_error("Headless presentation validation readback exceeds addressable memory");
+	glEnable(GL_CULL_FACE);
+	glCullFace(GL_BACK);
+	glFrontFace(GL_CCW);
+}
+void OpenGLRenderer::DisableCulling() const
+{
+	glDisable(GL_CULL_FACE);
+}
 
-	std::vector<uint8> pixels(static_cast<std::size_t>(byteCount));
-	GLint previousReadBuffer = GL_BACK;
-	GLint previousPackAlignment = 4;
-	glGetIntegerv(GL_READ_BUFFER, &previousReadBuffer);
-	glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+void OpenGLRenderer::ValidateHeadlessDepthCoverage(GLuint DepthTexture, renderer::graph::Extent2D Extent) const
+{
+	if (this->PresentationValidated)
+		return;
+	const uint64 PixelCount = static_cast<uint64>(Extent.Width) * static_cast<uint64>(Extent.Height);
+	if (PixelCount == 0 || PixelCount > static_cast<uint64>(std::numeric_limits<usize>::max() / sizeof(float32)))
+		throw std::runtime_error("Headless depth validation readback exceeds addressable memory");
+	std::vector<float32> DepthValues(static_cast<usize>(PixelCount));
+	glGetTextureSubImage(DepthTexture, 0, 0, 0, 0, static_cast<GLsizei>(Extent.Width), static_cast<GLsizei>(Extent.Height), 1,
+						 GL_DEPTH_COMPONENT, GL_FLOAT, static_cast<GLsizei>(PixelCount * sizeof(float32)), DepthValues.data());
+	this->Device->CheckErrors("Headless G-buffer depth validation");
+	uint64 CoveredPixelCount = 0;
+	for (const float32 Depth : DepthValues)
+		if (Depth > 0.0001f)
+			++CoveredPixelCount;
+	if (CoveredPixelCount == 0)
+		throw std::runtime_error("Headless validation found no opaque depth coverage after the G-buffer pass");
+	std::cerr << "Headless G-buffer validation: " << CoveredPixelCount << " covered pixels\n";
+}
+
+void OpenGLRenderer::ValidateHeadlessColorCoverage(GLuint ColorTexture, renderer::graph::Extent2D Extent, string_view Stage) const
+{
+	if (this->PresentationValidated)
+		return;
+	const uint64 PixelCount = static_cast<uint64>(Extent.Width) * static_cast<uint64>(Extent.Height);
+	if (PixelCount == 0 || PixelCount > static_cast<uint64>(std::numeric_limits<usize>::max() / (sizeof(float32) * 4U)))
+		throw std::runtime_error("Headless color validation readback exceeds addressable memory");
+	const uint64 ComponentCount = PixelCount * 4U;
+	std::vector<float32> Values(static_cast<usize>(ComponentCount));
+	glGetTextureSubImage(ColorTexture, 0, 0, 0, 0, static_cast<GLsizei>(Extent.Width), static_cast<GLsizei>(Extent.Height), 1, GL_RGBA,
+						 GL_FLOAT, static_cast<GLsizei>(ComponentCount * sizeof(float32)), Values.data());
+	this->Device->CheckErrors("Headless " + std::string(Stage) + " validation");
+	uint64 LitPixelCount = 0;
+	for (uint64 Offset = 0; Offset < ComponentCount; Offset += 4U)
+	{
+		if (Values[static_cast<usize>(Offset)] > 0.001f || Values[static_cast<usize>(Offset + 1U)] > 0.001f ||
+			Values[static_cast<usize>(Offset + 2U)] > 0.001f)
+			++LitPixelCount;
+	}
+	if (LitPixelCount == 0)
+		throw std::runtime_error("Headless validation found no visible color in " + std::string(Stage));
+	std::cerr << "Headless " << Stage << " validation: " << LitPixelCount << " lit pixels\n";
+}
+
+void OpenGLRenderer::ValidateHeadlessPresentation(core::Window &Window)
+{
+	if (!this->HeadlessPresentationValidation || this->PresentationValidated)
+		return;
+	const core::WindowExtent Extent = Window.GetFramebufferExtent();
+	const uint32 Width = Extent.Width;
+	const uint32 Height = Extent.Height;
+	if (Width == 0 || Height == 0)
+		throw std::runtime_error("Headless presentation validation requires a non-zero window extent");
+	const uint64 ByteCount = static_cast<uint64>(Width) * static_cast<uint64>(Height) * 4U;
+	if (ByteCount > static_cast<uint64>(std::numeric_limits<usize>::max()))
+		throw std::runtime_error("Headless presentation validation readback exceeds addressable memory");
+
+	std::vector<uint8> Pixels(static_cast<usize>(ByteCount));
+	// The renderer owns these presentation-readback states. Restore the engine
+	// defaults explicitly instead of querying mutable driver state.
 	glReadBuffer(GL_BACK);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
-	glReadPixels(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height), GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-	glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
-	glReadBuffer(previousReadBuffer);
-	pipeline::device::throwPendingOpenGLErrors("Headless presentation validation");
+	glReadPixels(0, 0, static_cast<GLsizei>(Width), static_cast<GLsizei>(Height), GL_RGBA, GL_UNSIGNED_BYTE, Pixels.data());
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	glReadBuffer(GL_BACK);
+	this->Device->CheckErrors("Headless presentation validation");
 
-	uint64 litPixelCount = 0;
-	for (uint64 offset = 0; offset < byteCount; offset += 4U)
+	uint64 LitPixelCount = 0;
+	for (uint64 Offset = 0; Offset < ByteCount; Offset += 4U)
 	{
-		if (static_cast<uint32>(pixels[static_cast<std::size_t>(offset)]) + static_cast<uint32>(pixels[static_cast<std::size_t>(offset + 1U)]) + static_cast<uint32>(pixels[static_cast<std::size_t>(offset + 2U)]) > 3U) ++litPixelCount;
+		if (static_cast<uint32>(Pixels[static_cast<usize>(Offset)]) + static_cast<uint32>(Pixels[static_cast<usize>(Offset + 1U)]) +
+				static_cast<uint32>(Pixels[static_cast<usize>(Offset + 2U)]) >
+			3U)
+			++LitPixelCount;
 	}
-	if (litPixelCount == 0) throw std::runtime_error("Headless presentation validation found an all-black presented frame");
-	std::cerr << "Headless presentation validation: " << litPixelCount << " non-black pixels\n";
-	this->presentationValidated = true;
+	if (LitPixelCount == 0)
+		throw std::runtime_error("Headless presentation validation found an all-black presented frame");
+	std::cerr << "Headless presentation validation: " << LitPixelCount << " non-black pixels\n";
+	this->PresentationValidated = true;
 	// In the opt-in hidden validation mode, one successfully presented frame is
 	// the test result. End the application so automated validation cannot mask
 	// a failure behind an externally forced timeout.
-	window.closeWindow();
+	Window.RequestClose();
 }

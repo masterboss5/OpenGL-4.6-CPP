@@ -1,47 +1,82 @@
 #pragma once
 
-#include <array>
+#include "src/pipeline/device/Device.h"
+#include "src/resource/Asset.h"
+#include "src/types.h"
 
 #include <GL/glew.h>
-
-#include "src/types.h"
+#include <array>
+#include <vector>
 
 namespace renderer
 {
-	struct FrameBufferSlice final
-	{
-		GLuint buffer = 0;
-		void* mappedMemory = nullptr;
-		uint64 capacityInBytes = 0;
-	};
+struct FrameBufferSlice final
+{
+	GLuint Buffer = 0;
+	void *MappedMemory = nullptr;
+	uint64 CapacityInBytes = 0;
+};
 
-	struct FrameResources final
-	{
-		FrameBufferSlice candidateInstances;
-		FrameBufferSlice visibleInstances;
-		FrameBufferSlice indirectCommands;
-		FrameBufferSlice batchMetadata;
-		FrameBufferSlice visibilityScratch;
-		uint64 frameNumber = 0;
-	};
+struct FrameResources final
+{
+	FrameBufferSlice FrameConstants;
+	FrameBufferSlice Materials;
+	FrameBufferSlice ShadowData;
+	FrameBufferSlice Lights;
+	FrameBufferSlice CandidateInstances;
+	FrameBufferSlice ShadowInstances;
+	FrameBufferSlice VisibleInstances;
+	FrameBufferSlice IndirectCommands;
+	FrameBufferSlice BatchMetadata;
+	FrameBufferSlice VisibilityScratch;
+	FrameBufferSlice SkinMatrices;
+	FrameBufferSlice MorphWeights;
+	uint64 FrameNumber = 0;
+};
 
-	class FrameResourceRing final
+struct FrameResourceCapacitySpecification final
+{
+	uint64 FrameConstants = 0;
+	uint64 Materials = 0;
+	uint64 ShadowData = 0;
+	uint64 Lights = 0;
+	uint64 CandidateInstances = 0;
+	uint64 ShadowInstances = 0;
+	uint64 VisibleInstances = 0;
+	uint64 IndirectCommands = 0;
+	uint64 BatchMetadata = 0;
+	uint64 VisibilityScratch = 0;
+	uint64 SkinMatrices = 0;
+	uint64 MorphWeights = 0;
+};
+
+class FrameResourceRing final
+{
+  public:
+	static constexpr uint32 FrameCount = 3;
+	FrameResourceRing(pipeline::device::Device &Device, const FrameResourceCapacitySpecification &Capacities);
+	~FrameResourceRing();
+	FrameResourceRing(const FrameResourceRing &) = delete;
+	FrameResourceRing &operator=(const FrameResourceRing &) = delete;
+	FrameResources &Acquire(uint64 FrameNumber);
+	void Retire(std::vector<resource::AssetPtr<resource::Asset>> &&AssetPins);
+	void Abandon(std::vector<resource::AssetPtr<resource::Asset>> AssetPins = {}) noexcept;
+	[[nodiscard]] bool IsAcquired() const noexcept;
+
+  private:
+	pipeline::device::Device *Device = nullptr;
+	struct Slot final
 	{
-	public:
-		static constexpr uint32 FrameCount = 3;
-		FrameResourceRing(uint64 candidateBytes, uint64 visibleBytes, uint64 indirectBytes, uint64 batchBytes, uint64 visibilityScratchBytes);
-		~FrameResourceRing();
-		FrameResourceRing(const FrameResourceRing&) = delete;
-		FrameResourceRing& operator=(const FrameResourceRing&) = delete;
-		FrameResources& acquire(uint64 frameNumber);
-		void retire();
-		[[nodiscard]] bool isAcquired() const noexcept;
-	private:
-		struct Slot final { FrameResources resources; GLsync fence = nullptr; };
-		std::array<Slot, FrameCount> slots;
-		uint32 activeSlot = ~uint32 { 0 };
-		[[nodiscard]] static FrameBufferSlice createBuffer(uint64 capacityInBytes);
-		static void destroyBuffer(FrameBufferSlice& slice) noexcept;
-		static void waitForFence(GLsync& fence);
+		FrameResources Resources;
+		pipeline::device::DeviceSync Fence;
+		std::vector<resource::AssetPtr<resource::Asset>> AssetPins;
+		bool Usable = true;
 	};
-}
+	std::array<Slot, FrameCount> Slots;
+	uint32 ActiveSlot = ~uint32{0};
+	[[nodiscard]] FrameBufferSlice CreateBuffer(uint64 CapacityInBytes);
+	static void DestroyBuffer(FrameBufferSlice &Slice) noexcept;
+	void DestroyAllBuffers() noexcept;
+	void WaitForFence(pipeline::device::DeviceSync &Fence);
+};
+} // namespace renderer

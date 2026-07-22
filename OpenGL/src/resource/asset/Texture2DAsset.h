@@ -1,32 +1,35 @@
 #pragma once
 
+#include "src/pipeline/texture/Texture2D.h"
+#include "src/resource/Asset.h"
+
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
-#include "src/pipeline/texture/Texture2D.h"
-
 namespace resource
 {
-	class Texture2DAsset final : public Asset
-	{
-	public:
-		Texture2DAsset(std::string name, int32 width, int32 height, int32 channels, std::vector<uint8> pixels);
+class Texture2DAsset final : public Asset
+{
+  public:
+	Texture2DAsset(std::string Name, int32 Width, int32 Height, int32 Channels, std::vector<uint8> Pixels);
 
-		[[nodiscard]] bool requiresGpuRealization() const noexcept override;
-		[[nodiscard]] AssetGpuRealizationResult realizeGpu() override;
+	[[nodiscard]] bool RequiresGPURealization() const noexcept override;
+	[[nodiscard]] AssetGPURealizationResult RealizeGPU(pipeline::device::Device &Device) override;
 
-		[[nodiscard]] int32 getWidth() const noexcept;
-		[[nodiscard]] int32 getHeight() const noexcept;
-		[[nodiscard]] int32 getChannels() const noexcept;
-		[[nodiscard]] const renderer::texture::Texture2D* getGpuTexture() const noexcept;
+	[[nodiscard]] int32 GetWidth() const noexcept;
+	[[nodiscard]] int32 GetHeight() const noexcept;
+	[[nodiscard]] int32 GetChannels() const noexcept;
+	[[nodiscard]] std::span<const uint8> GetPixels() const noexcept;
+	[[nodiscard]] const renderer::texture::Texture2D *GetGPUTexture() const noexcept;
 
-	private:
-		std::string name;
-		int32 width;
-		int32 height;
-		int32 channels;
-		std::vector<uint8> pixels;
-		std::unique_ptr<renderer::texture::Texture2D> gpuTexture;
-	};
-}
+  private:
+	std::string Name;
+	int32 Width;
+	int32 Height;
+	int32 Channels;
+	std::vector<uint8> Pixels;
+	std::unique_ptr<renderer::texture::Texture2D> GPUTexture;
+};
+} // namespace resource

@@ -1,239 +1,229 @@
 #pragma once
+#include "src/concepts.h"
+#include "src/util/UUID.h"
+
 #include <atomic>
 #include <exception>
 #include <string>
 #include <type_traits>
 #include <utility>
 
-#include "src/util/UUID.h"
+namespace pipeline::device
+{
+class Device;
+}
 
 namespace resource
 {
-	template<typename T>
-	class AssetPtr;
+template <IsAsset T> class AssetPtr;
 
-	struct AssetGpuRealizationResult final
+struct AssetGPURealizationResult final
+{
+	bool Succeeded = true;
+	std::string Error;
+};
+
+class Asset
+{
+  private:
+	util::UUID UUID;
+	std::atomic<uint32> ReferenceCount = 0;
+
+  public:
+	explicit Asset(util::UUID UUID) : UUID(UUID)
 	{
-		bool succeeded = true;
-		std::string error;
-	};
+	}
 
-	class Asset
+	Asset(const Asset &) = delete;
+	Asset &operator=(const Asset &) = delete;
+
+	Asset(Asset &&Other) noexcept : UUID(std::move(Other.UUID))
 	{
-	private:
-		util::UUID uuid;
-		std::atomic<uint32> referenceCount = 0;
+	}
 
-	public:
-		explicit Asset(util::UUID uuid)
-			: uuid(uuid)
+	Asset &operator=(Asset &&) = delete;
+
+	virtual ~Asset() = default;
+
+	[[nodiscard]] const util::UUID &GetUUID() const
+	{
+		return this->UUID;
+	}
+
+	[[nodiscard]] uint32 GetReferenceCount() const noexcept
+	{
+		return this->ReferenceCount.load(std::memory_order_acquire);
+	}
+
+	void IncrementReferenceCount() noexcept
+	{
+		this->ReferenceCount.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	void DecrementReferenceCount() noexcept
+	{
+		uint32 References = this->ReferenceCount.load(std::memory_order_acquire);
+		while (References != 0)
 		{
-		}
-
-		Asset(const Asset&) = delete;
-		Asset& operator=(const Asset&) = delete;
-
-		Asset(Asset&& other) noexcept
-			: uuid(std::move(other.uuid))
-		{
-		}
-
-		Asset& operator=(Asset&&) = delete;
-
-		virtual ~Asset() = default;
-
-		const util::UUID& getUUID() const
-		{
-			return this->uuid;
-		}
-
-		[[nodiscard]] uint32 getReferenceCount() const noexcept
-		{
-			return this->referenceCount.load(std::memory_order_acquire);
-		}
-
-		void incrementReferenceCount() noexcept
-		{
-			this->referenceCount.fetch_add(1, std::memory_order_relaxed);
-		}
-
-		void decrementReferenceCount() noexcept
-		{
-			uint32 references = this->referenceCount.load(std::memory_order_acquire);
-			while (references != 0)
+			if (this->ReferenceCount.compare_exchange_weak(References, References - 1, std::memory_order_acq_rel,
+														   std::memory_order_acquire))
 			{
-				if (this->referenceCount.compare_exchange_weak(
-					references,
-					references - 1,
-					std::memory_order_acq_rel,
-					std::memory_order_acquire))
+				if (References == 1)
 				{
-					if (references == 1)
-					{
-						delete this;
-					}
-					return;
+					delete this;
 				}
+				return;
 			}
-
-			std::terminate();
 		}
 
-		virtual bool requiresGpuRealization() const noexcept
-		{
-			return false;
-		}
+		std::terminate();
+	}
 
-		virtual AssetGpuRealizationResult realizeGpu()
-		{
-			return {};
-		}
-	};
-
-	template<typename T>
-	class AssetPtr final
+	[[nodiscard]] virtual bool RequiresGPURealization() const noexcept
 	{
-		static_assert(std::is_base_of_v<Asset, T>, "AssetPtr requires an Asset-derived type");
+		return false;
+	}
 
-	public:
-		AssetPtr() = default;
+	[[nodiscard]] virtual AssetGPURealizationResult RealizeGPU(pipeline::device::Device &)
+	{
+		return {};
+	}
+};
 
-		AssetPtr(std::nullptr_t) noexcept
+template <IsAsset T> class AssetPtr final
+{
+  public:
+	AssetPtr() = default;
+
+	AssetPtr(std::nullptr_t) noexcept
+	{
+	}
+
+	AssetPtr(const AssetPtr &Other) noexcept : Asset(Other.Asset)
+	{
+		if (this->Asset != nullptr)
 		{
+			this->Asset->IncrementReferenceCount();
 		}
+	}
 
-		AssetPtr(const AssetPtr& other) noexcept
-			: asset(other.asset)
+	template <IsAsset U>
+		requires std::is_convertible_v<U *, T *>
+	AssetPtr(const AssetPtr<U> &Other) noexcept : Asset(Other.Asset)
+	{
+		if (this->Asset != nullptr)
 		{
-			if (this->asset != nullptr)
-			{
-				this->asset->incrementReferenceCount();
-			}
+			this->Asset->IncrementReferenceCount();
 		}
+	}
 
-		template<typename U>
-		requires std::is_convertible_v<U*, T*>
-		AssetPtr(const AssetPtr<U>& other) noexcept
-			: asset(other.asset)
+	AssetPtr(AssetPtr &&Other) noexcept : Asset(std::exchange(Other.Asset, nullptr))
+	{
+	}
+
+	template <IsAsset U>
+		requires std::is_convertible_v<U *, T *>
+	AssetPtr(AssetPtr<U> &&Other) noexcept : Asset(Other.Detach())
+	{
+	}
+
+	~AssetPtr()
+	{
+		this->Reset();
+	}
+
+	AssetPtr &operator=(const AssetPtr &Other) noexcept
+	{
+		if (this != &Other)
 		{
-			if (this->asset != nullptr)
-			{
-				this->asset->incrementReferenceCount();
-			}
+			this->Assign(Other.Asset);
 		}
+		return *this;
+	}
 
-		AssetPtr(AssetPtr&& other) noexcept
-			: asset(std::exchange(other.asset, nullptr))
+	AssetPtr &operator=(AssetPtr &&Other) noexcept
+	{
+		if (this != &Other)
 		{
+			this->Reset();
+			this->Asset = std::exchange(Other.Asset, nullptr);
 		}
+		return *this;
+	}
 
-		template<typename U>
-		requires std::is_convertible_v<U*, T*>
-		AssetPtr(AssetPtr<U>&& other) noexcept
-			: asset(other.detach())
+	[[nodiscard]] T *Get() const noexcept
+	{
+		return this->Asset;
+	}
+
+	[[nodiscard]] T *operator->() const noexcept
+	{
+		return this->Asset;
+	}
+
+	[[nodiscard]] T &operator*() const noexcept
+	{
+		return *this->Asset;
+	}
+
+	[[nodiscard]] explicit operator bool() const noexcept
+	{
+		return this->Asset != nullptr;
+	}
+
+	[[nodiscard]] bool operator==(std::nullptr_t) const noexcept
+	{
+		return this->Asset == nullptr;
+	}
+
+	void Reset() noexcept
+	{
+		if (this->Asset != nullptr)
 		{
+			T *PreviousAsset = std::exchange(this->Asset, nullptr);
+			PreviousAsset->DecrementReferenceCount();
 		}
+	}
 
-		~AssetPtr()
+	template <typename... ArgumentTypes> [[nodiscard]] static AssetPtr Make(ArgumentTypes &&...Arguments)
+	{
+		AssetPtr Pointer;
+		Pointer.Asset = new T(std::forward<ArgumentTypes>(Arguments)...);
+		Pointer.Asset->IncrementReferenceCount();
+		return Pointer;
+	}
+
+	[[nodiscard]] static AssetPtr Retain(T *Asset) noexcept
+	{
+		return AssetPtr(Asset);
+	}
+
+  private:
+	T *Asset = nullptr;
+
+	explicit AssetPtr(T *Asset) noexcept : Asset(Asset)
+	{
+		if (this->Asset != nullptr)
 		{
-			this->reset();
+			this->Asset->IncrementReferenceCount();
 		}
+	}
 
-		AssetPtr& operator=(const AssetPtr& other) noexcept
+	void Assign(T *NewAsset) noexcept
+	{
+		if (NewAsset != nullptr)
 		{
-			if (this != &other)
-			{
-				this->assign(other.asset);
-			}
-			return *this;
+			NewAsset->IncrementReferenceCount();
 		}
+		this->Reset();
+		this->Asset = NewAsset;
+	}
 
-		AssetPtr& operator=(AssetPtr&& other) noexcept
-		{
-			if (this != &other)
-			{
-				this->reset();
-				this->asset = std::exchange(other.asset, nullptr);
-			}
-			return *this;
-		}
+	[[nodiscard]] T *Detach() noexcept
+	{
+		return std::exchange(this->Asset, nullptr);
+	}
 
-		[[nodiscard]] T* get() const noexcept
-		{
-			return this->asset;
-		}
-
-		[[nodiscard]] T* operator->() const noexcept
-		{
-			return this->asset;
-		}
-
-		[[nodiscard]] T& operator*() const noexcept
-		{
-			return *this->asset;
-		}
-
-		explicit operator bool() const noexcept
-		{
-			return this->asset != nullptr;
-		}
-
-		[[nodiscard]] bool operator==(std::nullptr_t) const noexcept
-		{
-			return this->asset == nullptr;
-		}
-
-		void reset() noexcept
-		{
-			if (this->asset != nullptr)
-			{
-				T* previousAsset = std::exchange(this->asset, nullptr);
-				previousAsset->decrementReferenceCount();
-			}
-		}
-
-		template<typename... Arguments>
-		[[nodiscard]] static AssetPtr make(Arguments&&... arguments)
-		{
-			AssetPtr pointer;
-			pointer.asset = new T(std::forward<Arguments>(arguments)...);
-			pointer.asset->incrementReferenceCount();
-			return pointer;
-		}
-
-		[[nodiscard]] static AssetPtr retain(T* asset) noexcept
-		{
-			return AssetPtr(asset);
-		}
-
-	private:
-		T* asset = nullptr;
-
-		explicit AssetPtr(T* asset) noexcept
-			: asset(asset)
-		{
-			if (this->asset != nullptr)
-			{
-				this->asset->incrementReferenceCount();
-			}
-		}
-
-		void assign(T* newAsset) noexcept
-		{
-			if (newAsset != nullptr)
-			{
-				newAsset->incrementReferenceCount();
-			}
-			this->reset();
-			this->asset = newAsset;
-		}
-
-		[[nodiscard]] T* detach() noexcept
-		{
-			return std::exchange(this->asset, nullptr);
-		}
-
-		template<typename U>
-		friend class AssetPtr;
-	};
-}
+	template <IsAsset U> friend class AssetPtr;
+};
+} // namespace resource

@@ -16,9 +16,20 @@ vec3 aces(vec3 value)
     return clamp((value * (a * value + b)) / (value * (c * value + d) + e), 0.0, 1.0);
 }
 
+vec3 linearToSrgb(vec3 linearColor)
+{
+	vec3 low = linearColor * 12.92;
+	vec3 high = 1.055 * pow(max(linearColor, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+	return mix(high, low, lessThanEqual(linearColor, vec3(0.0031308)));
+}
+
 void main()
 {
 	float exposure = texelFetch(exposureTexture, ivec2(0), 0).r;
 	vec3 hdr = (texture(sceneTexture, textureCoordinate).rgb + texture(bloomTexture, textureCoordinate).rgb) * exposure;
-    pixelColor = vec4(pow(aces(hdr), vec3(1.0 / 2.2)), 1.0);
+	vec3 mapped = aces(hdr);
+#ifdef ENGINE_MANUAL_SRGB_ENCODE
+	mapped = linearToSrgb(mapped);
+#endif
+    pixelColor = vec4(mapped, 1.0);
 }

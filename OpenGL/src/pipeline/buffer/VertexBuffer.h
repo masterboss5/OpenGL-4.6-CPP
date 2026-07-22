@@ -1,5 +1,9 @@
 #pragma once
 
+#include "src/concepts.h"
+#include "src/types.h"
+
+#include <GL/glew.h>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -9,149 +13,148 @@
 #include <string_view>
 #include <type_traits>
 
-#include <GL/glew.h>
+namespace pipeline::device
+{
+class Device;
+}
 
 namespace renderer
 {
-	enum class VertexBufferStorage : std::uint32_t
-	{
-		None = 0,
-		DynamicUpdates = GL_DYNAMIC_STORAGE_BIT,
-		MapRead = GL_MAP_READ_BIT,
-		MapWrite = GL_MAP_WRITE_BIT,
-		PersistentMapping = GL_MAP_PERSISTENT_BIT,
-		CoherentMapping = GL_MAP_COHERENT_BIT,
-		ClientStorage = GL_CLIENT_STORAGE_BIT
-	};
+enum class VertexBufferStorage : uint32
+{
+	None = 0,
+	DynamicUpdates = GL_DYNAMIC_STORAGE_BIT,
+	MapRead = GL_MAP_READ_BIT,
+	MapWrite = GL_MAP_WRITE_BIT,
+	PersistentMapping = GL_MAP_PERSISTENT_BIT,
+	CoherentMapping = GL_MAP_COHERENT_BIT,
+	ClientStorage = GL_CLIENT_STORAGE_BIT
+};
 
-	enum class VertexBufferMapAccess : std::uint32_t
-	{
-		None = 0,
-		Read = GL_MAP_READ_BIT,
-		Write = GL_MAP_WRITE_BIT,
-		InvalidateRange = GL_MAP_INVALIDATE_RANGE_BIT,
-		InvalidateBuffer = GL_MAP_INVALIDATE_BUFFER_BIT,
-		FlushExplicit = GL_MAP_FLUSH_EXPLICIT_BIT,
-		Unsynchronized = GL_MAP_UNSYNCHRONIZED_BIT,
-		Persistent = GL_MAP_PERSISTENT_BIT,
-		Coherent = GL_MAP_COHERENT_BIT
-	};
+enum class VertexBufferMapAccess : uint32
+{
+	None = 0,
+	Read = GL_MAP_READ_BIT,
+	Write = GL_MAP_WRITE_BIT,
+	InvalidateRange = GL_MAP_INVALIDATE_RANGE_BIT,
+	InvalidateBuffer = GL_MAP_INVALIDATE_BUFFER_BIT,
+	FlushExplicit = GL_MAP_FLUSH_EXPLICIT_BIT,
+	Unsynchronized = GL_MAP_UNSYNCHRONIZED_BIT,
+	Persistent = GL_MAP_PERSISTENT_BIT,
+	Coherent = GL_MAP_COHERENT_BIT
+};
 
-	constexpr VertexBufferStorage operator|(VertexBufferStorage left, VertexBufferStorage right) noexcept
-	{
-		return static_cast<VertexBufferStorage>(static_cast<std::uint32_t>(left) | static_cast<std::uint32_t>(right));
-	}
-
-	constexpr VertexBufferMapAccess operator|(VertexBufferMapAccess left, VertexBufferMapAccess right) noexcept
-	{
-		return static_cast<VertexBufferMapAccess>(static_cast<std::uint32_t>(left) | static_cast<std::uint32_t>(right));
-	}
-
-	struct VertexBufferDescriptor final
-	{
-		std::size_t sizeInBytes = 0;
-		std::size_t strideInBytes = 0;
-		VertexBufferStorage storageOptions = VertexBufferStorage::DynamicUpdates;
-		const void* initialData = nullptr;
-		std::string_view debugName = "VertexBuffer";
-	};
-
-	class VertexBufferError final : public std::runtime_error
-	{
-	public:
-		explicit VertexBufferError(const std::string& message);
-	};
-
-	class VertexBuffer final
-	{
-	public:
-		explicit VertexBuffer(const VertexBufferDescriptor& descriptor);
-		~VertexBuffer();
-
-		VertexBuffer(const VertexBuffer&) = delete;
-		VertexBuffer& operator=(const VertexBuffer&) = delete;
-
-		VertexBuffer(VertexBuffer&& other) noexcept;
-		VertexBuffer& operator=(VertexBuffer&& other) noexcept;
-
-		template<typename TVertex>
-		requires std::is_trivially_copyable_v<TVertex>
-		[[nodiscard]] static VertexBuffer create(
-			std::span<const TVertex> vertices,
-			VertexBufferStorage storageOptions = VertexBufferStorage::DynamicUpdates,
-			std::string_view debugName = "VertexBuffer")
-		{
-			if (vertices.empty())
-			{
-				throw VertexBufferError("VertexBuffer::create requires at least one vertex");
-			}
-
-			if (vertices.size() > std::numeric_limits<std::size_t>::max() / sizeof(TVertex))
-			{
-				throw VertexBufferError("VertexBuffer::create vertex data exceeds addressable storage");
-			}
-
-			return VertexBuffer({
-				.sizeInBytes = sizeof(TVertex) * vertices.size(),
-				.strideInBytes = sizeof(TVertex),
-				.storageOptions = storageOptions,
-				.initialData = vertices.data(),
-				.debugName = debugName
-			});
-		}
-
-		void update(std::size_t destinationOffsetInBytes, const void* data, std::size_t sizeInBytes);
-
-		template<typename TVertex>
-		requires std::is_trivially_copyable_v<TVertex>
-		void updateVertices(std::size_t firstVertex, std::span<const TVertex> vertices)
-		{
-			this->requireUsable();
-			if (sizeof(TVertex) != this->strideInBytes)
-			{
-				throw VertexBufferError("VertexBuffer::updateVertices vertex type does not match the buffer stride");
-			}
-
-			if (firstVertex > std::numeric_limits<std::size_t>::max() / this->strideInBytes ||
-				vertices.size() > std::numeric_limits<std::size_t>::max() / sizeof(TVertex))
-			{
-				throw VertexBufferError("VertexBuffer::updateVertices range exceeds addressable storage");
-			}
-
-			this->update(firstVertex * this->strideInBytes, vertices.data(), sizeof(TVertex) * vertices.size());
-		}
-
-		[[nodiscard]] void* mapRange(std::size_t offsetInBytes, std::size_t sizeInBytes, VertexBufferMapAccess accessOptions);
-		void flushMappedRange(std::size_t offsetInBytes, std::size_t sizeInBytes);
-		void unmap();
-		void invalidateRange(std::size_t offsetInBytes, std::size_t sizeInBytes);
-		void copyTo(VertexBuffer& destination, std::size_t sourceOffsetInBytes, std::size_t destinationOffsetInBytes, std::size_t sizeInBytes) const;
-
-		void bindToVertexArray(GLuint vertexArrayID, GLuint bindingIndex, std::size_t offsetInBytes = 0) const;
-		void setDebugName(std::string_view debugName);
-
-		[[nodiscard]] GLuint getID() const noexcept;
-		[[nodiscard]] std::size_t getSizeInBytes() const noexcept;
-		[[nodiscard]] std::size_t getStrideInBytes() const noexcept;
-		[[nodiscard]] std::size_t getVertexCount() const noexcept;
-		[[nodiscard]] VertexBufferStorage getStorageOptions() const noexcept;
-		[[nodiscard]] std::string_view getDebugName() const noexcept;
-		[[nodiscard]] bool isMapped() const noexcept;
-		[[nodiscard]] bool isStorageImmutable() const;
-
-	private:
-		GLuint ID = 0;
-		std::size_t sizeInBytes = 0;
-		std::size_t strideInBytes = 0;
-		VertexBufferStorage storageOptions = VertexBufferStorage::None;
-		std::string debugName;
-		bool mapped = false;
-		VertexBufferMapAccess activeMapOptions = VertexBufferMapAccess::None;
-		std::size_t activeMapOffsetInBytes = 0;
-		std::size_t activeMapSizeInBytes = 0;
-
-		void requireUsable() const;
-		void validateRange(std::size_t offsetInBytes, std::size_t rangeSizeInBytes, std::string_view operation) const;
-		void release() noexcept;
-	};
+constexpr VertexBufferStorage operator|(VertexBufferStorage Left, VertexBufferStorage Right) noexcept
+{
+	return static_cast<VertexBufferStorage>(static_cast<uint32>(Left) | static_cast<uint32>(Right));
 }
+
+constexpr VertexBufferMapAccess operator|(VertexBufferMapAccess Left, VertexBufferMapAccess Right) noexcept
+{
+	return static_cast<VertexBufferMapAccess>(static_cast<uint32>(Left) | static_cast<uint32>(Right));
+}
+
+struct VertexBufferDescriptor final
+{
+	usize SizeInBytes = 0;
+	usize StrideInBytes = 0;
+	VertexBufferStorage StorageOptions = VertexBufferStorage::DynamicUpdates;
+	const void *InitialData = nullptr;
+	std::string_view DebugName = "VertexBuffer";
+};
+
+class VertexBufferError final : public std::runtime_error
+{
+  public:
+	explicit VertexBufferError(const std::string &Message);
+};
+
+class VertexBuffer final
+{
+  public:
+	VertexBuffer(pipeline::device::Device &Device, const VertexBufferDescriptor &Descriptor);
+	~VertexBuffer();
+
+	VertexBuffer(const VertexBuffer &) = delete;
+	VertexBuffer &operator=(const VertexBuffer &) = delete;
+
+	VertexBuffer(VertexBuffer &&Other) noexcept;
+	VertexBuffer &operator=(VertexBuffer &&Other) noexcept;
+
+	template <TriviallyCopyable TVertex>
+	[[nodiscard]] static VertexBuffer Create(pipeline::device::Device &Device, std::span<const TVertex> Vertices,
+											 VertexBufferStorage StorageOptions = VertexBufferStorage::DynamicUpdates,
+											 std::string_view DebugName = "VertexBuffer")
+	{
+		if (Vertices.empty())
+		{
+			throw VertexBufferError("VertexBuffer::create requires at least one vertex");
+		}
+
+		if (Vertices.size() > std::numeric_limits<usize>::max() / sizeof(TVertex))
+		{
+			throw VertexBufferError("VertexBuffer::create vertex data exceeds addressable storage");
+		}
+
+		return VertexBuffer(Device, {.SizeInBytes = sizeof(TVertex) * Vertices.size(),
+									 .StrideInBytes = sizeof(TVertex),
+									 .StorageOptions = StorageOptions,
+									 .InitialData = Vertices.data(),
+									 .DebugName = DebugName});
+	}
+
+	void Update(usize DestinationOffsetInBytes, const void *Data, usize SizeInBytes);
+
+	template <TriviallyCopyable TVertex> void UpdateVertices(usize FirstVertex, std::span<const TVertex> Vertices)
+	{
+		this->RequireUsable();
+		if (sizeof(TVertex) != this->StrideInBytes)
+		{
+			throw VertexBufferError("VertexBuffer::updateVertices vertex type does not match the buffer stride");
+		}
+
+		if (FirstVertex > std::numeric_limits<usize>::max() / this->StrideInBytes ||
+			Vertices.size() > std::numeric_limits<usize>::max() / sizeof(TVertex))
+		{
+			throw VertexBufferError("VertexBuffer::updateVertices range exceeds addressable storage");
+		}
+
+		this->Update(FirstVertex * this->StrideInBytes, Vertices.data(), sizeof(TVertex) * Vertices.size());
+	}
+
+	[[nodiscard]] void *MapRange(usize OffsetInBytes, usize SizeInBytes, VertexBufferMapAccess AccessOptions);
+	void FlushMappedRange(usize OffsetInBytes, usize SizeInBytes);
+	void Unmap();
+	void InvalidateRange(usize OffsetInBytes, usize SizeInBytes);
+	void CopyTo(VertexBuffer &Destination, usize SourceOffsetInBytes, usize DestinationOffsetInBytes, usize SizeInBytes) const;
+
+	void BindToVertexArray(GLuint VertexArrayID, GLuint BindingIndex, usize OffsetInBytes = 0) const;
+	void SetDebugName(std::string_view DebugName);
+
+	[[nodiscard]] GLuint GetID() const noexcept;
+	[[nodiscard]] usize GetSizeInBytes() const noexcept;
+	[[nodiscard]] usize GetStrideInBytes() const noexcept;
+	[[nodiscard]] usize GetVertexCount() const noexcept;
+	[[nodiscard]] VertexBufferStorage GetStorageOptions() const noexcept;
+	[[nodiscard]] std::string_view GetDebugName() const noexcept;
+	[[nodiscard]] bool IsMapped() const noexcept;
+	[[nodiscard]] bool IsStorageImmutable() const;
+	[[nodiscard]] pipeline::device::Device &GetDevice() const;
+
+  private:
+	pipeline::device::Device *Device = nullptr;
+	GLuint ID = 0;
+	usize SizeInBytes = 0;
+	usize StrideInBytes = 0;
+	VertexBufferStorage StorageOptions = VertexBufferStorage::None;
+	std::string DebugName;
+	bool Mapped = false;
+	VertexBufferMapAccess ActiveMapOptions = VertexBufferMapAccess::None;
+	usize ActiveMapOffsetInBytes = 0;
+	usize ActiveMapSizeInBytes = 0;
+
+	void RequireUsable() const;
+	void ValidateRange(usize OffsetInBytes, usize RangeSizeInBytes, std::string_view Operation) const;
+	void Release() noexcept;
+};
+} // namespace renderer

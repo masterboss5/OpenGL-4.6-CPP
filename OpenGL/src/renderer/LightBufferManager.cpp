@@ -1,98 +1,143 @@
 #include "LightBufferManager.h"
 
+#include "src/concepts.h"
+#include "src/scene/SceneCollection.h"
+
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
-
-#include "src/scene/SceneCollection.h"
 
 namespace
 {
-	template<typename LightType>
-	[[nodiscard]] float32 calculateInfluenceRange(const LightType& light)
+template <IsAttenuatedLightSource LightType> [[nodiscard]] float32 CalculateInfluenceRange(const LightType &Light)
+{
+	constexpr float32 MinimumContribution = 0.01f;
+	const float32 PeakIntensity = std::max({Light.Diffuse.r, Light.Diffuse.g, Light.Diffuse.b, MinimumContribution});
+	const float32 ConstantTerm = Light.Constant - PeakIntensity / MinimumContribution;
+	if (Light.Quadratic > 0.0f)
 	{
-		constexpr float32 minimumContribution = 0.01f;
-		const float32 peakIntensity = std::max({ light.diffuse.r, light.diffuse.g, light.diffuse.b, minimumContribution });
-		const float32 constantTerm = light.constant - peakIntensity / minimumContribution;
-		if (light.quadratic > 0.0f)
-		{
-			const float32 discriminant = light.linear * light.linear - 4.0f * light.quadratic * constantTerm;
-			if (discriminant > 0.0f) return std::max((-light.linear + std::sqrt(discriminant)) / (2.0f * light.quadratic), 0.0f);
-		}
-		if (light.linear > 0.0f) return std::max(-constantTerm / light.linear, 0.0f);
-		return 1000.0f;
+		const float32 Discriminant = Light.Linear * Light.Linear - 4.0f * Light.Quadratic * ConstantTerm;
+		if (Discriminant > 0.0f)
+			return std::max((-Light.Linear + std::sqrt(Discriminant)) / (2.0f * Light.Quadratic), 0.0f);
 	}
+	if (Light.Linear > 0.0f)
+		return std::max(-ConstantTerm / Light.Linear, 0.0f);
+	return 1000.0f;
+}
+} // namespace
+
+LightBufferManager::LightBufferManager(const usize MaxLights) : MaxLights(static_cast<uint32>(MaxLights))
+{
+	if (MaxLights == 0 || MaxLights > std::numeric_limits<uint32>::max())
+		throw std::invalid_argument("LightBufferManager capacity must fit a non-zero GPU light count");
+	this->GPURecords.reserve(this->MaxLights);
 }
 
-LightBufferManager::LightBufferManager(size_t maxLights)
-	: maxLights(static_cast<uint32>(maxLights)),
-	  pointLightSourcesSSBO(maxLights),
-	  spotLightSourcesSSBO(maxLights),
-	directionalLightSourcesSSBO(maxLights)
+uint32 LightBufferManager::GetTotalLightSourceCount() const
 {
-	glCreateBuffers(1, &this->unifiedLightBuffer);
-	glNamedBufferStorage(this->unifiedLightBuffer, static_cast<GLsizeiptr>(sizeof(renderer::GpuLightRecord) * this->maxLights), nullptr, GL_DYNAMIC_STORAGE_BIT);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Lights), this->unifiedLightBuffer);
+	return static_cast<uint32>(this->PointLightSources.size() + this->SpotLightSources.size() + this->DirectionalLightSources.size());
 }
 
-LightBufferManager::~LightBufferManager()
+const std::vector<PointLightSource> &LightBufferManager::GetPointLights() const noexcept
 {
-	if (this->unifiedLightBuffer != 0) glDeleteBuffers(1, &this->unifiedLightBuffer);
+	return this->PointLightSources;
+}
+const std::vector<SpotLightSource> &LightBufferManager::GetSpotLights() const noexcept
+{
+	return this->SpotLightSources;
+}
+const std::vector<DirectionalLightSource> &LightBufferManager::GetDirectionalLights() const noexcept
+{
+	return this->DirectionalLightSources;
 }
 
-uint32 LightBufferManager::getTotalLightSourceCount() const
+std::span<const renderer::GPULightRecord> LightBufferManager::GetGPURecords() const noexcept
 {
-	return static_cast<uint32>(this->pointLightSources.size() + this->spotLightSources.size() + this->directionalLightSources.size());
+	return this->GPURecords;
 }
 
-const std::vector<PointLightSource>& LightBufferManager::getPointLights() const noexcept { return this->pointLightSources; }
-const std::vector<SpotLightSource>& LightBufferManager::getSpotLights() const noexcept { return this->spotLightSources; }
-const std::vector<DirectionalLightSource>& LightBufferManager::getDirectionalLights() const noexcept { return this->directionalLightSources; }
-
-void LightBufferManager::clear()
+void LightBufferManager::Clear()
 {
-	this->pointLightSources.clear();
-	this->spotLightSources.clear();
-	this->directionalLightSources.clear();
+	this->PointLightSources.clear();
+	this->SpotLightSources.clear();
+	this->DirectionalLightSources.clear();
+	this->GPURecords.clear();
 }
 
-void LightBufferManager::uploadLightSources(std::vector<PointLightSource>& lightSources)
+void LightBufferManager::UploadLightSources(const std::vector<PointLightSource> &LightSources)
 {
-	this->pointLightSources = lightSources;
-	this->pointLightSourcesSSBO.upload(lightSources.data(), lightSources.size());
-	this->uploadUnifiedLightBuffer();
+	std::vector<PointLightSource> Proposed = LightSources;
+	auto Records = this->BuildGPURecords(Proposed, this->SpotLightSources, this->DirectionalLightSources);
+	this->PointLightSources = std::move(Proposed);
+	this->GPURecords = std::move(Records);
 }
 
-void LightBufferManager::uploadLightSources(std::vector<SpotLightSource>& lightSources)
+void LightBufferManager::UploadLightSources(const std::vector<SpotLightSource> &LightSources)
 {
-	this->spotLightSources = lightSources;
-	this->spotLightSourcesSSBO.upload(lightSources.data(), lightSources.size());
-	this->uploadUnifiedLightBuffer();
+	std::vector<SpotLightSource> Proposed = LightSources;
+	auto Records = this->BuildGPURecords(this->PointLightSources, Proposed, this->DirectionalLightSources);
+	this->SpotLightSources = std::move(Proposed);
+	this->GPURecords = std::move(Records);
 }
 
-void LightBufferManager::uploadLightSources(std::vector<DirectionalLightSource>& lightSources)
+void LightBufferManager::UploadLightSources(const std::vector<DirectionalLightSource> &LightSources)
 {
-	this->directionalLightSources = lightSources;
-	this->directionalLightSourcesSSBO.upload(lightSources.data(), lightSources.size());
-	this->uploadUnifiedLightBuffer();
+	std::vector<DirectionalLightSource> Proposed = LightSources;
+	auto Records = this->BuildGPURecords(this->PointLightSources, this->SpotLightSources, Proposed);
+	this->DirectionalLightSources = std::move(Proposed);
+	this->GPURecords = std::move(Records);
 }
 
-void LightBufferManager::uploadSceneLights(const SceneCollection& scene)
+void LightBufferManager::UploadSceneLights(const SceneCollection &Scene)
 {
-	this->directionalLightSources = scene.getDirectionalLights();
-	this->pointLightSources = scene.getPointLights();
-	this->spotLightSources = scene.getSpotLights();
-	this->uploadUnifiedLightBuffer();
+	std::vector<DirectionalLightSource> Directional = Scene.GetDirectionalLights();
+	std::vector<PointLightSource> Points = Scene.GetPointLights();
+	std::vector<SpotLightSource> Spots = Scene.GetSpotLights();
+	auto Records = this->BuildGPURecords(Points, Spots, Directional);
+	this->DirectionalLightSources = std::move(Directional);
+	this->PointLightSources = std::move(Points);
+	this->SpotLightSources = std::move(Spots);
+	this->GPURecords = std::move(Records);
 }
 
-void LightBufferManager::uploadUnifiedLightBuffer()
+std::vector<renderer::GPULightRecord> LightBufferManager::BuildGPURecords(
+	const std::vector<PointLightSource> &PointLights, const std::vector<SpotLightSource> &SpotLights,
+	const std::vector<DirectionalLightSource> &DirectionalLights) const
 {
-	std::vector<renderer::GpuLightRecord> gpuLights;
-	gpuLights.reserve(this->directionalLightSources.size() + this->pointLightSources.size() + this->spotLightSources.size());
-	for (uint32 lightIndex = 0; lightIndex < this->directionalLightSources.size(); ++lightIndex) { const DirectionalLightSource& light = this->directionalLightSources[lightIndex]; gpuLights.push_back({ .positionAndRange = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f), .directionAndType = glm::vec4(glm::normalize(light.direction), 0.0f), .colorAndIntensity = glm::vec4(light.diffuse, 1.0f), .spotAnglesAndShadow = glm::vec4(0.0f, 0.0f, 0.0f, lightIndex == 0 ? 0.0f : -1.0f) }); }
-	for (uint32 lightIndex = 0; lightIndex < this->pointLightSources.size(); ++lightIndex) { const PointLightSource& light = this->pointLightSources[lightIndex]; gpuLights.push_back({ .positionAndRange = glm::vec4(light.position, calculateInfluenceRange(light)), .directionAndType = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), .colorAndIntensity = glm::vec4(light.diffuse, 1.0f), .spotAnglesAndShadow = glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float32>(lightIndex)) }); }
-	for (uint32 lightIndex = 0; lightIndex < this->spotLightSources.size(); ++lightIndex) { const SpotLightSource& light = this->spotLightSources[lightIndex]; gpuLights.push_back({ .positionAndRange = glm::vec4(light.position, calculateInfluenceRange(light)), .directionAndType = glm::vec4(glm::normalize(light.direction), 2.0f), .colorAndIntensity = glm::vec4(light.diffuse, 1.0f), .spotAnglesAndShadow = glm::vec4(light.cutOff, light.outerCutOff, 0.0f, static_cast<float32>(lightIndex)) }); }
-	if (gpuLights.size() > this->maxLights) throw std::runtime_error("Unified GPU light buffer capacity exceeded");
-	if (!gpuLights.empty()) glNamedBufferSubData(this->unifiedLightBuffer, 0, static_cast<GLsizeiptr>(gpuLights.size() * sizeof(renderer::GpuLightRecord)), gpuLights.data());
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(renderer::RendererBinding::Lights), this->unifiedLightBuffer);
+	if (DirectionalLights.size() > this->MaxLights || PointLights.size() > this->MaxLights || SpotLights.size() > this->MaxLights ||
+		DirectionalLights.size() + PointLights.size() > this->MaxLights ||
+		DirectionalLights.size() + PointLights.size() + SpotLights.size() > this->MaxLights)
+	{
+		throw std::runtime_error("Unified GPU light buffer capacity exceeded");
+	}
+	std::vector<renderer::GPULightRecord> Records;
+	Records.reserve(DirectionalLights.size() + PointLights.size() + SpotLights.size());
+	for (uint32 LightIndex = 0; LightIndex < DirectionalLights.size(); ++LightIndex)
+	{
+		const DirectionalLightSource &Light = DirectionalLights[LightIndex];
+		Records.push_back({.PositionAndRange = glm::vec4(0.0f, 0.0f, 0.0f, 0.0f),
+						   .DirectionAndType = glm::vec4(glm::normalize(Light.Direction), 0.0f),
+						   .ColorAndIntensity = glm::vec4(Light.Diffuse, 1.0f),
+						   .SpotAnglesAndShadow = glm::vec4(0.0f, 0.0f, 0.0f, LightIndex == 0 ? 0.0f : -1.0f)});
+	}
+	for (uint32 LightIndex = 0; LightIndex < PointLights.size(); ++LightIndex)
+	{
+		const PointLightSource &Light = PointLights[LightIndex];
+		const float32 ShadowIndex = LightIndex < renderer::MaximumPointShadowCount ? static_cast<float32>(LightIndex) : -1.0f;
+		Records.push_back({.PositionAndRange = glm::vec4(Light.Position, CalculateInfluenceRange(Light)),
+						   .DirectionAndType = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
+						   .ColorAndIntensity = glm::vec4(Light.Diffuse, 1.0f),
+						   .SpotAnglesAndShadow = glm::vec4(0.0f, 0.0f, 0.0f, ShadowIndex)});
+	}
+	for (uint32 LightIndex = 0; LightIndex < SpotLights.size(); ++LightIndex)
+	{
+		const SpotLightSource &Light = SpotLights[LightIndex];
+		const float32 ShadowIndex = LightIndex < renderer::MaximumSpotShadowCount ? static_cast<float32>(LightIndex) : -1.0f;
+		Records.push_back({.PositionAndRange = glm::vec4(Light.Position, CalculateInfluenceRange(Light)),
+						   .DirectionAndType = glm::vec4(glm::normalize(Light.Direction), 2.0f),
+						   .ColorAndIntensity = glm::vec4(Light.Diffuse, 1.0f),
+						   .SpotAnglesAndShadow = glm::vec4(Light.CutOff, Light.OuterCutOff, 0.0f, ShadowIndex)});
+	}
+	return Records;
 }

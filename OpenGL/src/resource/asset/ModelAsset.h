@@ -1,49 +1,76 @@
 #pragma once
 
-#include <filesystem>
-#include <string>
-#include <vector>
+#include "src/resource/Asset.h"
+#include "src/resource/asset/AnimationAsset.h"
+#include "src/resource/asset/AssetHandle.h"
+#include "src/resource/asset/MeshAsset.h"
 
 #include <glm.hpp>
-
-#include "src/renderer/Vertex.h"
-#include "src/resource/Asset.h"
+#include <limits>
+#include <span>
+#include <vector>
 
 namespace resource
 {
-	struct ModelMaterial final
+using ModelNodeID = uint64;
+using ModelMeshInstanceID = uint64;
+inline constexpr uint32 InvalidModelNodeIndex = std::numeric_limits<uint32>::max();
+
+struct ModelNode final
+{
+	ModelNodeID ID = 0;
+	string Name;
+	uint32 ParentIndex = InvalidModelNodeIndex;
+	glm::mat4 LocalTransform{1.0f};
+};
+
+struct ModelMeshInstance final
+{
+	ModelMeshInstanceID ID = 0;
+	uint32 NodeIndex = InvalidModelNodeIndex;
+	AssetHandle<MeshAsset> Mesh;
+};
+
+class ModelAsset final : public Asset
+{
+  public:
+	inline static constexpr resource::AssetType AssetType = resource::AssetType::Model;
+	ModelAsset(string Name, Bounds Bounds, std::vector<ModelNode> Nodes, std::vector<ModelMeshInstance> MeshInstances,
+			   std::vector<AssetHandle<AnimationClipAsset>> AnimationClips = {},
+			   AssetHandle<AnimationGraphAsset> DefaultAnimationGraph = {});
+
+	[[nodiscard]] string_view GetName() const noexcept
 	{
-		std::string name;
-		std::filesystem::path baseColorTexture;
-		std::filesystem::path normalTexture;
-		std::filesystem::path metallicRoughnessTexture;
-		std::filesystem::path occlusionTexture;
-		std::filesystem::path emissiveTexture;
-		glm::vec4 baseColorFactor = glm::vec4(1.0f);
-		float metallicFactor = 1.0f;
-		float roughnessFactor = 1.0f;
-	};
-
-	struct ModelSubmesh final
+		return this->Name;
+	}
+	[[nodiscard]] const Bounds &GetBounds() const noexcept
 	{
-		std::string name;
-		uint32 materialIndex = 0;
-		std::vector<renderer::Vertex> vertices;
-		std::vector<uint32> indices;
-	};
-
-	class ModelAsset final : public Asset
+		return this->Bounds;
+	}
+	[[nodiscard]] std::span<const ModelNode> GetNodes() const noexcept
 	{
-	public:
-		ModelAsset(std::string name, std::vector<ModelSubmesh> submeshes, std::vector<ModelMaterial> materials);
+		return this->Nodes;
+	}
+	[[nodiscard]] std::span<const ModelMeshInstance> GetMeshInstances() const noexcept
+	{
+		return this->MeshInstances;
+	}
+	[[nodiscard]] std::span<const AssetHandle<AnimationClipAsset>> GetAnimationClips() const noexcept
+	{
+		return this->AnimationClips;
+	}
+	[[nodiscard]] const AssetHandle<AnimationGraphAsset> &GetDefaultAnimationGraph() const noexcept
+	{
+		return this->DefaultAnimationGraph;
+	}
+	[[nodiscard]] const ModelMeshInstance *FindMeshInstance(ModelMeshInstanceID ID) const noexcept;
 
-		[[nodiscard]] std::string_view getName() const noexcept;
-		[[nodiscard]] const std::vector<ModelSubmesh>& getSubmeshes() const noexcept;
-		[[nodiscard]] const std::vector<ModelMaterial>& getMaterials() const noexcept;
-
-	private:
-		std::string name;
-		std::vector<ModelSubmesh> submeshes;
-		std::vector<ModelMaterial> materials;
-	};
-}
+  private:
+	string Name;
+	Bounds Bounds;
+	std::vector<ModelNode> Nodes;
+	std::vector<ModelMeshInstance> MeshInstances;
+	std::vector<AssetHandle<AnimationClipAsset>> AnimationClips;
+	AssetHandle<AnimationGraphAsset> DefaultAnimationGraph;
+};
+} // namespace resource

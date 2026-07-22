@@ -1,33 +1,35 @@
 #pragma once
 
+#include "ShaderModule.h"
+
 #include <string>
 #include <string_view>
 #include <unordered_map>
 
-#include "ShaderModule.h"
-
 namespace pipeline::shader
 {
-	struct ComputePipelineDescriptor final
-	{
-		ShaderSourceDescriptor compute;
-		ShaderPermutationKey permutation;
-	};
+struct ComputePipelineDescriptor final
+{
+	ShaderSourceDescriptor Compute;
+	ShaderPermutationKey Permutation;
+};
 
-	class ComputePipeline final
-	{
-	public:
-		ComputePipeline(const ComputePipelineDescriptor& descriptor, const ShaderModule& compute);
-		void bind() const;
-		// Parameters are resolved once per pipeline rather than from render-pass
-		// execution.  A missing optional parameter is intentionally a no-op.
-		void setUniformUInt(string_view name, uint32 value) const;
-		void setUniformUInt2(string_view name, uint32 x, uint32 y) const;
-		[[nodiscard]] GLuint getProgramID() const noexcept;
-		[[nodiscard]] const ComputePipelineDescriptor& getDescriptor() const noexcept;
-	private:
-		ComputePipelineDescriptor descriptor;
-		GLuint programID = 0;
-		mutable std::unordered_map<std::string, GLint> uniformLocations;
-	};
-}
+class ComputePipeline final
+{
+  public:
+	ComputePipeline(device::Device &Device, const ComputePipelineDescriptor &Descriptor, const ShaderModule &Compute);
+	void Bind() const;
+	// Parameters are resolved once per pipeline rather than from render-pass
+	// execution.  A missing optional parameter is intentionally a no-op.
+	void SetUniformUInt(string_view Name, uint32 Value) const;
+	void SetUniformUInt2(string_view Name, uint32 X, uint32 Y) const;
+	[[nodiscard]] GLuint GetProgramID() const noexcept;
+	[[nodiscard]] const ComputePipelineDescriptor &GetDescriptor() const noexcept;
+
+  private:
+	device::Device *Device = nullptr;
+	ComputePipelineDescriptor Descriptor;
+	GLuint ProgramID = 0;
+	std::unordered_map<std::string, GLint> UniformLocations;
+};
+} // namespace pipeline::shader

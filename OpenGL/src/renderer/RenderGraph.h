@@ -1,118 +1,202 @@
 #pragma once
 
+#include "src/types.h"
+
+#include <GL/glew.h>
 #include <functional>
+#include <glm.hpp>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include <GL/glew.h>
-#include <glm.hpp>
-
-#include "src/types.h"
-
 namespace pipeline::shader
 {
-	class GraphicsPipeline;
+class GraphicsPipeline;
+}
+
+namespace pipeline::device
+{
+class Device;
 }
 
 namespace renderer::graph
 {
-	struct Extent2D final { uint32 width = 0; uint32 height = 0; [[nodiscard]] bool isValid() const noexcept { return width != 0 && height != 0; } };
-	enum class TextureFormat : uint8 { Depth32Float, RGBA16Float, RG16Float, R32UnsignedInteger, R32Float, R8Unorm };
-	enum class TextureDimension : uint8 { Texture2D, Texture2DArray, TextureCubeArray, Texture2DMultisample, Texture2DMultisampleArray };
-	enum class PassQueue : uint8 { Graphics, Compute };
-	enum class LoadOperation : uint8 { Load, Clear, Discard };
-	enum class StoreOperation : uint8 { Store, Discard };
-
-	struct TextureHandle final { uint32 value = ~uint32 { 0 }; [[nodiscard]] bool isValid() const noexcept { return value != ~uint32 { 0 }; } };
-	struct BufferHandle final { uint32 value = ~uint32 { 0 }; [[nodiscard]] bool isValid() const noexcept { return value != ~uint32 { 0 }; } };
-	struct PassHandle final { uint32 value = ~uint32 { 0 }; [[nodiscard]] bool isValid() const noexcept { return value != ~uint32 { 0 }; } };
-
-	struct TextureDescription final
+struct Extent2D final
+{
+	uint32 Width = 0;
+	uint32 Height = 0;
+	[[nodiscard]] bool IsValid() const noexcept
 	{
-		std::string debugName;
-		Extent2D extent;
-		TextureFormat format = TextureFormat::RGBA16Float;
-		TextureDimension dimension = TextureDimension::Texture2D;
-		uint32 mipCount = 1;
-		uint32 layers = 1;
-		uint32 sampleCount = 1;
-		bool persistent = false;
-	};
+		return Width != 0 && Height != 0;
+	}
+};
+enum class TextureFormat : uint8
+{
+	Depth32Float,
+	RGBA16Float,
+	RG16Float,
+	R32UnsignedInteger,
+	R32Float,
+	R8Unorm
+};
+enum class TextureDimension : uint8
+{
+	Texture2D,
+	Texture2DArray,
+	TextureCubeArray,
+	Texture2DMultisample,
+	Texture2DMultisampleArray
+};
+enum class PassQueue : uint8
+{
+	Graphics,
+	Compute
+};
+enum class LoadOperation : uint8
+{
+	Load,
+	Clear,
+	Discard
+};
+enum class StoreOperation : uint8
+{
+	Store,
+	Discard
+};
 
-	struct BufferDescription final { std::string debugName; uint64 sizeInBytes = 0; GLbitfield storageFlags = GL_DYNAMIC_STORAGE_BIT; bool persistent = false; };
-	struct TextureAttachment final { TextureHandle texture; LoadOperation load = LoadOperation::Load; StoreOperation store = StoreOperation::Store; glm::vec4 clearColor { 0.0f }; };
-	struct DepthAttachment final { TextureHandle texture; LoadOperation load = LoadOperation::Load; StoreOperation store = StoreOperation::Store; float32 clearDepth = 0.0f; };
-
-	class RenderGraph;
-	class RenderGraphContext final
+struct TextureHandle final
+{
+	uint32 Value = ~uint32{0};
+	[[nodiscard]] bool IsValid() const noexcept
 	{
-	public:
-		[[nodiscard]] GLuint getTexture(TextureHandle handle) const;
-		[[nodiscard]] GLuint getBuffer(BufferHandle handle) const;
-		[[nodiscard]] Extent2D getExtent(TextureHandle handle) const;
-		void bindPassFramebuffer() const;
-		void validateGraphicsPipelineTargets(const pipeline::shader::GraphicsPipeline& pipeline) const;
-	private:
-		friend class RenderGraph;
-		RenderGraphContext(const RenderGraph& graph, PassHandle pass) : graph(graph), pass(pass) {}
-		const RenderGraph& graph;
-		PassHandle pass;
-	};
-
-	struct RenderPassDescription final
+		return Value != ~uint32{0};
+	}
+};
+struct BufferHandle final
+{
+	uint32 Value = ~uint32{0};
+	[[nodiscard]] bool IsValid() const noexcept
 	{
-		std::string name;
-		PassQueue queue = PassQueue::Graphics;
-		std::vector<TextureHandle> readTextures;
-		std::vector<BufferHandle> readBuffers;
-		std::vector<TextureAttachment> colorAttachments;
-		std::optional<DepthAttachment> depthAttachment;
-		std::vector<TextureHandle> writeTextures;
-		std::vector<BufferHandle> writeBuffers;
-		std::function<void(RenderGraphContext&)> execute;
-	};
-
-	class RenderGraph final
+		return Value != ~uint32{0};
+	}
+};
+struct PassHandle final
+{
+	uint32 Value = ~uint32{0};
+	[[nodiscard]] bool IsValid() const noexcept
 	{
-	public:
-		RenderGraph();
-		~RenderGraph();
-		RenderGraph(const RenderGraph&) = delete;
-		RenderGraph& operator=(const RenderGraph&) = delete;
+		return Value != ~uint32{0};
+	}
+};
 
-		void beginFrame(Extent2D extent);
-		[[nodiscard]] TextureHandle createTexture(TextureDescription description);
-		[[nodiscard]] TextureHandle importTexture(TextureDescription description, GLuint texture);
-		[[nodiscard]] BufferHandle createBuffer(BufferDescription description);
-		[[nodiscard]] BufferHandle importBuffer(BufferDescription description, GLuint buffer);
-		[[nodiscard]] PassHandle addPass(RenderPassDescription description);
-		void compile();
-		void execute();
-		void reset();
-		[[nodiscard]] bool isCompiled() const noexcept;
+struct TextureDescription final
+{
+	std::string DebugName;
+	Extent2D Extent;
+	TextureFormat Format = TextureFormat::RGBA16Float;
+	TextureDimension Dimension = TextureDimension::Texture2D;
+	uint32 MipCount = 1;
+	uint32 Layers = 1;
+	uint32 SampleCount = 1;
+	bool Persistent = false;
+};
 
-	private:
-		struct TextureResource;
-		struct BufferResource;
-		struct PassResource;
-		struct PhysicalTexture;
-		struct PhysicalBuffer;
-		Extent2D frameExtent;
-		bool compiled = false;
-		std::vector<TextureResource> textures;
-		std::vector<BufferResource> buffers;
-		std::vector<PassResource> passes;
-		std::vector<PhysicalTexture> texturePool;
-		std::vector<PhysicalBuffer> bufferPool;
+struct BufferDescription final
+{
+	std::string DebugName;
+	uint64 SizeInBytes = 0;
+	GLbitfield StorageFlags = GL_DYNAMIC_STORAGE_BIT;
+	bool Persistent = false;
+};
+struct TextureAttachment final
+{
+	TextureHandle Texture;
+	LoadOperation Load = LoadOperation::Load;
+	StoreOperation Store = StoreOperation::Store;
+	glm::vec4 ClearColor{0.0f};
+};
+struct DepthAttachment final
+{
+	TextureHandle Texture;
+	LoadOperation Load = LoadOperation::Load;
+	StoreOperation Store = StoreOperation::Store;
+	float32 ClearDepth = 0.0f;
+};
 
-		[[nodiscard]] const TextureResource& getTextureResource(TextureHandle handle) const;
-		[[nodiscard]] const BufferResource& getBufferResource(BufferHandle handle) const;
-		[[nodiscard]] const PassResource& getPassResource(PassHandle handle) const;
-		void validate() const;
-		void allocateResources();
-		void createPassFramebuffers();
-		void releasePassFramebuffers() noexcept;
-		friend class RenderGraphContext;
-	};
-}
+class RenderGraph;
+class RenderGraphContext final
+{
+  public:
+	[[nodiscard]] GLuint GetTexture(TextureHandle Handle) const;
+	[[nodiscard]] GLuint GetBuffer(BufferHandle Handle) const;
+	[[nodiscard]] Extent2D GetExtent(TextureHandle Handle) const;
+	void BindPassFramebuffer() const;
+	void ValidateGraphicsPipelineTargets(const pipeline::shader::GraphicsPipeline &Pipeline) const;
+
+  private:
+	friend class RenderGraph;
+	RenderGraphContext(const RenderGraph &Graph, PassHandle Pass) : Graph(Graph), Pass(Pass)
+	{
+	}
+	const RenderGraph &Graph;
+	PassHandle Pass;
+};
+
+struct RenderPassDescription final
+{
+	std::string Name;
+	PassQueue Queue = PassQueue::Graphics;
+	std::vector<TextureHandle> ReadTextures;
+	std::vector<BufferHandle> ReadBuffers;
+	std::vector<TextureAttachment> ColorAttachments;
+	std::optional<DepthAttachment> DepthAttachment;
+	std::vector<TextureHandle> WriteTextures;
+	std::vector<BufferHandle> WriteBuffers;
+	std::function<void(RenderGraphContext &)> Execute;
+};
+
+class RenderGraph final
+{
+  public:
+	explicit RenderGraph(pipeline::device::Device &Device);
+	~RenderGraph();
+	RenderGraph(const RenderGraph &) = delete;
+	RenderGraph &operator=(const RenderGraph &) = delete;
+
+	void BeginFrame(Extent2D Extent);
+	[[nodiscard]] TextureHandle CreateTexture(TextureDescription Description);
+	[[nodiscard]] TextureHandle ImportTexture(TextureDescription Description, GLuint Texture);
+	[[nodiscard]] BufferHandle CreateBuffer(BufferDescription Description);
+	[[nodiscard]] BufferHandle ImportBuffer(BufferDescription Description, GLuint Buffer);
+	[[nodiscard]] PassHandle AddPass(RenderPassDescription Description);
+	void Compile();
+	void Execute();
+	void Reset();
+	[[nodiscard]] bool IsCompiled() const noexcept;
+
+  private:
+	pipeline::device::Device *Device = nullptr;
+	struct TextureResource;
+	struct BufferResource;
+	struct PassResource;
+	struct PhysicalTexture;
+	struct PhysicalBuffer;
+	Extent2D FrameExtent;
+	bool Compiled = false;
+	uint64 FrameSerial = 0;
+	std::vector<TextureResource> Textures;
+	std::vector<BufferResource> Buffers;
+	std::vector<PassResource> Passes;
+	std::vector<PhysicalTexture> TexturePool;
+	std::vector<PhysicalBuffer> BufferPool;
+
+	[[nodiscard]] const TextureResource &GetTextureResource(TextureHandle Handle) const;
+	[[nodiscard]] const BufferResource &GetBufferResource(BufferHandle Handle) const;
+	[[nodiscard]] const PassResource &GetPassResource(PassHandle Handle) const;
+	void Validate() const;
+	void AllocateResources();
+	void CreatePassFramebuffers();
+	void ReleasePassFramebuffers() noexcept;
+	friend class RenderGraphContext;
+};
+} // namespace renderer::graph

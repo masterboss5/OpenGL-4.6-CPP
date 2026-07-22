@@ -1,44 +1,40 @@
 #pragma once
+#include "src/types.h"
+
 #include <glm.hpp>
 
-struct alignas(16) PointLightSource {
-public:
-	glm::vec3 position;
-	float pad6;
+struct alignas(16) PointLightSource
+{
+  public:
+	glm::vec3 Position;
+	float32 Pad6;
 
 	//-----------16-------
 
-	glm::vec3 ambient;
-	float pad10;
+	glm::vec3 Ambient;
+	float32 Pad10;
 
 	//------------32-------
 
-	glm::vec3 diffuse;
-	float pad11;
+	glm::vec3 Diffuse;
+	float32 Pad11;
 
 	//------------48-------
 
-	glm::vec3 specular;
-	float pad12;
+	glm::vec3 Specular;
+	float32 Pad12;
 
 	//------------64-------
 
-	float constant;
-	float linear;
-	float quadratic;
-	float pad13;
+	float32 Constant;
+	float32 Linear;
+	float32 Quadratic;
+	float32 Pad13;
 
 	//------------80-------
 
-	PointLightSource(
-		const glm::vec3& position,
-		const glm::vec3& ambient,
-		const glm::vec3& diffuse,
-		const glm::vec3& specular,
-		const float constant,
-		const float linear,
-		const float quadratic
-	);
+	PointLightSource(const glm::vec3 &Position, const glm::vec3 &Ambient, const glm::vec3 &Diffuse, const glm::vec3 &Specular,
+					 float32 Constant, float32 Linear, float32 Quadratic);
 };
 
 static_assert(std::is_trivially_copyable_v<PointLightSource>, "SSBO element type must be trivially opyable");

@@ -1,19 +1,13 @@
 #include "PointLightSource.h"
 
-PointLightSource::PointLightSource(
-	const glm::vec3& position,
-	const glm::vec3& ambient,
-	const glm::vec3& diffuse,
-	const glm::vec3& specular,
-	const float constant,
-	const float linear,
-	const float quadratic
-) {
-	this->position = position;
-	this->ambient = ambient;
-	this->diffuse = diffuse;
-	this->specular = specular;
-	this->constant = constant;
-	this->linear = linear;
-	this->quadratic = quadratic;
+PointLightSource::PointLightSource(const glm::vec3 &Position, const glm::vec3 &Ambient, const glm::vec3 &Diffuse, const glm::vec3 &Specular,
+								   const float32 Constant, const float32 Linear, const float32 Quadratic)
+{
+	this->Position = Position;
+	this->Ambient = Ambient;
+	this->Diffuse = Diffuse;
+	this->Specular = Specular;
+	this->Constant = Constant;
+	this->Linear = Linear;
+	this->Quadratic = Quadratic;
 }

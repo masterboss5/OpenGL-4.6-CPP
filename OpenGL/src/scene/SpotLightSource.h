@@ -1,62 +1,54 @@
 #pragma once
+#include "src/types.h"
+
 #include <glm.hpp>
 
-
-struct alignas(16) SpotLightSource {
-public:
-	glm::vec3 position;
-    float pad6;
+struct alignas(16) SpotLightSource
+{
+  public:
+	glm::vec3 Position;
+	float32 Pad6;
 
 	//-----------16-------
 
-    glm::vec3 direction;
-    float pad7;
+	glm::vec3 Direction;
+	float32 Pad7;
 
-    //-----------32-------
+	//-----------32-------
 
-    float cutOff;
-    float outerCutOff;
-    int pad8;
-    int pad9;
+	float32 CutOff;
+	float32 OuterCutOff;
+	int32 Pad8;
+	int32 Pad9;
 
 	//-----------48-------
 
-    glm::vec3 ambient;
-    float pad10;
+	glm::vec3 Ambient;
+	float32 Pad10;
 
 	//------------64-------
 
-    glm::vec3 diffuse;
-    float pad11;
+	glm::vec3 Diffuse;
+	float32 Pad11;
 
 	//------------80-------
 
-    glm::vec3 specular;
-    float pad12;
+	glm::vec3 Specular;
+	float32 Pad12;
 
 	//------------96-------
 
-    float constant;
-    float linear;
-    float quadratic;
-    float pad13;
+	float32 Constant;
+	float32 Linear;
+	float32 Quadratic;
+	float32 Pad13;
 
 	//------------112-------
 
-	SpotLightSource(
-		const glm::vec3& position,
-		const glm::vec3& direction,
-		const float cutOff,
-		const float outerCutOff,
-		const glm::vec3& ambient,
-		const glm::vec3& diffuse,
-		const glm::vec3& specular,
-		const float constant,
-		const float linear,
-		const float quadratic
-	);
+	SpotLightSource(const glm::vec3 &Position, const glm::vec3 &Direction, float32 CutOff, float32 OuterCutOff, const glm::vec3 &Ambient,
+					const glm::vec3 &Diffuse, const glm::vec3 &Specular, float32 Constant, float32 Linear, float32 Quadratic);
 
-	void lookAt(const glm::vec3& target);
+	void LookAt(const glm::vec3 &Target);
 };
 
 static_assert(std::is_trivially_copyable_v<SpotLightSource>, "SSBO element type must be trivially copyable");

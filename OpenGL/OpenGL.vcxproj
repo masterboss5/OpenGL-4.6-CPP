@@ -78,10 +78,15 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <DisableSpecificWarnings>4458;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ConformanceMode>true</ConformanceMode>
+	  <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+	  <ConformanceMode>true</ConformanceMode>
+	  <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -90,12 +95,17 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <DisableSpecificWarnings>4458;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <ConformanceMode>true</ConformanceMode>
+	  <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+	  <ConformanceMode>true</ConformanceMode>
+	  <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -104,7 +114,11 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <DisableSpecificWarnings>4458;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>
         GLEW_STATIC;%(PreprocessorDefinitions)
@@ -117,7 +131,9 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)Dependencies\GLEW\lib\Release\x64;$(SolutionDir)Dependencies\GLFW\lib-vc2022;$(SolutionDir)Dependencies\ASSIMP\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;glew32s.lib;assimp-vc145-mt.lib</AdditionalDependencies>
+      <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;Ole32.lib;Propsys.lib;Dwmapi.lib;Comctl32.lib;Comdlg32.lib;Credui.lib;Uxtheme.lib;Imm32.lib;Wtsapi32.lib;Xinput.lib;Advapi32.lib;glew32s.lib;assimp-vc145-mt.lib</AdditionalDependencies>
+      <AdditionalManifestDependencies>type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*';%(AdditionalManifestDependencies)</AdditionalManifestDependencies>
+      <IgnoreSpecificDefaultLibraries>LIBCMT;MSVCRT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y &quot;$(SolutionDir)Dependencies\ASSIMP\lib\assimp-vc145-mt.dll&quot; &quot;$(OutDir)&quot;</Command>
@@ -125,7 +141,11 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <DisableSpecificWarnings>4458;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
@@ -140,17 +160,31 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)Dependencies\GLEW\lib\Release\x64;$(SolutionDir)Dependencies\GLFW\lib-vc2022;$(SolutionDir)Dependencies\ASSIMP\lib</AdditionalLibraryDirectories>
-      <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;glew32s.lib;assimp-vc145-mt.lib</AdditionalDependencies>
+      <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;Ole32.lib;Propsys.lib;Dwmapi.lib;Comctl32.lib;Comdlg32.lib;Credui.lib;Uxtheme.lib;Imm32.lib;Wtsapi32.lib;Xinput.lib;Advapi32.lib;glew32s.lib;assimp-vc145-mt.lib</AdditionalDependencies>
+      <AdditionalManifestDependencies>type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*';%(AdditionalManifestDependencies)</AdditionalManifestDependencies>
+      <IgnoreSpecificDefaultLibraries>LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
     <PostBuildEvent>
       <Command>copy /Y &quot;$(SolutionDir)Dependencies\ASSIMP\lib\assimp-vc145-mt.dll&quot; &quot;$(OutDir)&quot;</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+	<ClCompile Include="src\animation\AnimationSystem.cpp" />
     <ClCompile Include="src\component\ComponentValidation.cpp" />
     <ClCompile Include="src\component\object\CObjectTransformComponent.cpp" />
+	<ClCompile Include="src\component\object\CObjectMeshComponent.cpp" />
+	<ClCompile Include="src\component\object\CObjectAnimationComponent.cpp" />
     <ClCompile Include="src\core\app\Application.cpp" />
-    <ClCompile Include="src\core\input\InputManager.cpp" />
+    <ClCompile Include="src\core\input\InputSystem.cpp" />
+    <ClCompile Include="src\core\time\FrameClock.cpp" />
+    <ClCompile Include="src\core\window\Context.cpp" />
+    <ClCompile Include="src\core\window\Window.cpp">
+      <ObjectFileName>$(IntDir)core_window_Window.obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="src\core\window\WindowManager.cpp" />
+    <ClCompile Include="src\core\window\WindowDataExchange.cpp" />
+    <ClCompile Include="src\core\window\WindowDialogs.cpp" />
+    <ClCompile Include="src\core\window\WindowShell.cpp" />
     <ClCompile Include="src\pipeline\shader\ShaderTypes.cpp" />
     <ClCompile Include="src\pipeline\shader\ShaderException.cpp" />
     <ClCompile Include="src\pipeline\shader\ShaderSourceAsset.cpp" />
@@ -161,19 +195,17 @@
     <ClCompile Include="src\pipeline\shader\ShaderLibrary.cpp" />
     <ClCompile Include="src\pipeline\buffer\VertexBuffer.cpp" />
     <ClCompile Include="src\pipeline\vertex\VertexDescriptor.cpp" />
-    <ClCompile Include="src\pipeline\device\OpenGLRuntime.cpp" />
+    <ClCompile Include="src\pipeline\device\Device.cpp" />
     <ClCompile Include="src\pipeline\texture\Texture2D.cpp" />
     <ClCompile Include="src\renderer\LightBufferManager.cpp" />
-    <ClCompile Include="src\renderer\Material.cpp" />
     <ClCompile Include="src\renderer\OpenGLRenderer.cpp" />
+	<ClCompile Include="src\renderer\MeshGpuResource.cpp" />
+	<ClCompile Include="src\renderer\SceneExtractor.cpp" />
     <ClCompile Include="src\renderer\RenderGraph.cpp" />
     <ClCompile Include="src\renderer\FrameResourceRing.cpp" />
     <ClCompile Include="src\renderer\HybridDeferredFrameGraph.cpp" />
     <ClCompile Include="src\renderer\ScenePreparation.cpp" />
 	<ClCompile Include="src\renderer\RenderCoreValidation.cpp" />
-    <ClCompile Include="src\renderer\ShaderSorageBufferObject.cpp" />
-    <ClCompile Include="src\renderer\StaticMesh.cpp" />
-    <ClCompile Include="src\renderer\Texture.cpp" />
     <ClCompile Include="src\resource\asset\importer\AssetImportException.cpp" />
     <ClCompile Include="src\resource\asset\importer\AssetImporter.cpp" />
     <ClCompile Include="src\resource\asset\importer\ModelAssetImporter.cpp" />
@@ -181,37 +213,53 @@
     <ClCompile Include="src\resource\asset\importer\ShaderSourceImporter.cpp" />
     <ClCompile Include="src\resource\asset\AssetManager.cpp" />
     <ClCompile Include="src\resource\asset\ModelAsset.cpp" />
+	<ClCompile Include="src\resource\asset\MaterialAsset.cpp" />
+	<ClCompile Include="src\resource\asset\MeshAsset.cpp" />
+	<ClCompile Include="src\resource\asset\SkeletonAsset.cpp" />
+	<ClCompile Include="src\resource\asset\AnimationAsset.cpp" />
     <ClCompile Include="src\resource\asset\Texture2DAsset.cpp" />
     <ClCompile Include="src\scene\DirectionalLightSource.cpp" />
     <ClCompile Include="src\core\Main.cpp" />
     <ClCompile Include="src\scene\Camera.cpp" />
     <ClCompile Include="src\scene\SceneCollection.cpp" />
-    <ClCompile Include="src\resource\FileLoader.h" />
+	<ClCompile Include="src\scene\Scene.cpp" />
+	<ClCompile Include="src\scene\SceneCommandBuffer.cpp" />
     <ClCompile Include="src\scene\Object.cpp" />
     <ClCompile Include="src\scene\PointLightSource.cpp" />
     <ClCompile Include="src\scene\PointLightSource.h" />
     <ClCompile Include="src\scene\SpotLightSource.cpp" />
-    <ClCompile Include="src\scene\StaticMeshObject.cpp" />
     <ClCompile Include="src\resource\stb_image.cpp" />
     <ClCompile Include="src\resource\tiny_obj_loader.cpp" />
-    <ClCompile Include="src\core\input\Window.cpp" />
   </ItemGroup>
   <ItemGroup>
+	<ClInclude Include="src\animation\AnimationSystem.h" />
     <None Include="..\..\..\Downloads\buster_drone\scene.bin" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\component\Components.h" />
     <ClInclude Include="src\component\ComponentValidation.h" />
     <ClInclude Include="src\component\object\CObjectTransformComponent.h" />
+	<ClInclude Include="src\component\object\CObjectMeshComponent.h" />
+	<ClInclude Include="src\component\object\CObjectAnimationComponent.h" />
     <ClInclude Include="src\component\object\CObjectComponent.h" />
     <ClInclude Include="src\concepts.h" />
     <ClInclude Include="src\core\app\Application.h" />
     <ClInclude Include="src\core\layers\ApplicationLayer.h" />
+    <ClInclude Include="src\core\input\InputSystem.h" />
+	<ClInclude Include="src\core\events\EventDispatcher.h" />
+    <ClInclude Include="src\core\input\InputTypes.h" />
+    <ClInclude Include="src\core\time\FrameClock.h" />
+    <ClInclude Include="src\core\window\Context.h" />
+    <ClInclude Include="src\core\window\Window.h" />
+    <ClInclude Include="src\core\window\WindowException.h" />
+    <ClInclude Include="src\core\window\WindowManager.h" />
+    <ClInclude Include="src\core\window\WindowTypes.h" />
+    <ClInclude Include="src\core\window\WindowDialogs.h" />
     <ClInclude Include="src\meta.h" />
     <ClInclude Include="src\renderer\LightBufferManager.h" />
-    <ClInclude Include="src\renderer\Mesh.h" />
     <ClInclude Include="src\renderer\OpenGLRenderer.h" />
-    <ClInclude Include="src\renderer\PBRMaterial.h" />
+	<ClInclude Include="src\renderer\MeshGpuResource.h" />
+	<ClInclude Include="src\renderer\SceneExtractor.h" />
     <ClInclude Include="src\renderer\RenderCommand.h" />
     <ClInclude Include="src\renderer\RendererGpuTypes.h" />
     <ClInclude Include="src\renderer\RenderGraph.h" />
@@ -220,11 +268,12 @@
     <ClInclude Include="src\renderer\HybridDeferredFrameGraph.h" />
     <ClInclude Include="src\renderer\ScenePreparation.h" />
 	<ClInclude Include="src\renderer\RenderCoreValidation.h" />
-    <ClInclude Include="src\renderer\ShaderStorageBufferObject.h" />
-    <ClInclude Include="src\renderer\StaticMesh.h" />
-    <ClInclude Include="src\renderer\Texture.h" />
-    <ClInclude Include="src\renderer\Vertex.h" />
     <ClInclude Include="src\scene\Object.h" />
+	<ClInclude Include="src\scene\Scene.h" />
+	<ClInclude Include="src\scene\SceneCommandBuffer.h" />
+	<ClInclude Include="src\scene\SceneHandles.h" />
+	<ClInclude Include="src\scene\SceneException.h" />
+	<ClInclude Include="src\scene\detail\DenseGenerationalPool.h" />
     <ClInclude Include="src\util\logger.h" />
     <ClInclude Include="src\pipeline\shader\ShaderTypes.h" />
     <ClInclude Include="src\pipeline\shader\ShaderException.h" />
@@ -236,12 +285,17 @@
     <ClInclude Include="src\pipeline\shader\ShaderLibrary.h" />
     <ClInclude Include="src\pipeline\buffer\VertexBuffer.h" />
     <ClInclude Include="src\pipeline\vertex\VertexDescriptor.h" />
-    <ClInclude Include="src\pipeline\device\OpenGLRuntime.h" />
+    <ClInclude Include="src\pipeline\device\Device.h" />
     <ClInclude Include="src\pipeline\texture\Texture2D.h" />
     <ClInclude Include="src\resource\asset\AssetHandle.h" />
+	<ClInclude Include="src\resource\asset\AssetException.h" />
     <ClInclude Include="src\resource\asset\AssetRecord.h" />
     <ClInclude Include="src\resource\asset\AssetTypes.h" />
     <ClInclude Include="src\resource\asset\ModelAsset.h" />
+	<ClInclude Include="src\resource\asset\MaterialAsset.h" />
+	<ClInclude Include="src\resource\asset\MeshAsset.h" />
+	<ClInclude Include="src\resource\asset\SkeletonAsset.h" />
+	<ClInclude Include="src\resource\asset\AnimationAsset.h" />
     <ClInclude Include="src\resource\asset\Texture2DAsset.h" />
     <ClInclude Include="src\resource\asset\importer\AssetImportException.h" />
     <ClInclude Include="src\resource\asset\importer\AssetImporter.h" />
@@ -251,13 +305,10 @@
     <ClInclude Include="src\resource\asset\AssetManager.h" />
     <ClInclude Include="src\resource\Asset.h" />
     <ClInclude Include="src\scene\Camera.h" />
-    <ClInclude Include="src\core\input\InputManager.h" />
     <ClInclude Include="src\scene\DirectionalLightSource.h" />
     <ClInclude Include="src\core\layers\RenderLayer.h" />
     <ClInclude Include="src\scene\SceneCollection.h" />
     <ClInclude Include="src\scene\SpotLightSource.h" />
-    <ClInclude Include="src\scene\StaticMeshObject.h" />
-    <ClInclude Include="src\core\input\Window.h" />
     <ClInclude Include="src\types.h" />
     <ClInclude Include="src\util\files.h" />
     <ClInclude Include="src\util\memory\TypedPoolAllocator.h" />

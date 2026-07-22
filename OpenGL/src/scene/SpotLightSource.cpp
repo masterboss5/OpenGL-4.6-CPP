@@ -1,30 +1,22 @@
 #include "SpotLightSource.h"
 
-SpotLightSource::SpotLightSource(
-	const glm::vec3& position,
-	const glm::vec3& direction,
-	const float cutOff,
-	const float outerCutOff,
-	const glm::vec3& ambient,
-	const glm::vec3& diffuse,
-	const glm::vec3& specular,
-	const float constant,
-	const float linear,
-	const float quadratic
-) {
-	this->position = position;
-	this->direction = direction;
-	this->cutOff = cutOff;
-	this->outerCutOff = outerCutOff;
-	this->ambient = ambient;
-	this->diffuse = diffuse;
-	this->specular = specular;
-	this->constant = constant;
-	this->linear = linear;
-	this->quadratic = quadratic;
+SpotLightSource::SpotLightSource(const glm::vec3 &Position, const glm::vec3 &Direction, const float32 CutOff, const float32 OuterCutOff,
+								 const glm::vec3 &Ambient, const glm::vec3 &Diffuse, const glm::vec3 &Specular, const float32 Constant,
+								 const float32 Linear, const float32 Quadratic)
+{
+	this->Position = Position;
+	this->Direction = Direction;
+	this->CutOff = CutOff;
+	this->OuterCutOff = OuterCutOff;
+	this->Ambient = Ambient;
+	this->Diffuse = Diffuse;
+	this->Specular = Specular;
+	this->Constant = Constant;
+	this->Linear = Linear;
+	this->Quadratic = Quadratic;
 }
 
-void SpotLightSource::lookAt(const glm::vec3& target)
+void SpotLightSource::LookAt(const glm::vec3 &Target)
 {
-	this->direction = glm::normalize(target - this->position);
+	this->Direction = glm::normalize(Target - this->Position);
 }

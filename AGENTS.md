@@ -18,7 +18,13 @@ Use `Release | x64` for an optimized build. The project targets C++20 and links 
 
 ## Coding Style & Naming Conventions
 
-Follow the surrounding C++ style: four-space indentation, braces on their own line, `#pragma once` include guards, and includes ordered with the local header first. Classes use PascalCase (`OpenGLRenderer`); functions and fields use lower camel case (`getViewMatrix`, `windowSpecification`); namespaces are lowercase. Keep GPU-resource ownership explicit and pair new headers/sources in the appropriate module. Add shader files with descriptive PascalCase names such as `LightingFragment.glsl`.
+Format project-owned C++ with the root `.clang-format`: tabs at width 4, Allman braces, and a 140-column limit. Use `clang-format -i OpenGL/src/**/*.{h,cpp}` from a shell that expands recursive globs, or pass the files reported by `rg --files OpenGL/src -g "*.h" -g "*.cpp"`. Keep `#pragma once` include guards and order includes with the local header first.
+
+Use PascalCase for classes, structs, unions, concepts, functions, methods, constants, enumerators, parameters, fields, and local variables. Keep namespaces lowercase and retain the lowercase fundamental aliases in `src/types.h`. Preserve established initialisms (`OpenGLRenderer`, `GPUBuffer`, `CPUData`, `ObjectID`). When a parameter and field have the same name, qualify the field explicitly, for example `this->BufferSize = BufferSize`.
+
+Never introduce raw engine numeric types when an alias exists in `src/types.h`. Exact native, OpenGL, callback, entry-point, and textual boundary signatures may retain their required types. Put reusable semantic template constraints in `src/concepts.h` whenever doing so does not create a dependency cycle. Mark concrete leaf classes `final`, use `override` on every override, and apply standard attributes only where their semantics improve correctness.
+
+Keep GPU-resource ownership explicit and pair new headers/sources in the appropriate module. Add shader files with descriptive PascalCase names such as `LightingFragment.glsl`.
 
 ## Testing & Review Guidelines
 

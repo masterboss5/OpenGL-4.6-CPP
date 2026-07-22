@@ -1,36 +1,50 @@
 #pragma once
 
-#include <memory>
-#include <unordered_map>
-
-#include "GraphicsPipeline.h"
 #include "ComputePipeline.h"
+#include "GraphicsPipeline.h"
 #include "ShaderPreprocessor.h"
 #include "src/resource/asset/AssetManager.h"
 
+#include <memory>
+#include <unordered_map>
+
 namespace pipeline::shader
 {
-	class ShaderLibrary final
+class ShaderLibrary final
+{
+  public:
+	ShaderLibrary(device::Device &Device, resource::AssetManager &Assets);
+	[[nodiscard]] uint32 CreateGraphicsPipeline(const GraphicsPipelineDescriptor &Descriptor);
+	[[nodiscard]] GraphicsPipeline &GetGraphicsPipeline(uint32 PipelineIndex);
+	[[nodiscard]] uint32 CreateComputePipeline(const ComputePipelineDescriptor &Descriptor);
+	[[nodiscard]] ComputePipeline &GetComputePipeline(uint32 PipelineIndex);
+	void BeginFrame();
+	[[nodiscard]] const std::string &GetLastDiagnostic() const noexcept;
+
+  private:
+	struct PipelineEntry final
 	{
-	public:
-		explicit ShaderLibrary(resource::AssetManager& assets);
-		[[nodiscard]] uint32 createGraphicsPipeline(const GraphicsPipelineDescriptor& descriptor);
-		[[nodiscard]] GraphicsPipeline& getGraphicsPipeline(uint32 pipelineIndex);
-		[[nodiscard]] uint32 createComputePipeline(const ComputePipelineDescriptor& descriptor);
-		[[nodiscard]] ComputePipeline& getComputePipeline(uint32 pipelineIndex);
-		void beginFrame();
-		[[nodiscard]] const std::string& getLastDiagnostic() const noexcept;
-	private:
-		struct PipelineEntry final { GraphicsPipelineDescriptor descriptor; std::unique_ptr<GraphicsPipeline> active; uint64 vertexHash = 0; uint64 fragmentHash = 0; };
-		struct ComputePipelineEntry final { ComputePipelineDescriptor descriptor; std::unique_ptr<ComputePipeline> active; uint64 computeHash = 0; };
-		resource::AssetManager& assets;
-		ShaderPreprocessor preprocessor;
-		std::unordered_map<std::string, std::unique_ptr<ShaderModule>> modules;
-		std::vector<PipelineEntry> pipelines;
-		std::vector<ComputePipelineEntry> computePipelines;
-		std::string lastDiagnostic;
-		[[nodiscard]] ShaderModule& getModule(const ShaderSourceAsset& source, const ShaderPermutationKey& permutation);
-		[[nodiscard]] std::unique_ptr<GraphicsPipeline> build(const GraphicsPipelineDescriptor& descriptor, uint64& vertexHash, uint64& fragmentHash);
-		[[nodiscard]] std::unique_ptr<ComputePipeline> build(const ComputePipelineDescriptor& descriptor, uint64& computeHash);
+		GraphicsPipelineDescriptor Descriptor;
+		std::unique_ptr<GraphicsPipeline> Active;
+		uint64 VertexHash = 0;
+		uint64 FragmentHash = 0;
 	};
-}
+	struct ComputePipelineEntry final
+	{
+		ComputePipelineDescriptor Descriptor;
+		std::unique_ptr<ComputePipeline> Active;
+		uint64 ComputeHash = 0;
+	};
+	resource::AssetManager &Assets;
+	device::Device &Device;
+	ShaderPreprocessor Preprocessor;
+	std::unordered_map<std::string, std::unique_ptr<ShaderModule>> Modules;
+	std::vector<PipelineEntry> Pipelines;
+	std::vector<ComputePipelineEntry> ComputePipelines;
+	std::string LastDiagnostic;
+	[[nodiscard]] ShaderModule &GetModule(const ShaderSourceAsset &Source, const ShaderPermutationKey &Permutation);
+	[[nodiscard]] std::unique_ptr<GraphicsPipeline> Build(const GraphicsPipelineDescriptor &Descriptor, uint64 &VertexHash,
+														  uint64 &FragmentHash);
+	[[nodiscard]] std::unique_ptr<ComputePipeline> Build(const ComputePipelineDescriptor &Descriptor, uint64 &ComputeHash);
+};
+} // namespace pipeline::shader

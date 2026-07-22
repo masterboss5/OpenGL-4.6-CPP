@@ -1,6 +1,15 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="src\core\window\Context.cpp" />
+    <ClCompile Include="src\core\window\Window.cpp" />
+    <ClCompile Include="src\core\window\WindowManager.cpp" />
+    <ClCompile Include="src\core\window\WindowDataExchange.cpp" />
+    <ClCompile Include="src\core\window\WindowDialogs.cpp" />
+    <ClCompile Include="src\core\window\WindowShell.cpp" />
+    <ClCompile Include="src\pipeline\device\Device.cpp" />
+    <ClCompile Include="src\core\input\InputSystem.cpp" />
+    <ClCompile Include="src\core\time\FrameClock.cpp" />
     <Filter Include="Source Files">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
@@ -15,6 +24,16 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\core\window\Context.h" />
+    <ClInclude Include="src\core\window\Window.h" />
+    <ClInclude Include="src\core\window\WindowException.h" />
+    <ClInclude Include="src\core\window\WindowManager.h" />
+    <ClInclude Include="src\core\window\WindowTypes.h" />
+    <ClInclude Include="src\core\window\WindowDialogs.h" />
+    <ClInclude Include="src\pipeline\device\Device.h" />
+    <ClInclude Include="src\core\input\InputSystem.h" />
+    <ClInclude Include="src\core\input\InputTypes.h" />
+    <ClInclude Include="src\core\time\FrameClock.h" />
     <ClCompile Include="src\resource\stb_image.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -27,16 +46,7 @@
     <ClCompile Include="src\scene\Camera.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\resource\FileLoader.h">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\scene\SpotLightSource.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\scene\StaticMeshObject.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\input\Window.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\scene\PointLightSource.cpp">
@@ -51,9 +61,6 @@
     <ClCompile Include="src\core\app\Application.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\core\input\InputManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\resource\asset\importer\ModelAssetImporter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -61,9 +68,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\pipeline\vertex\VertexDescriptor.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\pipeline\device\OpenGLRuntime.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\resource\asset\ModelAsset.cpp">
@@ -99,21 +103,35 @@
     <ClCompile Include="src\renderer\LightBufferManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\renderer\Material.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="src\renderer\OpenGLRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="src\renderer\ShaderSorageBufferObject.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\StaticMesh.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="src\renderer\Texture.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
+    <ClCompile Include="src\animation\AnimationSystem.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\component\object\CObjectAnimationComponent.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\component\object\CObjectMeshComponent.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\ComputePipeline.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\GraphicsPipeline.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\ShaderException.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\ShaderLibrary.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\ShaderModule.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\ShaderPreprocessor.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\ShaderSourceAsset.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\pipeline\shader\ShaderTypes.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\renderer\FrameResourceRing.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\renderer\HybridDeferredFrameGraph.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\renderer\MeshGpuResource.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\renderer\RenderCoreValidation.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\renderer\RenderGraph.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\renderer\SceneExtractor.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\renderer\ScenePreparation.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\resource\asset\AnimationAsset.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\resource\asset\importer\ShaderSourceImporter.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\resource\asset\MaterialAsset.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\resource\asset\MeshAsset.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\resource\asset\SkeletonAsset.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\scene\Scene.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\scene\SceneCollection.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\scene\SceneCommandBuffer.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\Downloads\buster_drone\scene.bin">
@@ -127,25 +145,19 @@
     <ClInclude Include="src\scene\SpotLightSource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\scene\StaticMeshObject.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\core\input\Window.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="src\scene\DirectionalLightSource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\core\app\Application.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+	<ClInclude Include="src\core\events\EventDispatcher.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
     <ClInclude Include="src\core\layers\ApplicationLayer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\core\layers\RenderLayer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\core\input\InputManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\scene\SceneCollection.h">
@@ -164,9 +176,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\pipeline\vertex\VertexDescriptor.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\pipeline\device\OpenGLRuntime.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\resource\asset\AssetRecord.h">
@@ -235,29 +244,42 @@
     <ClInclude Include="src\renderer\LightBufferManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\renderer\Mesh.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="src\renderer\OpenGLRenderer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\PBRMaterial.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\renderer\RenderCommand.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="src\renderer\ShaderStorageBufferObject.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\StaticMesh.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\Texture.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="src\renderer\Vertex.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
+    <ClInclude Include="src\animation\AnimationSystem.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\component\object\CObjectAnimationComponent.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\component\object\CObjectMeshComponent.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\ComputePipeline.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\GraphicsPipeline.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\ShaderException.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\ShaderLibrary.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\ShaderModule.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\ShaderPreprocessor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\ShaderSourceAsset.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\pipeline\shader\ShaderTypes.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\FrameResourceRing.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\HybridDeferredFrameGraph.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\MeshGpuResource.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\RenderCoreValidation.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\RendererGpuTypes.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\RenderGraph.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\RenderPassPipelineSet.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\SceneExtractor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\renderer\ScenePreparation.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\resource\asset\AnimationAsset.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\resource\asset\AssetException.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\resource\asset\importer\ShaderSourceImporter.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\resource\asset\MaterialAsset.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\resource\asset\MeshAsset.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\resource\asset\SkeletonAsset.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\scene\detail\DenseGenerationalPool.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\scene\Scene.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\scene\SceneCommandBuffer.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\scene\SceneException.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\scene\SceneHandles.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

@@ -1,9 +1,11 @@
 #pragma once
 #include "src/component/object/CObjectComponent.h"
+#include "src/types.h"
+
 #include <glm.hpp>
 #include <gtc/quaternion.hpp>
 
-//TODO
+// TODO
 //============================================================
 /*
 	1. Decide where to add grid snapping, as another component or inside this TransformComponenet
@@ -17,75 +19,68 @@
 
 namespace components
 {
-	class CObjectTransformComponent final : public CObjectComponent
-	{
-	private:
-		glm::vec3 position {0.0f, 0.0f, 0.0f};
-		glm::quat rotation {1.0f, 0.0f, 0.0f, 0.0f};
-		glm::vec3 scale {1.0f, 1.0f, 1.0f};
-		mutable bool needsRecalculation {true};
-		mutable glm::mat4 matrix {1.0f};
+class CObjectTransformComponent final : public CObjectComponent
+{
+  private:
+	glm::vec3 Position{0.0f, 0.0f, 0.0f};
+	glm::quat Rotation{1.0f, 0.0f, 0.0f, 0.0f};
+	glm::vec3 Scale{1.0f, 1.0f, 1.0f};
+	mutable bool NeedsRecalculation{true};
+	mutable glm::mat4 Matrix{1.0f};
 
-		void updateMatrix() const;
-		void recalculateMatrix() const;
-	public:
-		explicit CObjectTransformComponent
-		(
-			world::Object* object,
-			const glm::vec3& position = glm::vec3{0.0f, 0.0f, 0.0f},
-			const glm::quat& rotation = glm::quat{1.0f, 0.0f, 0.0f, 0.0f},
-			const glm::vec3& scale = glm::vec3{1.0f, 1.0f, 1.0f}
-		);
-		using Dependencies = TypeList<>;
-		CCOMPONENT_BODY(CObjectTransformComponent)
+	void UpdateMatrix() const;
+	void RecalculateMatrix() const;
 
+  public:
+	explicit CObjectTransformComponent(world::ObjectHandle Owner, const glm::vec3 &Position = glm::vec3{0.0f, 0.0f, 0.0f},
+									   const glm::quat &Rotation = glm::quat{1.0f, 0.0f, 0.0f, 0.0f},
+									   const glm::vec3 &Scale = glm::vec3{1.0f, 1.0f, 1.0f});
+	using Dependencies = TypeList<>;
+	CCOMPONENT_BODY(CObjectTransformComponent)
 
-		void resetTransform();
-		void resetPosition();
-		void resetRotation();
-		void resetScale();
+	void ResetTransform();
+	void ResetPosition();
+	void ResetRotation();
+	void ResetScale();
 
+	void SetTransform(const glm::vec3 &Position, const glm::quat &Rotation, const glm::vec3 &Scale);
 
-		void setTransform(const glm::vec3& position, const glm::quat& rotation, const glm::vec3& scale);
+	void SetPosition(const glm::vec3 &Position);
+	[[nodiscard]] glm::vec3 GetPosition() const;
+	void Translate(const glm::vec3 &Translation);
+	void TranslateX(float32 X);
+	void TranslateY(float32 Y);
+	void TranslateZ(float32 Z);
+	void LerpPosition(const glm::vec3 &Target, float32 Alpha);
+	void SetPositionX(float32 X);
+	void SetPositionY(float32 Y);
+	void SetPositionZ(float32 Z);
 
-		void setPosition(const glm::vec3& position);
-		[[nodiscard]] glm::vec3 getPosition() const;
-		void translate(const glm::vec3& translation);
-		void translateX(float x);
-		void translateY(float y);
-		void translateZ(float z);
-		void lerpPosition(const glm::vec3& target, float alpha);
-		void setPositionX(float x);
-		void setPositionY(float y);
-		void setPositionZ(float z);
-		
-		void setRotation(const glm::quat& quat);
-		void setRotationEuler(const glm::vec3& eulerAngles);
-		void rotate(float angleDegrees, const glm::vec3& axis);
-		[[nodiscard]] glm::quat getRotation() const;
-		[[nodiscard]] glm::vec3 getRotationEuler() const;
-		void slerpRotation(const glm::quat& target, float alpha);
+	void SetRotation(const glm::quat &Quat);
+	void SetRotationEuler(const glm::vec3 &EulerAngles);
+	void Rotate(float32 AngleDegrees, const glm::vec3 &Axis);
+	[[nodiscard]] glm::quat GetRotation() const;
+	[[nodiscard]] glm::vec3 GetRotationEuler() const;
+	void SlerpRotation(const glm::quat &Target, float32 Alpha);
 
-		void setScale(const glm::vec3& scale);
-		void setScale(float scale);
-		[[nodiscard]] glm::vec3 getScale() const;
-		void lerpScale(const glm::vec3& target, float alpha);
-		void setScaleX(float x);
-		void setScaleY(float y);
-		void setScaleZ(float z);
+	void SetScale(const glm::vec3 &Scale);
+	void SetScale(float32 Scale);
+	[[nodiscard]] glm::vec3 GetScale() const;
+	void LerpScale(const glm::vec3 &Target, float32 Alpha);
+	void SetScaleX(float32 X);
+	void SetScaleY(float32 Y);
+	void SetScaleZ(float32 Z);
 
-		void lookAt(const glm::vec3& target, const glm::vec3& up = glm::vec3{0.0f, 1.0f, 0.0f});
-		[[nodiscard]] float distanceTo(const glm::vec3& point) const;
-		[[nodiscard]] float distanceToSquared(const glm::vec3& point) const;
-		[[nodiscard]] bool isWithinDistance(const glm::vec3& point, float distance) const;
-		[[nodiscard]] glm::vec3 getForward() const;
-		[[nodiscard]] glm::vec3 getUp() const;
-		[[nodiscard]] glm::vec3 getRight() const;
-		[[nodiscard]] const glm::mat4& getMatrix() const;
+	void LookAt(const glm::vec3 &Target, const glm::vec3 &Up = glm::vec3{0.0f, 1.0f, 0.0f});
+	[[nodiscard]] float32 DistanceTo(const glm::vec3 &Point) const;
+	[[nodiscard]] float32 DistanceToSquared(const glm::vec3 &Point) const;
+	[[nodiscard]] bool IsWithinDistance(const glm::vec3 &Point, float32 Distance) const;
+	[[nodiscard]] glm::vec3 GetForward() const;
+	[[nodiscard]] glm::vec3 GetUp() const;
+	[[nodiscard]] glm::vec3 GetRight() const;
+	[[nodiscard]] const glm::mat4 &GetMatrix() const;
 
-		void onAttachment() override;
-		void onDetachment() override;
-		void onRender() override;
-		void onUpdate() override;
-	};
-}
+	void OnAttachment() override;
+	void OnDetachment() override;
+};
+} // namespace components

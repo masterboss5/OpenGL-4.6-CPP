@@ -1,34 +1,33 @@
 #pragma once
 
-#include <vector>
-
-#include <glm.hpp>
-
 #include "RenderCommand.h"
 #include "src/scene/SceneCollection.h"
 
-class Material;
+#include <glm.hpp>
+#include <vector>
 
 namespace renderer
 {
-	struct RenderPreparationResult final
-	{
-		std::vector<PreparedInstance> candidateInstances;
-		std::vector<RenderBatch> batches;
-		std::vector<RenderCommand> candidateCommands;
-		std::vector<const Material*> materials;
-	};
+struct RenderPreparationResult final
+{
+	std::vector<PreparedInstance> CandidateInstances;
+	std::vector<RenderBatch> Batches;
+	std::vector<RenderCommand> CandidateCommands;
+	std::vector<GPUMaterialRecord> Materials;
+};
 
-	class ScenePreparation final
-	{
-	public:
-		[[nodiscard]] RenderPreparationResult prepare(const SceneCollection& collection, const glm::mat4& viewProjection, uint32 opaquePipelineIndex, uint32 transparentPipelineIndex, bool performFrustumCulling = true) const;
-		// Shared conservative sphere/frustum test for the CPU preparation and
-		// shadow-view culling paths. The matrix must use the engine's ZO clip
-		// convention established by glClipControl.
-		[[nodiscard]] static bool intersectsFrustum(const glm::vec4& sphere, const glm::mat4& viewProjection);
-	private:
-		[[nodiscard]] static uint64 makeSortKey(const RenderItem& item, uint32 pipelineIndex);
-		static void radixSort(std::vector<std::pair<uint64, RenderItem>>& items);
-	};
-}
+class ScenePreparation final
+{
+  public:
+	[[nodiscard]] RenderPreparationResult Prepare(const SceneCollection &Collection, const glm::mat4 &ViewProjection,
+												  uint32 OpaquePipelineIndex, uint32 TransparentPipelineIndex,
+												  bool PerformFrustumCulling = true, bool ShadowCastersOnly = false) const;
+	// Shared conservative sphere/frustum test for the CPU preparation and
+	// shadow-view culling paths. The matrix must use the engine's ZO clip
+	// convention established by glClipControl.
+	[[nodiscard]] static bool IntersectsFrustum(const glm::vec4 &Sphere, const glm::mat4 &ViewProjection);
+
+  private:
+	static void RadixSort(std::vector<RenderItem> &Items, uint32 OpaquePipelineIndex, uint32 TransparentPipelineIndex);
+};
+} // namespace renderer

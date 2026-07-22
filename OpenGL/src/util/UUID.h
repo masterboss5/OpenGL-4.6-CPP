@@ -1,82 +1,75 @@
 #pragma once
 #include "src/types.h"
-#include <random>
+
 #include <functional>
+#include <random>
 #include <string>
 
 namespace util
 {
-	class UUID final
+class UUID final
+{
+  private:
+	uint64 Left = 0;
+	uint64 Right = 0;
+
+  public:
+	UUID() = default;
+	UUID(uint64 Left, uint64 Right) : Left(Left), Right(Right)
 	{
-	private:
-		uint64 left = 0;
-		uint64 right = 0;
-	public:
+	}
 
-		UUID() = default;
-		UUID(uint64 left, uint64 right)
-			: left(left), right(right)
-		{
-		}
+	[[nodiscard]] inline static UUID GenerateRandomUUID()
+	{
+		thread_local static std::mt19937_64 Rng{std::random_device{}()};
+		thread_local static std::uniform_int_distribution<uint64> Dist;
+		return UUID{Dist(Rng), Dist(Rng)};
+	}
 
-		inline static UUID generateRandomUUID()
-		{
-			thread_local static std::mt19937_64 rng{ std::random_device{}() };
-			thread_local static std::uniform_int_distribution<uint64> dist;
-			return UUID {dist(rng), dist(rng)};
-		}
+	bool operator==(const UUID &Other) const
+	{
+		return this->Left == Other.Left && this->Right == Other.Right;
+	}
 
-		bool operator==(const UUID& other) const
-		{
-			return this->left == other.left && this->right == other.right;
-		}
+	bool operator!=(const UUID &Other) const
+	{
+		return !(*this == Other);
+	}
 
-		bool operator!=(const UUID& other) const
-		{
-			return !(*this == other);
-		}
+	[[nodiscard]] bool IsValid() const
+	{
+		return Left != 0 || Right != 0;
+	}
 
+	[[nodiscard]] explicit operator bool() const
+	{
+		return this->IsValid();
+	}
 
-		bool isValid() const
-		{
-			return left != 0 || right != 0;
-		}
+	std::string ToString() const
+	{
+		return static_cast<std::string>(*this);
+	}
 
-		explicit operator bool() const
-		{
-			return this->isValid();
-		}
+	explicit operator std::string() const
+	{
+		char Buffer[37];
+		snprintf(Buffer, sizeof(Buffer), "%08x-%04x-%04x-%04x-%012llx", (uint32)(Left >> 32), (uint16)(Left >> 16), (uint16)(Left & 0xFFFF),
+				 (uint16)(Right >> 48), (unsigned long long)(Right & 0x0000FFFFFFFFFFFF));
+		return std::string(Buffer);
+	}
 
-		std::string toString() const
-		{
-			return static_cast<std::string>(*this);
-		}
-
-		explicit operator std::string() const
-		{
-			char buffer[37];
-			snprintf(buffer, sizeof(buffer),
-				"%08x-%04x-%04x-%04x-%012llx",
-				(uint32)(left >> 32),
-				(uint16)(left >> 16),
-				(uint16)(left & 0xFFFF),
-				(uint16)(right >> 48),
-				(unsigned long long)(right & 0x0000FFFFFFFFFFFF));
-			return std::string(buffer);
-		}
-
-		friend std::hash<UUID>;
-	};
-}
+	friend std::hash<UUID>;
+};
+} // namespace util
 
 namespace std
 {
-	template<>
-	struct hash<util::UUID>
+template <> struct hash<util::UUID>
+{
+	usize operator()(const util::UUID &ID) const
 	{
-		size_t operator()(const util::UUID& id) const
-		{
-			return std::hash<uint64>{}(id.left) ^ (std::hash<uint64>{}(id.right) << 1);
-		}
-	};
-}
+		return std::hash<uint64>{}(ID.Left) ^ (std::hash<uint64>{}(ID.Right) << 1);
+	}
+};
+} // namespace std

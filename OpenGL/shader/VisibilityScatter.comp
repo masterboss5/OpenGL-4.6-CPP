@@ -12,7 +12,11 @@ struct InstanceRecord
     uint materialIndex;
     uint objectID;
     uint batchIndex;
+	uint skinPaletteOffset;
+	uint previousSkinPaletteOffset;
     uint flags;
+	uint morphWeightOffset;
+	uint morphWeightCount;
 };
 
 struct IndirectCommand

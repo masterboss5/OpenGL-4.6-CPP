@@ -1,33 +1,44 @@
 #pragma once
 
-#include <vector>
+#include "ShaderPreprocessor.h"
 
 #include <GL/glew.h>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-#include "ShaderPreprocessor.h"
+namespace pipeline::device
+{
+class Device;
+}
 
 namespace pipeline::shader
 {
-	class ShaderModule final
+class ShaderModule final
+{
+  public:
+	struct VertexInput final
 	{
-	public:
-		struct VertexInput final
-		{
-			GLint location = -1;
-			GLenum type = GL_NONE;
-		};
-
-		ShaderModule(const ShaderSourceAsset& source, ShaderPermutationKey permutation, const ShaderPreprocessResult& preprocessed);
-		~ShaderModule();
-		ShaderModule(const ShaderModule&) = delete;
-		[[nodiscard]] GLuint getProgramID() const noexcept;
-		[[nodiscard]] ShaderStage getStage() const noexcept;
-		// Program-interface reflection is performed once after linking. Graphics
-		// pipelines use this immutable cache instead of querying OpenGL at draw time.
-		[[nodiscard]] const std::vector<VertexInput>& getVertexInputs() const noexcept;
-	private:
-		GLuint programID = 0;
-		ShaderStage stage;
-		std::vector<VertexInput> vertexInputs;
+		GLint Location = -1;
+		GLenum Type = GL_NONE;
 	};
-}
+
+	ShaderModule(device::Device &Device, const ShaderSourceAsset &Source, ShaderPermutationKey Permutation,
+				 const ShaderPreprocessResult &Preprocessed);
+	~ShaderModule();
+	ShaderModule(const ShaderModule &) = delete;
+	[[nodiscard]] GLuint GetProgramID() const noexcept;
+	[[nodiscard]] ShaderStage GetStage() const noexcept;
+	// Program-interface reflection is performed once after linking. Graphics
+	// pipelines use this immutable cache instead of querying OpenGL at draw time.
+	[[nodiscard]] const std::vector<VertexInput> &GetVertexInputs() const noexcept;
+	[[nodiscard]] const std::unordered_map<std::string, GLint> &GetUniformLocations() const noexcept;
+
+  private:
+	device::Device *Device = nullptr;
+	GLuint ProgramID = 0;
+	ShaderStage Stage;
+	std::vector<VertexInput> VertexInputs;
+	std::unordered_map<std::string, GLint> UniformLocations;
+};
+} // namespace pipeline::shader

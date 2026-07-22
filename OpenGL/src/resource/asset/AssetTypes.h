@@ -1,13 +1,24 @@
 #pragma once
 
+#include "src/types.h"
+
 namespace resource
 {
-	enum class AssetType
-	{
-		TEXTURE_2D,
-		MATERIAL,
-		MODEL,
-		SHADER_SOURCE,
-		COUNT
-	};
-}
+using AssetID = string;
+
+enum class AssetType
+{
+	Texture2D,
+	Material,
+	MaterialInstance,
+	Model,
+	StaticMesh,
+	SkeletalMesh,
+	Skeleton,
+	AnimationClip,
+	AnimationGraph,
+	RetargetProfile,
+	ShaderSource,
+	Count
+};
+} // namespace resource

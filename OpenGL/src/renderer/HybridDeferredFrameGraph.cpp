@@ -6,66 +6,191 @@
 
 namespace renderer
 {
-	uint32 HybridDeferredFrameGraph::calculateMipCount(graph::Extent2D extent)
+uint32 HybridDeferredFrameGraph::CalculateMipCount(graph::Extent2D Extent)
+{
+	uint32 Dimension = std::max(Extent.Width, Extent.Height);
+	uint32 MipCount = 1;
+	while (Dimension > 1)
 	{
-		uint32 dimension = std::max(extent.width, extent.height);
-		uint32 mipCount = 1;
-		while (dimension > 1) { dimension >>= 1U; ++mipCount; }
-		return mipCount;
+		Dimension >>= 1U;
+		++MipCount;
 	}
-
-	void HybridDeferredFrameGraph::requireCallback(const HybridDeferredPassCallback& callback, string_view passName)
-	{
-		if (!callback) throw std::invalid_argument("Hybrid deferred frame graph requires callback for " + std::string(passName));
-	}
-
-	HybridDeferredFrameResources HybridDeferredFrameGraph::build(graph::RenderGraph& graph, const HybridDeferredFrameInputs& inputs, const HybridDeferredPassCallbacks& callbacks) const
-	{
-		if (!inputs.extent.isValid()) throw std::invalid_argument("Hybrid deferred frame graph requires a valid extent");
-		requireCallback(callbacks.directionalShadows, "DirectionalShadows"); requireCallback(callbacks.spotShadows, "SpotShadows"); requireCallback(callbacks.pointShadows, "PointShadows"); requireCallback(callbacks.mainVisibility, "MainVisibility"); requireCallback(callbacks.depthPrepass, "DepthPrepass"); requireCallback(callbacks.hierarchicalDepth, "HierarchicalDepth"); requireCallback(callbacks.gbuffer, "GBuffer"); requireCallback(callbacks.clusteredLights, "ClusteredLights"); requireCallback(callbacks.deferredLighting, "DeferredLighting"); requireCallback(callbacks.weightedOIT, "WeightedOIT"); requireCallback(callbacks.oitComposition, "OITComposition"); requireCallback(callbacks.temporalAA, "TemporalAA"); requireCallback(callbacks.exposureAndBloom, "ExposureAndBloom"); requireCallback(callbacks.toneMapAndPresent, "ToneMapAndPresent");
-
-		const graph::Extent2D shadowExtent { 4096, 4096 };
-		const uint32 hierarchicalMipCount = calculateMipCount(inputs.extent);
-		HybridDeferredFrameResources resources {
-			.directionalShadowAtlas = graph.createTexture({ .debugName = "DirectionalShadowAtlas", .extent = shadowExtent, .format = graph::TextureFormat::Depth32Float, .dimension = graph::TextureDimension::Texture2DArray, .layers = 4, .persistent = true }),
-			.spotShadowAtlas = graph.createTexture({ .debugName = "SpotShadowAtlas", .extent = shadowExtent, .format = graph::TextureFormat::Depth32Float, .dimension = graph::TextureDimension::Texture2DArray, .layers = 64, .persistent = true }),
-			.pointShadowArray = graph.createTexture({ .debugName = "PointShadowArray", .extent = { 1024, 1024 }, .format = graph::TextureFormat::Depth32Float, .dimension = graph::TextureDimension::TextureCubeArray, .layers = 96, .persistent = true }),
-			.depth = graph.createTexture({ .debugName = "MainDepth", .extent = inputs.extent, .format = graph::TextureFormat::Depth32Float }),
-			.hierarchicalDepth = graph.createTexture({ .debugName = "HierarchicalDepth", .extent = inputs.extent, .format = graph::TextureFormat::R32Float, .mipCount = hierarchicalMipCount, .persistent = true }),
-			.gbufferBaseColor = graph.createTexture({ .debugName = "GBufferBaseColor", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float }),
-			.gbufferNormalRoughness = graph.createTexture({ .debugName = "GBufferNormalRoughness", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float }),
-			.gbufferMaterial = graph.createTexture({ .debugName = "GBufferMaterial", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float }),
-			.velocity = graph.createTexture({ .debugName = "MotionVectors", .extent = inputs.extent, .format = graph::TextureFormat::RG16Float }),
-			.objectID = graph.createTexture({ .debugName = "ObjectID", .extent = inputs.extent, .format = graph::TextureFormat::R32UnsignedInteger }),
-			.hdrLighting = graph.createTexture({ .debugName = "HDRLighting", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float }),
-			.transparencyAccumulation = graph.createTexture({ .debugName = "OITAccumulation", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float }),
-			.transparencyRevealage = graph.createTexture({ .debugName = "OITRevealage", .extent = inputs.extent, .format = graph::TextureFormat::R32Float }),
-			.compositedHDR = graph.createTexture({ .debugName = "CompositedHDR", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float }),
-			.taaHistory = graph.createTexture({ .debugName = "TAAHistory", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float, .persistent = true }),
-			.taaResolved = graph.createTexture({ .debugName = "TAAResolved", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float }),
-			.exposure = graph.createTexture({ .debugName = "AutoExposure", .extent = { 1, 1 }, .format = graph::TextureFormat::R32Float, .persistent = true }),
-			.bloom = graph.createTexture({ .debugName = "Bloom", .extent = inputs.extent, .format = graph::TextureFormat::RGBA16Float, .mipCount = hierarchicalMipCount }),
-			.clusterHeaders = graph.createBuffer({ .debugName = "ClusterHeaders", .sizeInBytes = static_cast<uint64>(16) * 32U * 18U * 24U }),
-			.clusterIndices = graph.createBuffer({ .debugName = "ClusterIndices", .sizeInBytes = static_cast<uint64>(4) * 1'048'576U })
-		};
-
-		const auto resourceState = std::make_shared<HybridDeferredFrameResources>(resources);
-		auto wrap = [resourceState](const HybridDeferredPassCallback& callback) { return [callback, resourceState](graph::RenderGraphContext& context) { callback(context, *resourceState); }; };
-		auto add = [&graph, &wrap](string name, graph::PassQueue queue, std::vector<graph::TextureHandle> readTextures, std::vector<graph::BufferHandle> readBuffers, std::vector<graph::TextureHandle> writeTextures, std::vector<graph::BufferHandle> writeBuffers, const HybridDeferredPassCallback& execute) { (void)graph.addPass({ .name = std::move(name), .queue = queue, .readTextures = std::move(readTextures), .readBuffers = std::move(readBuffers), .writeTextures = std::move(writeTextures), .writeBuffers = std::move(writeBuffers), .execute = wrap(execute) }); };
-		add("DirectionalShadows", graph::PassQueue::Graphics, {}, { inputs.indirectCommands }, { resources.directionalShadowAtlas }, {}, callbacks.directionalShadows);
-		add("SpotShadows", graph::PassQueue::Graphics, {}, { inputs.indirectCommands }, { resources.spotShadowAtlas }, {}, callbacks.spotShadows);
-		add("PointShadows", graph::PassQueue::Graphics, {}, { inputs.indirectCommands }, { resources.pointShadowArray }, {}, callbacks.pointShadows);
-		add("MainVisibility", graph::PassQueue::Compute, { resources.hierarchicalDepth }, { inputs.candidateInstances, inputs.batchMetadata }, {}, { inputs.visibleInstances, inputs.indirectCommands, inputs.visibilityScratch }, callbacks.mainVisibility);
-		(void)graph.addPass({ .name = "DepthPrepass", .queue = graph::PassQueue::Graphics, .readBuffers = { inputs.visibleInstances, inputs.indirectCommands }, .depthAttachment = graph::DepthAttachment { .texture = resources.depth, .load = graph::LoadOperation::Clear, .store = graph::StoreOperation::Store, .clearDepth = 0.0f }, .execute = wrap(callbacks.depthPrepass) });
-		add("HierarchicalDepth", graph::PassQueue::Compute, { resources.depth }, {}, { resources.hierarchicalDepth }, {}, callbacks.hierarchicalDepth);
-		(void)graph.addPass({ .name = "GBuffer", .queue = graph::PassQueue::Graphics, .readBuffers = { inputs.visibleInstances, inputs.indirectCommands }, .colorAttachments = { { .texture = resources.gbufferBaseColor, .load = graph::LoadOperation::Clear }, { .texture = resources.gbufferNormalRoughness, .load = graph::LoadOperation::Clear }, { .texture = resources.gbufferMaterial, .load = graph::LoadOperation::Clear }, { .texture = resources.velocity, .load = graph::LoadOperation::Clear }, { .texture = resources.objectID, .load = graph::LoadOperation::Clear } }, .depthAttachment = graph::DepthAttachment { .texture = resources.depth, .load = graph::LoadOperation::Load }, .execute = wrap(callbacks.gbuffer) });
-		add("ClusteredLights", graph::PassQueue::Compute, { resources.depth }, {}, {}, { resources.clusterHeaders, resources.clusterIndices }, callbacks.clusteredLights);
-		add("DeferredLighting", graph::PassQueue::Compute, { resources.gbufferBaseColor, resources.gbufferNormalRoughness, resources.gbufferMaterial, resources.depth, resources.directionalShadowAtlas, resources.spotShadowAtlas, resources.pointShadowArray }, { resources.clusterHeaders, resources.clusterIndices }, { resources.hdrLighting }, {}, callbacks.deferredLighting);
-		(void)graph.addPass({ .name = "WeightedOIT", .queue = graph::PassQueue::Graphics, .readTextures = { resources.depth }, .readBuffers = { inputs.visibleInstances, inputs.indirectCommands, resources.clusterHeaders, resources.clusterIndices }, .colorAttachments = { { .texture = resources.transparencyAccumulation, .load = graph::LoadOperation::Clear }, { .texture = resources.transparencyRevealage, .load = graph::LoadOperation::Clear, .clearColor = glm::vec4(1.0f) } }, .depthAttachment = graph::DepthAttachment { .texture = resources.depth, .load = graph::LoadOperation::Load }, .execute = wrap(callbacks.weightedOIT) });
-		add("OITComposition", graph::PassQueue::Compute, { resources.hdrLighting, resources.transparencyAccumulation, resources.transparencyRevealage }, {}, { resources.compositedHDR }, {}, callbacks.oitComposition);
-		add("TemporalAA", graph::PassQueue::Compute, { resources.compositedHDR, resources.velocity, resources.depth, resources.taaHistory }, {}, { resources.taaHistory, resources.taaResolved }, {}, callbacks.temporalAA);
-		add("ExposureAndBloom", graph::PassQueue::Compute, { resources.taaResolved, resources.exposure }, {}, { resources.exposure, resources.bloom }, {}, callbacks.exposureAndBloom);
-		add("ToneMapAndPresent", graph::PassQueue::Graphics, { resources.taaResolved, resources.exposure, resources.bloom }, {}, {}, {}, callbacks.toneMapAndPresent);
-		return *resourceState;
-	}
+	return MipCount;
 }
+
+void HybridDeferredFrameGraph::RequireCallback(const HybridDeferredPassCallback &Callback, string_view PassName)
+{
+	if (!Callback)
+		throw std::invalid_argument("Hybrid deferred frame graph requires callback for " + std::string(PassName));
+}
+
+HybridDeferredFrameResources HybridDeferredFrameGraph::Build(graph::RenderGraph &Graph, const HybridDeferredFrameInputs &Inputs,
+															 const HybridDeferredPassCallbacks &Callbacks) const
+{
+	if (!Inputs.Extent.IsValid())
+		throw std::invalid_argument("Hybrid deferred frame graph requires a valid extent");
+	RequireCallback(Callbacks.DirectionalShadows, "DirectionalShadows");
+	RequireCallback(Callbacks.SpotShadows, "SpotShadows");
+	RequireCallback(Callbacks.PointShadows, "PointShadows");
+	RequireCallback(Callbacks.MainVisibility, "MainVisibility");
+	RequireCallback(Callbacks.DepthPrepass, "DepthPrepass");
+	RequireCallback(Callbacks.HierarchicalDepth, "HierarchicalDepth");
+	RequireCallback(Callbacks.GBuffer, "GBuffer");
+	RequireCallback(Callbacks.ClusteredLights, "ClusteredLights");
+	RequireCallback(Callbacks.DeferredLighting, "DeferredLighting");
+	RequireCallback(Callbacks.WeightedOIT, "WeightedOIT");
+	RequireCallback(Callbacks.OITComposition, "OITComposition");
+	RequireCallback(Callbacks.TemporalAA, "TemporalAA");
+	RequireCallback(Callbacks.ExposureAndBloom, "ExposureAndBloom");
+	RequireCallback(Callbacks.ToneMapAndPresent, "ToneMapAndPresent");
+
+	const graph::Extent2D ShadowExtent{4096, 4096};
+	const uint32 HierarchicalMipCount = CalculateMipCount(Inputs.Extent);
+	const graph::TextureHandle TAAHistoryA = Graph.CreateTexture(
+		{.DebugName = "TAAHistoryA", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float, .Persistent = true});
+	const graph::TextureHandle TAAHistoryB = Graph.CreateTexture(
+		{.DebugName = "TAAHistoryB", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float, .Persistent = true});
+	const bool WriteHistoryA = (Inputs.TemporalHistoryWriteIndex & 1U) == 0U;
+	HybridDeferredFrameResources Resources{
+		.DirectionalShadowAtlas = Graph.CreateTexture({.DebugName = "DirectionalShadowAtlas",
+													   .Extent = ShadowExtent,
+													   .Format = graph::TextureFormat::Depth32Float,
+													   .Dimension = graph::TextureDimension::Texture2DArray,
+													   .Layers = 4,
+													   .Persistent = true}),
+		.SpotShadowAtlas = Graph.CreateTexture({.DebugName = "SpotShadowAtlas",
+												.Extent = ShadowExtent,
+												.Format = graph::TextureFormat::Depth32Float,
+												.Dimension = graph::TextureDimension::Texture2DArray,
+												.Layers = 64,
+												.Persistent = true}),
+		.PointShadowArray = Graph.CreateTexture({.DebugName = "PointShadowArray",
+												 .Extent = {1024, 1024},
+												 .Format = graph::TextureFormat::Depth32Float,
+												 .Dimension = graph::TextureDimension::TextureCubeArray,
+												 .Layers = 96,
+												 .Persistent = true}),
+		.Depth = Graph.CreateTexture({.DebugName = "MainDepth", .Extent = Inputs.Extent, .Format = graph::TextureFormat::Depth32Float}),
+		.HierarchicalDepth = Graph.CreateTexture({.DebugName = "HierarchicalDepth",
+												  .Extent = Inputs.Extent,
+												  .Format = graph::TextureFormat::R32Float,
+												  .MipCount = HierarchicalMipCount,
+												  .Persistent = true}),
+		.GBufferBaseColor =
+			Graph.CreateTexture({.DebugName = "GBufferBaseColor", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float}),
+		.GBufferNormalRoughness = Graph.CreateTexture(
+			{.DebugName = "GBufferNormalRoughness", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float}),
+		.GBufferMaterial =
+			Graph.CreateTexture({.DebugName = "GBufferMaterial", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float}),
+		.Velocity = Graph.CreateTexture({.DebugName = "MotionVectors", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RG16Float}),
+		.ObjectID =
+			Graph.CreateTexture({.DebugName = "ObjectID", .Extent = Inputs.Extent, .Format = graph::TextureFormat::R32UnsignedInteger}),
+		.HDRLighting =
+			Graph.CreateTexture({.DebugName = "HDRLighting", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float}),
+		.TransparencyAccumulation =
+			Graph.CreateTexture({.DebugName = "OITAccumulation", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float}),
+		.TransparencyRevealage =
+			Graph.CreateTexture({.DebugName = "OITRevealage", .Extent = Inputs.Extent, .Format = graph::TextureFormat::R32Float}),
+		.CompositedHDR =
+			Graph.CreateTexture({.DebugName = "CompositedHDR", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float}),
+		.TAAHistoryRead = WriteHistoryA ? TAAHistoryB : TAAHistoryA,
+		.TAAHistoryWrite = WriteHistoryA ? TAAHistoryA : TAAHistoryB,
+		.TAAResolved =
+			Graph.CreateTexture({.DebugName = "TAAResolved", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float}),
+		.Exposure = Graph.CreateTexture(
+			{.DebugName = "AutoExposure", .Extent = {1, 1}, .Format = graph::TextureFormat::R32Float, .Persistent = true}),
+		.Bloom = Graph.CreateTexture(
+			{.DebugName = "Bloom", .Extent = Inputs.Extent, .Format = graph::TextureFormat::RGBA16Float, .MipCount = HierarchicalMipCount}),
+		.ClusterHeaders = Graph.CreateBuffer({.DebugName = "ClusterHeaders", .SizeInBytes = static_cast<uint64>(16) * 32U * 18U * 24U}),
+		.ClusterIndices = Graph.CreateBuffer({.DebugName = "ClusterIndices", .SizeInBytes = static_cast<uint64>(4) * 1'048'576U})};
+
+	const auto ResourceState = std::make_shared<HybridDeferredFrameResources>(Resources);
+	auto Wrap = [ResourceState](const HybridDeferredPassCallback &Callback)
+	{ return [Callback, ResourceState](graph::RenderGraphContext &Context) { Callback(Context, *ResourceState); }; };
+	auto Add = [&Graph, &Wrap](string Name, graph::PassQueue Queue, std::vector<graph::TextureHandle> ReadTextures,
+							   std::vector<graph::BufferHandle> ReadBuffers, std::vector<graph::TextureHandle> WriteTextures,
+							   std::vector<graph::BufferHandle> WriteBuffers, const HybridDeferredPassCallback &Execute)
+	{
+		(void)Graph.AddPass({.Name = std::move(Name),
+							 .Queue = Queue,
+							 .ReadTextures = std::move(ReadTextures),
+							 .ReadBuffers = std::move(ReadBuffers),
+							 .WriteTextures = std::move(WriteTextures),
+							 .WriteBuffers = std::move(WriteBuffers),
+							 .Execute = Wrap(Execute)});
+	};
+	(void)Graph.AddPass({.Name = "DirectionalShadows",
+						 .Queue = graph::PassQueue::Graphics,
+						 .ReadBuffers = {Inputs.ShadowInstances},
+						 .DepthAttachment = graph::DepthAttachment{.Texture = Resources.DirectionalShadowAtlas,
+																   .Load = graph::LoadOperation::Load,
+																   .Store = graph::StoreOperation::Store,
+																   .ClearDepth = 0.0f},
+						 .Execute = Wrap(Callbacks.DirectionalShadows)});
+	(void)Graph.AddPass({.Name = "SpotShadows",
+						 .Queue = graph::PassQueue::Graphics,
+						 .ReadBuffers = {Inputs.ShadowInstances},
+						 .DepthAttachment = graph::DepthAttachment{.Texture = Resources.SpotShadowAtlas,
+																   .Load = graph::LoadOperation::Load,
+																   .Store = graph::StoreOperation::Store,
+																   .ClearDepth = 0.0f},
+						 .Execute = Wrap(Callbacks.SpotShadows)});
+	(void)Graph.AddPass({.Name = "PointShadows",
+						 .Queue = graph::PassQueue::Graphics,
+						 .ReadBuffers = {Inputs.ShadowInstances},
+						 .DepthAttachment = graph::DepthAttachment{.Texture = Resources.PointShadowArray,
+																   .Load = graph::LoadOperation::Load,
+																   .Store = graph::StoreOperation::Store,
+																   .ClearDepth = 0.0f},
+						 .Execute = Wrap(Callbacks.PointShadows)});
+	Add("MainVisibility", graph::PassQueue::Compute, {Resources.HierarchicalDepth}, {Inputs.CandidateInstances, Inputs.BatchMetadata}, {},
+		{Inputs.VisibleInstances, Inputs.IndirectCommands, Inputs.VisibilityScratch}, Callbacks.MainVisibility);
+	(void)Graph.AddPass({.Name = "DepthPrepass",
+						 .Queue = graph::PassQueue::Graphics,
+						 .ReadBuffers = {Inputs.VisibleInstances, Inputs.IndirectCommands},
+						 .DepthAttachment = graph::DepthAttachment{.Texture = Resources.Depth,
+																   .Load = graph::LoadOperation::Clear,
+																   .Store = graph::StoreOperation::Store,
+																   .ClearDepth = 0.0f},
+						 .Execute = Wrap(Callbacks.DepthPrepass)});
+	Add("HierarchicalDepth", graph::PassQueue::Compute, {Resources.Depth}, {}, {Resources.HierarchicalDepth}, {},
+		Callbacks.HierarchicalDepth);
+	(void)Graph.AddPass({.Name = "GBuffer",
+						 .Queue = graph::PassQueue::Graphics,
+						 .ReadBuffers = {Inputs.VisibleInstances, Inputs.IndirectCommands},
+						 .ColorAttachments = {{.Texture = Resources.GBufferBaseColor, .Load = graph::LoadOperation::Clear},
+											  {.Texture = Resources.GBufferNormalRoughness, .Load = graph::LoadOperation::Clear},
+											  {.Texture = Resources.GBufferMaterial, .Load = graph::LoadOperation::Clear},
+											  {.Texture = Resources.Velocity, .Load = graph::LoadOperation::Clear},
+											  {.Texture = Resources.ObjectID, .Load = graph::LoadOperation::Clear}},
+						 .DepthAttachment = graph::DepthAttachment{.Texture = Resources.Depth, .Load = graph::LoadOperation::Load},
+						 .Execute = Wrap(Callbacks.GBuffer)});
+	Add("ClusteredLights", graph::PassQueue::Compute, {Resources.Depth}, {}, {}, {Resources.ClusterHeaders, Resources.ClusterIndices},
+		Callbacks.ClusteredLights);
+	Add("DeferredLighting", graph::PassQueue::Compute,
+		{Resources.GBufferBaseColor, Resources.GBufferNormalRoughness, Resources.GBufferMaterial, Resources.Depth,
+		 Resources.DirectionalShadowAtlas, Resources.SpotShadowAtlas, Resources.PointShadowArray},
+		{Resources.ClusterHeaders, Resources.ClusterIndices}, {Resources.HDRLighting}, {}, Callbacks.DeferredLighting);
+	(void)Graph.AddPass(
+		{.Name = "WeightedOIT",
+		 .Queue = graph::PassQueue::Graphics,
+		 .ReadTextures = {Resources.Depth},
+		 .ReadBuffers = {Inputs.VisibleInstances, Inputs.IndirectCommands, Resources.ClusterHeaders, Resources.ClusterIndices},
+		 .ColorAttachments = {{.Texture = Resources.TransparencyAccumulation, .Load = graph::LoadOperation::Clear},
+							  {.Texture = Resources.TransparencyRevealage,
+							   .Load = graph::LoadOperation::Clear,
+							   .ClearColor = glm::vec4(1.0f)}},
+		 .DepthAttachment = graph::DepthAttachment{.Texture = Resources.Depth, .Load = graph::LoadOperation::Load},
+		 .Execute = Wrap(Callbacks.WeightedOIT)});
+	Add("OITComposition", graph::PassQueue::Compute,
+		{Resources.HDRLighting, Resources.TransparencyAccumulation, Resources.TransparencyRevealage}, {}, {Resources.CompositedHDR}, {},
+		Callbacks.OITComposition);
+	Add("TemporalAA", graph::PassQueue::Compute, {Resources.CompositedHDR, Resources.Velocity, Resources.Depth, Resources.TAAHistoryRead},
+		{}, {Resources.TAAHistoryWrite, Resources.TAAResolved}, {}, Callbacks.TemporalAA);
+	Add("ExposureAndBloom", graph::PassQueue::Compute, {Resources.TAAResolved, Resources.Exposure}, {},
+		{Resources.Exposure, Resources.Bloom}, {}, Callbacks.ExposureAndBloom);
+	Add("ToneMapAndPresent", graph::PassQueue::Graphics, {Resources.TAAResolved, Resources.Exposure, Resources.Bloom}, {}, {}, {},
+		Callbacks.ToneMapAndPresent);
+	return *ResourceState;
+}
+} // namespace renderer

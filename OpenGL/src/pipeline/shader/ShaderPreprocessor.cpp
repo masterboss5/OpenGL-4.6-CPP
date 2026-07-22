@@ -1,66 +1,77 @@
 #include "ShaderPreprocessor.h"
 
+#include "ShaderException.h"
+
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
 
-#include "ShaderException.h"
-
 namespace pipeline::shader
 {
-	namespace
-	{
-		std::string readSource(const std::filesystem::path& path, ShaderStage stage, const ShaderPermutationKey& key)
-		{
-			std::ifstream file(path, std::ios::binary);
-			if (!file.is_open()) throw ShaderPreprocessException(stage, path, key, "Unable to open included source");
-			std::ostringstream text; text << file.rdbuf();
-			if (file.bad()) throw ShaderPreprocessException(stage, path, key, "I/O failure while reading included source");
-			return text.str();
-		}
-		bool includePath(const std::string& line, std::string& output)
-		{
-			const size_t include = line.find("#include");
-			if (include == std::string::npos) return false;
-			const size_t firstQuote = line.find('"', include);
-			const size_t secondQuote = firstQuote == std::string::npos ? std::string::npos : line.find('"', firstQuote + 1);
-			if (firstQuote == std::string::npos || secondQuote == std::string::npos) return false;
-			output = line.substr(firstQuote + 1, secondQuote - firstQuote - 1); return true;
-		}
-	}
-
-	ShaderPreprocessResult ShaderPreprocessor::preprocess(const ShaderSourceAsset& source, const ShaderPermutationKey& permutation) const
-	{
-		ShaderPreprocessResult result;
-		std::unordered_set<std::string> active;
-		const auto process = [&](auto&& self, const std::filesystem::path& path, const std::string& text, uint32 sourceIndex) -> void
-		{
-			const std::string canonical = std::filesystem::absolute(path).lexically_normal().generic_string();
-			if (!active.insert(canonical).second) throw ShaderPreprocessException(source.getStage(), path, permutation, "Include cycle detected");
-			std::istringstream lines(text); std::string line; uint32 lineNumber = 1;
-			while (std::getline(lines, line))
-			{
-				std::string include;
-				if (includePath(line, include))
-				{
-					const std::filesystem::path child = (path.parent_path() / include).lexically_normal();
-					const uint32 childIndex = static_cast<uint32>(result.dependencies.size() + 1);
-					result.dependencies.push_back(child);
-					result.source += "#line 1 " + std::to_string(childIndex) + "\n";
-					self(self, child, readSource(child, source.getStage(), permutation), childIndex);
-					result.source += "#line " + std::to_string(lineNumber + 1) + " " + std::to_string(sourceIndex) + "\n";
-				}
-				else result.source += line + "\n";
-				++lineNumber;
-			}
-			active.erase(canonical);
-		};
-
-		const size_t versionEnd = source.getSource().find('\n');
-		if (versionEnd == std::string::npos || source.getSource().rfind("#version", 0) != 0) throw ShaderPreprocessException(source.getStage(), source.getSourcePath(), permutation, "Root shader must start with #version");
-		std::string root = source.getSource();
-		root.insert(versionEnd + 1, permutation.getDefineBlock());
-		process(process, source.getSourcePath(), root, 0);
-		return result;
-	}
+namespace
+{
+std::string ReadSource(const std::filesystem::path &Path, ShaderStage Stage, const ShaderPermutationKey &Key)
+{
+	std::ifstream File(Path, std::ios::binary);
+	if (!File.is_open())
+		throw ShaderPreprocessException(Stage, Path, Key, "Unable to open included source");
+	std::ostringstream Text;
+	Text << File.rdbuf();
+	if (File.bad())
+		throw ShaderPreprocessException(Stage, Path, Key, "I/O failure while reading included source");
+	return Text.str();
 }
+bool IncludePath(const std::string &Line, std::string &Output)
+{
+	const usize Include = Line.find("#include");
+	if (Include == std::string::npos)
+		return false;
+	const usize FirstQuote = Line.find('"', Include);
+	const usize SecondQuote = FirstQuote == std::string::npos ? std::string::npos : Line.find('"', FirstQuote + 1);
+	if (FirstQuote == std::string::npos || SecondQuote == std::string::npos)
+		return false;
+	Output = Line.substr(FirstQuote + 1, SecondQuote - FirstQuote - 1);
+	return true;
+}
+} // namespace
+
+ShaderPreprocessResult ShaderPreprocessor::Preprocess(const ShaderSourceAsset &Source, const ShaderPermutationKey &Permutation) const
+{
+	ShaderPreprocessResult Result;
+	std::unordered_set<std::string> Active;
+	const auto Process = [&](auto &&Self, const std::filesystem::path &Path, const std::string &Text, uint32 SourceIndex) -> void
+	{
+		const std::string Canonical = std::filesystem::absolute(Path).lexically_normal().generic_string();
+		if (!Active.insert(Canonical).second)
+			throw ShaderPreprocessException(Source.GetStage(), Path, Permutation, "Include cycle detected");
+		std::istringstream Lines(Text);
+		std::string Line;
+		uint32 LineNumber = 1;
+		while (std::getline(Lines, Line))
+		{
+			std::string Include;
+			if (IncludePath(Line, Include))
+			{
+				const std::filesystem::path Child = (Path.parent_path() / Include).lexically_normal();
+				const uint32 ChildIndex = static_cast<uint32>(Result.Dependencies.size() + 1);
+				Result.Dependencies.push_back(Child);
+				Result.Source += "#line 1 " + std::to_string(ChildIndex) + "\n";
+				Self(Self, Child, ReadSource(Child, Source.GetStage(), Permutation), ChildIndex);
+				Result.Source += "#line " + std::to_string(LineNumber + 1) + " " + std::to_string(SourceIndex) + "\n";
+			}
+			else
+				Result.Source += Line + "\n";
+			++LineNumber;
+		}
+		Active.erase(Canonical);
+	};
+
+	const usize VersionEnd = Source.GetSource().find('\n');
+	if (VersionEnd == std::string::npos || Source.GetSource().rfind("#version", 0) != 0)
+		throw ShaderPreprocessException(Source.GetStage(), Source.GetSourcePath(), Permutation, "Root shader must start with #version");
+	std::string Root = Source.GetSource();
+	Root.insert(VersionEnd + 1, Permutation.GetDefineBlock());
+	Process(Process, Source.GetSourcePath(), Root, 0);
+	return Result;
+}
+} // namespace pipeline::shader
