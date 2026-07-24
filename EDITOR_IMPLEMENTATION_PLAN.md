@@ -15,6 +15,66 @@ The default dark layout is:
 - Dockable Content Browser, Output, diagnostics, and import panels along the bottom.
 - Resizable, collapsible, closable, detachable, and restorable panels.
 
+## Visual Design Contract
+
+The rendered editor must follow the supplied references as a visual and interaction contract, not merely as a suggestion for panel placement. The consolidated target is:
+
+![Editor visual target](docs/editor/EditorVisualTarget.png)
+
+The three supplied references have distinct authority:
+
+- The Explorer reference defines the hierarchy tree, search bar, disclosure arrows, indentation, compact rows, type icons, selected-row treatment, title-bar controls, and panel density.
+- The Properties reference defines the categorized two-column property grid, filtering, nested rows, checkboxes, color swatches, disabled values, separators, scroll behavior, and compact typography.
+- The toolbar reference defines the menu bar, play controls, workspace tabs, grouped command ribbon, large labeled tool icons, snapping controls, separators, enabled/disabled states, and document tabs.
+
+The default layout must preserve these proportions:
+
+- A 26-30 pixel menu bar at the top.
+- A 36-42 pixel play and workspace strip.
+- A 90-110 pixel grouped command ribbon.
+- A Properties panel occupying approximately 19-22% of the content width on the left.
+- An Explorer panel occupying approximately 19-22% on the right.
+- The viewport receiving all remaining central space and remaining the visually dominant region.
+- A bottom dock occupying approximately 24-30% of the available content height when open.
+- Visible 1-pixel splitters and generous draggable hit regions between docks.
+
+The visual language is:
+
+- Near-black charcoal application chrome and panel bodies, with slightly lighter title bars, category headers, controls, and selected rows.
+- Off-white primary text, restrained gray secondary text, and limited blue, green, orange, purple, yellow, and red accents for semantic state and object types.
+- Compact desktop-tool typography at approximately 12-14 pixels for panel content and 13-15 pixels for titles.
+- Property and Explorer rows approximately 24-28 pixels high.
+- Four-to-six-pixel control radii, one-pixel separators, and no glass, glow, oversized cards, excessive gradients, or sparse web-dashboard styling.
+- Crisp original line icons with 16-20 pixel panel icons and 24-32 pixel ribbon icons.
+- Hover, active, selected, disabled, focused, error, warning, and drag-target states defined for every interactive control.
+
+The Properties panel defaults to `Properties — <Selection Name>` and contains:
+
+- A full-width `Filter Properties` field immediately below the title bar.
+- Collapsible `Appearance`, `Data`, `Transform`, `Rendering`, and `Mobility` categories.
+- A strict two-column name/value grid with an adjustable divider.
+- Nested position, rotation, scale, origin, and pivot rows.
+- Inline checkboxes, swatches, numeric fields, enum selectors, asset references, and reset controls.
+- Muted read-only or unavailable values without removing their structural context.
+
+The Explorer panel defaults to `Explorer` and contains:
+
+- A rounded search field with history and more-actions controls.
+- A compact, indented object tree rooted at `World`.
+- Distinct icons for cameras, lights, folders, meshes, materials, and other registered component/object categories.
+- Rounded selected-row highlighting spanning the panel width.
+- Precise disclosure arrows, hierarchy indentation, keyboard focus, and drag/drop insertion feedback.
+
+The top interface contains:
+
+- `File`, `Edit`, `View`, `Assets`, `Build`, `Test`, `Window`, and `Help` menus.
+- Play, pause, stop, and standalone controls.
+- `Home`, `Model`, `Material`, `Animation`, `Rendering`, and `Tools` workspaces.
+- Grouped Select, Move, Rotate, Scale, Transform, coordinate-space, pivot, snapping, primitive, material, color, import, group, lock, anchor, and panel-visibility commands.
+- Vertical separators between functional groups and visible labels beneath primary icons.
+
+Visual acceptance requires screenshots at 1920x1080 and 2560x1440 to retain the same hierarchy, density, proportions, and panel construction as the target. Functional completeness without this visual fidelity does not satisfy the editor plan.
+
 ## Authorization Gates
 
 Implementation must not begin until the user explicitly approves:
@@ -371,6 +431,7 @@ Autosaves and crash-recovery documents are separate from user saves. The Game ex
 
 The editor is complete only when:
 
+- The completed editor matches `docs/editor/EditorVisualTarget.png` in layout hierarchy, density, panel construction, dark styling, and command grouping at both required validation resolutions.
 - Docking, resizing, collapsing, closing, detaching, DPI changes, and layout restoration work.
 - Explorer and viewport selection remain synchronized.
 - Every reflected mutation supports undo and redo.
