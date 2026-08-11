@@ -5,7 +5,7 @@
 #include <limits>
 #include <utility>
 
-namespace renderer
+namespace pipeline::buffer
 {
 namespace
 {
@@ -122,7 +122,7 @@ VertexBufferError::VertexBufferError(const std::string &Message) : std::runtime_
 }
 
 VertexBuffer::VertexBuffer(pipeline::device::Device &Device, const VertexBufferDescriptor &Descriptor)
-	: Device(&Device), SizeInBytes(Descriptor.SizeInBytes), StrideInBytes(Descriptor.StrideInBytes),
+	: Device(Device), SizeInBytes(Descriptor.SizeInBytes), StrideInBytes(Descriptor.StrideInBytes),
 	  StorageOptions(Descriptor.StorageOptions), DebugName(Descriptor.DebugName)
 {
 	if (this->SizeInBytes == 0)
@@ -140,6 +140,8 @@ VertexBuffer::VertexBuffer(pipeline::device::Device &Device, const VertexBufferD
 	this->Device->CheckErrors("VertexBuffer construction precondition");
 
 	glCreateBuffers(1, &this->ID);
+	if (this->ID == 0)
+		throw VertexBufferError("OpenGL could not allocate the VertexBuffer object");
 	this->Device->CheckErrors("glCreateBuffers");
 
 	try
@@ -162,7 +164,7 @@ VertexBuffer::~VertexBuffer()
 }
 
 VertexBuffer::VertexBuffer(VertexBuffer &&Other) noexcept
-	: Device(std::exchange(Other.Device, nullptr)), ID(std::exchange(Other.ID, 0)), SizeInBytes(std::exchange(Other.SizeInBytes, 0)),
+	: Device(std::exchange(Other.Device, {})), ID(std::exchange(Other.ID, 0)), SizeInBytes(std::exchange(Other.SizeInBytes, 0)),
 	  StrideInBytes(std::exchange(Other.StrideInBytes, 0)), StorageOptions(std::exchange(Other.StorageOptions, VertexBufferStorage::None)),
 	  DebugName(std::move(Other.DebugName)), Mapped(std::exchange(Other.Mapped, false)),
 	  ActiveMapOptions(std::exchange(Other.ActiveMapOptions, VertexBufferMapAccess::None)),
@@ -176,7 +178,7 @@ VertexBuffer &VertexBuffer::operator=(VertexBuffer &&Other) noexcept
 	if (this != &Other)
 	{
 		this->Release();
-		this->Device = std::exchange(Other.Device, nullptr);
+		this->Device = std::exchange(Other.Device, {});
 		this->ID = std::exchange(Other.ID, 0);
 		this->SizeInBytes = std::exchange(Other.SizeInBytes, 0);
 		this->StrideInBytes = std::exchange(Other.StrideInBytes, 0);
@@ -312,7 +314,7 @@ void VertexBuffer::CopyTo(VertexBuffer &Destination, usize SourceOffsetInBytes, 
 {
 	this->RequireUsable();
 	Destination.RequireUsable();
-	if (this->Device != Destination.Device)
+	if (this->Device.TryGet() != Destination.Device.TryGet())
 		throw VertexBufferError("VertexBuffer::copyTo requires buffers owned by the same Device");
 	if (this->Mapped || Destination.Mapped)
 	{
@@ -418,12 +420,12 @@ bool VertexBuffer::IsStorageImmutable() const
 pipeline::device::Device &VertexBuffer::GetDevice() const
 {
 	this->RequireUsable();
-	return *this->Device;
+	return this->Device.Get();
 }
 
 void VertexBuffer::RequireUsable() const
 {
-	if (this->Device == nullptr)
+	if (!this->Device)
 		throw VertexBufferError("VertexBuffer has no owning Device");
 	(void)this->Device->RequireCurrentContext();
 	if (this->ID == 0)
@@ -449,14 +451,15 @@ void VertexBuffer::Release() noexcept
 {
 	if (this->ID != 0)
 	{
-		const bool CanReleaseGPUResource = this->Device != nullptr && this->Device->CanIssueCommands();
+		pipeline::device::Device *LiveDevice = this->Device.TryGet();
+		const bool CanReleaseGPUResource = LiveDevice != nullptr && LiveDevice->CanIssueCommands();
 		if (this->Mapped && CanReleaseGPUResource)
 		{
 			glUnmapNamedBuffer(this->ID);
 		}
 
-		if (CanReleaseGPUResource)
-			glDeleteBuffers(1, &this->ID);
+		if (LiveDevice != nullptr)
+			LiveDevice->RetireGPUObject(pipeline::device::GPUObjectType::Buffer, this->ID);
 		this->ID = 0;
 		this->Mapped = false;
 		this->ActiveMapOptions = VertexBufferMapAccess::None;
@@ -464,4 +467,4 @@ void VertexBuffer::Release() noexcept
 		this->ActiveMapSizeInBytes = 0;
 	}
 }
-} // namespace renderer
+} // namespace pipeline::buffer

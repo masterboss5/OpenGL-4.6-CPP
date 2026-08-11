@@ -8,7 +8,7 @@
 
 namespace resource
 {
-class AssetAccessException : public std::runtime_error
+class ENGINE_API AssetAccessException : public std::runtime_error
 {
   public:
 	AssetAccessException(AssetID ID, AssetType Type, string Diagnostic)
@@ -30,7 +30,7 @@ class AssetAccessException : public std::runtime_error
 	AssetType Type;
 };
 
-class AssetUnavailableException final : public AssetAccessException
+class ENGINE_API AssetUnavailableException final : public AssetAccessException
 {
   public:
 	AssetUnavailableException(const AssetID &ID, AssetType Type, const string &Diagnostic)
@@ -39,7 +39,7 @@ class AssetUnavailableException final : public AssetAccessException
 	}
 };
 
-class AssetTypeMismatchException final : public AssetAccessException
+class ENGINE_API AssetTypeMismatchException final : public AssetAccessException
 {
   public:
 	AssetTypeMismatchException(const AssetID &ID, AssetType Type)

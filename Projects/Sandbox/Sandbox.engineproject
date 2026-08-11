@@ -1,0 +1,46 @@
+{
+    "FormatVersion":  1,
+    "ID":  "1782f8f7-efd0-4687-bf6c-8f5026fe1c64",
+    "EngineSchemaVersion":  1,
+    "Name":  "Sandbox",
+    "ContentMounts":  [
+        {
+            "VirtualRoot":  "/Game",
+            "PhysicalRoot":  "Content",
+            "ReadOnly":  false
+        },
+        {
+            "VirtualRoot":  "/Engine",
+            "PhysicalRoot":  "Engine",
+            "ReadOnly":  true
+        }
+    ],
+    "StartupScene":  "Scenes/Startup.enginelevel",
+    "GameModule":  "Build/GameModule/SandboxGame.dll",
+    "BuildConfigurations":  [
+        {
+            "Name":  "Development",
+            "Optimized":  false,
+            "IncludeDebugSymbols":  true
+        },
+        {
+            "Name":  "Shipping",
+            "Optimized":  true,
+            "IncludeDebugSymbols":  false
+        }
+    ],
+    "Cook":  {
+        "CompressionLevel":  9,
+        "ArchiveChunkSizeBytes":  67108864,
+        "Deterministic":  true
+    },
+    "ArchiveChunks":  [
+        {
+            "Name":  "Main",
+            "VirtualRoots":  [
+                "/Game"
+            ]
+        }
+    ],
+    "EnabledFeatures":  []
+}

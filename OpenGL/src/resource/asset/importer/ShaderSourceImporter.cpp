@@ -8,7 +8,7 @@ bool ShaderSourceImporter::CanImport(const std::filesystem::path &Path) const
 {
 	const std::string Extension = GetNormalizedExtension(Path);
 	return Extension == ".vert" || Extension == ".vs" || Extension == ".frag" || Extension == ".fs" || Extension == ".comp" ||
-		   Extension == ".cs";
+		   Extension == ".cs" || Extension == ".glsl" || Extension == ".inc";
 }
 AssetType ShaderSourceImporter::GetAssetType() const noexcept
 {
@@ -16,7 +16,6 @@ AssetType ShaderSourceImporter::GetAssetType() const noexcept
 }
 AssetImportResult ShaderSourceImporter::ImportCPU(const std::filesystem::path &Path, AssetImportContext &Context) const
 {
-	(void)Context;
 	this->ValidateImportRequest(Path);
 	std::vector<std::filesystem::path> Includes;
 	std::vector<AssetDependency> Dependencies;
@@ -28,7 +27,8 @@ AssetImportResult ShaderSourceImporter::ImportCPU(const std::filesystem::path &P
 		const usize Second = First == std::string::npos ? std::string::npos : Source.find('"', First + 1);
 		if (Second == std::string::npos)
 			throw AssetContentValidationException(GetAssetType(), Path, "Malformed #include directive");
-		const std::filesystem::path Include = (Path.parent_path() / Source.substr(First + 1, Second - First - 1)).lexically_normal();
+		const std::filesystem::path Include = Context.ResolveDependencyPath(
+			AssetType::ShaderSource, Path, Source.substr(First + 1, Second - First - 1), "Shader include dependency");
 		Includes.push_back(Include);
 		Dependencies.push_back({.Type = AssetType::ShaderSource, .Path = Include});
 		Position = Second + 1;
@@ -36,7 +36,8 @@ AssetImportResult ShaderSourceImporter::ImportCPU(const std::filesystem::path &P
 	const std::string Extension = GetNormalizedExtension(Path);
 	const pipeline::shader::ShaderStage Stage = Extension == ".vert" || Extension == ".vs"	 ? pipeline::shader::ShaderStage::Vertex
 												: Extension == ".frag" || Extension == ".fs" ? pipeline::shader::ShaderStage::Fragment
-																							 : pipeline::shader::ShaderStage::Compute;
+												: Extension == ".comp" || Extension == ".cs" ? pipeline::shader::ShaderStage::Compute
+																							 : pipeline::shader::ShaderStage::Include;
 	return AssetImportResult(AssetPtr<pipeline::shader::ShaderSourceAsset>::Make(Stage, Path, Source, std::move(Includes)),
 							 std::move(Dependencies));
 }

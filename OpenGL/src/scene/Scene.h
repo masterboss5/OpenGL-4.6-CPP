@@ -1,11 +1,16 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/component/ComponentValidation.h"
 #include "src/concepts.h"
 #include "src/scene/Object.h"
 #include "src/scene/SceneException.h"
 #include "src/scene/detail/DenseGenerationalPool.h"
+#include "src/util/UUID.h"
 
+#include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -13,6 +18,9 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
+
+#include <glm.hpp>
 
 namespace world
 {
@@ -48,7 +56,7 @@ template <IsCObjectComponent... ComponentTypes> class ComponentPoolSet<TypeList<
 };
 } // namespace detail
 
-class Scene final
+class ENGINE_API Scene final
 {
   public:
 	class ReadAccess;
@@ -63,9 +71,15 @@ class Scene final
 
 	[[nodiscard]] ObjectHandle CreateObject();
 	void DestroyObject(ObjectHandle Object);
+	void SetParent(ObjectHandle Object, ObjectHandle Parent, uint32 SiblingOrder = 0);
 	[[nodiscard]] bool Contains(ObjectHandle Object) const;
+	[[nodiscard]] std::vector<ObjectHandle> GetObjects() const;
+	[[nodiscard]] ObjectHandle FindObject(const util::UUID &PersistentID) const;
 	[[nodiscard]] ReadAccess Read() const;
 	[[nodiscard]] WriteAccess Write();
+	// Transient presentation/editor previews must restore their prior value and
+	// publish the final mutation through an authoritative command.
+	[[nodiscard]] WriteAccess WriteTransient();
 
 	template <IsCObjectComponent T, typename... ArgumentTypes>
 	[[nodiscard]] ComponentHandle<T> AddComponent(ObjectHandle ObjectHandle, ArgumentTypes &&...Arguments)
@@ -100,6 +114,7 @@ class Scene final
 			throw;
 		}
 
+		this->MarkMutatedUnlocked();
 		return {.Scene = this->ID, .Slot = StorageHandle.Slot, .Generation = StorageHandle.Generation};
 	}
 
@@ -114,6 +129,7 @@ class Scene final
 		}
 		this->ValidateNoDependents<T>(Object, components::ComponentTypeList{});
 		this->DestroyComponentUnchecked<T>(Object);
+		this->MarkMutatedUnlocked();
 	}
 
 	template <IsCObjectComponent T> [[nodiscard]] ComponentHandle<T> GetComponent(ObjectHandle ObjectHandle) const
@@ -130,6 +146,10 @@ class Scene final
 	{
 		return this->ID;
 	}
+	[[nodiscard]] uint64 GetMutationRevision() const noexcept
+	{
+		return this->MutationRevision.load(std::memory_order_acquire);
+	}
 	[[nodiscard]] uint32 GetObjectCount() const
 	{
 		std::shared_lock Lock(this->StructureMutex);
@@ -141,9 +161,18 @@ class Scene final
 	detail::DenseGenerationalPool<Object> Objects;
 	detail::ComponentPoolSet<components::ComponentTypeList> ComponentPools;
 	mutable std::shared_mutex StructureMutex;
+	std::atomic<uint64> MutationRevision{1};
+
+	void MarkMutatedUnlocked() noexcept
+	{
+		const uint64 Current = this->MutationRevision.load(std::memory_order_relaxed);
+		this->MutationRevision.store(Current == std::numeric_limits<uint64>::max() ? 1U : Current + 1U, std::memory_order_release);
+	}
 
 	[[nodiscard]] Object &ResolveObjectUnlocked(ObjectHandle Object);
 	[[nodiscard]] const Object &ResolveObjectUnlocked(ObjectHandle Object) const;
+	[[nodiscard]] components::CObjectComponent &ResolveComponentUnlocked(ObjectHandle Object, uint32 ComponentType);
+	[[nodiscard]] const components::CObjectComponent &ResolveComponentUnlocked(ObjectHandle Object, uint32 ComponentType) const;
 
 	template <IsCObjectComponent T> [[nodiscard]] T &ResolveComponentUnlocked(ComponentHandle<T> Handle)
 	{
@@ -223,7 +252,7 @@ class Scene final
 	}
 };
 
-class Scene::ReadAccess final
+class ENGINE_API Scene::ReadAccess final
 {
   public:
 	ReadAccess(const ReadAccess &) = delete;
@@ -239,6 +268,11 @@ class Scene::ReadAccess final
 	template <IsCObjectComponent T> [[nodiscard]] const T &Resolve(ComponentHandle<T> Handle) const
 	{
 		return this->Owner->ResolveComponentUnlocked(Handle);
+	}
+
+	[[nodiscard]] const components::CObjectComponent &ResolveComponent(ObjectHandle Object, uint32 ComponentType) const
+	{
+		return this->Owner->ResolveComponentUnlocked(Object, ComponentType);
 	}
 
 	template <IsCObjectComponent T> [[nodiscard]] ComponentHandle<T> GetComponent(ObjectHandle ObjectHandle) const
@@ -260,6 +294,28 @@ class Scene::ReadAccess final
 		return this->Owner->Objects.Size();
 	}
 
+	[[nodiscard]] std::vector<ObjectHandle> Objects() const
+	{
+		std::vector<ObjectHandle> Handles;
+		this->ObjectsInto(Handles);
+		return Handles;
+	}
+
+	void ObjectsInto(std::vector<ObjectHandle> &Handles) const
+	{
+		Handles.clear();
+		Handles.reserve(this->Owner->Objects.Size());
+		for (uint32 DenseIndex = 0; DenseIndex < this->Owner->Objects.Size(); ++DenseIndex)
+		{
+			const detail::DensePoolHandle Handle = this->Owner->Objects.HandleAtDense(DenseIndex);
+			Handles.push_back({.Scene = this->Owner->ID, .Slot = Handle.Slot, .Generation = Handle.Generation});
+		}
+	}
+
+	// Convenience lookup for one object. Callers resolving multiple objects should
+	// build one SceneTransformSnapshot instead of rebuilding the hierarchy per query.
+	[[nodiscard]] glm::mat4 GetWorldTransform(ObjectHandle Object) const;
+
   private:
 	friend class Scene;
 	explicit ReadAccess(const Scene &Owner) : Owner(&Owner), Lock(Owner.StructureMutex)
@@ -270,7 +326,7 @@ class Scene::ReadAccess final
 	std::shared_lock<std::shared_mutex> Lock;
 };
 
-class Scene::WriteAccess final
+class ENGINE_API Scene::WriteAccess final
 {
   public:
 	WriteAccess(const WriteAccess &) = delete;
@@ -286,6 +342,11 @@ class Scene::WriteAccess final
 	template <IsCObjectComponent T> [[nodiscard]] T &Resolve(ComponentHandle<T> Handle) const
 	{
 		return this->Owner->ResolveComponentUnlocked(Handle);
+	}
+
+	[[nodiscard]] components::CObjectComponent &ResolveComponent(ObjectHandle Object, uint32 ComponentType) const
+	{
+		return this->Owner->ResolveComponentUnlocked(Object, ComponentType);
 	}
 
 	template <IsCObjectComponent T> [[nodiscard]] ComponentHandle<T> GetComponent(ObjectHandle ObjectHandle) const
@@ -309,8 +370,10 @@ class Scene::WriteAccess final
 
   private:
 	friend class Scene;
-	explicit WriteAccess(Scene &Owner) : Owner(&Owner), Lock(Owner.StructureMutex)
+	explicit WriteAccess(Scene &Owner, const bool PublishMutation) : Owner(&Owner), Lock(Owner.StructureMutex)
 	{
+		if (PublishMutation)
+			Owner.MarkMutatedUnlocked();
 	}
 
 	Scene *Owner = nullptr;

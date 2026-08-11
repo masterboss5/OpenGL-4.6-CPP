@@ -5,7 +5,7 @@
 
 namespace animation
 {
-class AnimationSystem final
+class ENGINE_API AnimationSystem final
 {
   public:
 	void Update(world::Scene &Scene, float32 DeltaSeconds) const;

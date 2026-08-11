@@ -7,6 +7,7 @@
 #include "src/types.h"
 
 #include <Windows.h>
+#include <algorithm>
 #include <limits>
 #include <new>
 #include <span>
@@ -22,6 +23,12 @@ struct DensePoolHandle final
 	uint32 Slot = InvalidSceneSlot;
 	uint32 Generation = 0;
 };
+
+[[nodiscard]] constexpr uint32 NextSceneGeneration(const uint32 Generation) noexcept
+{
+	const uint32 Next = Generation + 1U;
+	return Next == 0U ? 1U : Next;
+}
 
 template <typename T> class DenseGenerationalPool final
 {
@@ -139,9 +146,7 @@ template <typename T> class DenseGenerationalPool final
 		this->DenseToSlot[LastIndex] = InvalidSceneSlot;
 		this->SlotToDense[Handle.Slot] = InvalidSceneSlot;
 		--this->DenseCount;
-		++this->Generations[Handle.Slot];
-		if (this->Generations[Handle.Slot] == 0)
-			++this->Generations[Handle.Slot];
+		this->Generations[Handle.Slot] = NextSceneGeneration(this->Generations[Handle.Slot]);
 		this->FreeSlots.push_back(Handle.Slot);
 		return Relocation;
 	}
@@ -193,11 +198,26 @@ template <typename T> class DenseGenerationalPool final
 
 	void Clear() noexcept
 	{
-		while (this->DenseCount != 0)
+		const uint32 PreviousDenseCount = this->DenseCount;
+		for (uint32 DenseIndex = PreviousDenseCount; DenseIndex != 0U; --DenseIndex)
 		{
-			--this->DenseCount;
-			(this->Storage + this->DenseCount)->~T();
+			(this->Storage + DenseIndex - 1U)->~T();
 		}
+
+		for (uint32 DenseIndex = 0; DenseIndex < PreviousDenseCount; ++DenseIndex)
+		{
+			const uint32 Slot = this->DenseToSlot[DenseIndex];
+			if (Slot != InvalidSceneSlot)
+			{
+				this->Generations[Slot] = NextSceneGeneration(this->Generations[Slot]);
+			}
+		}
+
+		std::fill(this->SlotToDense.begin(), this->SlotToDense.end(), InvalidSceneSlot);
+		std::fill(this->DenseToSlot.begin(), this->DenseToSlot.end(), InvalidSceneSlot);
+		this->FreeSlots.clear();
+		this->DenseCount = 0;
+		this->NextUnusedSlot = 0;
 	}
 
   private:

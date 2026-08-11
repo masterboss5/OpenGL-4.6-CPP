@@ -5,31 +5,23 @@
 #include <glm.hpp>
 #include <gtc/quaternion.hpp>
 
-// TODO
-//============================================================
-/*
-	1. Decide where to add grid snapping, as another component or inside this TransformComponenet
-	2. Add macros to enable or disable [[unlikely]]
-	3. add [[nodiscard]]
-	4. add noexcept
-	5. maybe: add setFromMatrix()
-	6. add rotateX, etc
-*/
-//============================================================
+// Transform storage and mutation stay responsible for finite-value and positive-scale
+// validation. Editor-only snapping, constraints, and transaction boundaries belong to
+// TransformGizmoController so runtime transforms remain independent of editor policy.
 
 namespace components
 {
-class CObjectTransformComponent final : public CObjectComponent
+class ENGINE_API CObjectTransformComponent final : public CObjectComponent
 {
   private:
 	glm::vec3 Position{0.0f, 0.0f, 0.0f};
 	glm::quat Rotation{1.0f, 0.0f, 0.0f, 0.0f};
 	glm::vec3 Scale{1.0f, 1.0f, 1.0f};
-	mutable bool NeedsRecalculation{true};
-	mutable glm::mat4 Matrix{1.0f};
+	glm::mat4 Matrix{1.0f};
+	uint64 Revision{1};
 
-	void UpdateMatrix() const;
-	void RecalculateMatrix() const;
+	void PublishTransformMutation();
+	void RecalculateMatrix();
 
   public:
 	explicit CObjectTransformComponent(world::ObjectHandle Owner, const glm::vec3 &Position = glm::vec3{0.0f, 0.0f, 0.0f},
@@ -78,7 +70,8 @@ class CObjectTransformComponent final : public CObjectComponent
 	[[nodiscard]] glm::vec3 GetForward() const;
 	[[nodiscard]] glm::vec3 GetUp() const;
 	[[nodiscard]] glm::vec3 GetRight() const;
-	[[nodiscard]] const glm::mat4 &GetMatrix() const;
+	[[nodiscard]] glm::mat4 GetMatrix() const noexcept;
+	[[nodiscard]] uint64 GetRevision() const noexcept;
 
 	void OnAttachment() override;
 	void OnDetachment() override;

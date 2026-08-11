@@ -64,6 +64,12 @@ glm::mat4 Camera::GetProjectionMatrix(const core::WindowExtent Extent) const
 {
 	// The renderer uses GL_ZERO_TO_ONE and reversed-Z.  Swapping near/far gives
 	// near geometry a depth of one and moves precision toward the camera.
+	if (this->Projection == CameraProjectionMode::Orthographic)
+	{
+		const float32 HalfHeight = this->OrthographicHeight * 0.5f;
+		const float32 HalfWidth = HalfHeight * Extent.AspectRatio();
+		return glm::orthoRH_ZO(-HalfWidth, HalfWidth, -HalfHeight, HalfHeight, this->FarPlane, this->NearPlane);
+	}
 	return glm::perspectiveRH_ZO(glm::radians(this->FOV), Extent.AspectRatio(), this->FarPlane, this->NearPlane);
 }
 

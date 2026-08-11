@@ -93,6 +93,16 @@ void UpdateButton(ButtonSnapshot &Button, const InputState State) noexcept
 	return Down == Input.RequiredDown;
 }
 
+[[nodiscard]] bool BindingConditionsSatisfied(const InputBinding &Binding, const InputSnapshot &Snapshot)
+{
+	if (!Contains(Snapshot.GetModifiers(), Binding.RequiredModifiers))
+		return false;
+	for (const ChordInput &Chord : Binding.Chord)
+		if (!ChordInputDown(Chord, Snapshot))
+			return false;
+	return true;
+}
+
 [[nodiscard]] InputDeviceFilter RequiredDevice(const BindingSource Source) noexcept
 {
 	if (Source == BindingSource::Key || Source == BindingSource::PhysicalKey)
@@ -298,7 +308,8 @@ void InputSystem::BeginFrame(WindowManager &WindowManager)
 	}
 
 	this->PollControllers(WindowManager);
-	for (InputEvent &Event : WindowManager.ConsumeInputEvents())
+	WindowManager.ConsumeInputEventsInto(this->InputEventsScratch);
+	for (InputEvent &Event : this->InputEventsScratch)
 	{
 		SnapshotKey Key{Event.Window, Event.User};
 		InputSnapshot &Snapshot = this->Snapshots[Key];
@@ -609,11 +620,8 @@ bool InputSystem::Conflicts(const InputBinding &Left, const InputBinding &Right)
 
 float32 InputSystem::Evaluate(const InputBinding &Binding, const InputSnapshot &Snapshot)
 {
-	if (!Contains(Snapshot.GetModifiers(), Binding.RequiredModifiers))
+	if (!BindingConditionsSatisfied(Binding, Snapshot))
 		return 0.0f;
-	for (const ChordInput &Chord : Binding.Chord)
-		if (!ChordInputDown(Chord, Snapshot))
-			return 0.0f;
 	float32 Value = 0.0f;
 	if (Binding.Source == BindingSource::Key)
 		Value = Snapshot.IsKeyDown(Binding.Key) ? 1.0f : 0.0f;
@@ -671,6 +679,8 @@ float32 InputSystem::Evaluate(const InputBinding &Binding, const InputSnapshot &
 
 bool InputSystem::IsTriggered(const InputBinding &Binding, const InputSnapshot &Snapshot)
 {
+	if (!BindingConditionsSatisfied(Binding, Snapshot))
+		return false;
 	if (Binding.Source == BindingSource::Key)
 		return Snapshot.GetKey(Binding.Key).Pressed;
 	if (Binding.Source == BindingSource::PhysicalKey)
@@ -692,6 +702,8 @@ bool InputSystem::IsTriggered(const InputBinding &Binding, const InputSnapshot &
 
 bool InputSystem::IsReleased(const InputBinding &Binding, const InputSnapshot &Snapshot)
 {
+	if (!BindingConditionsSatisfied(Binding, Snapshot))
+		return false;
 	if (Binding.Source == BindingSource::Key)
 		return Snapshot.GetKey(Binding.Key).Released;
 	if (Binding.Source == BindingSource::PhysicalKey)

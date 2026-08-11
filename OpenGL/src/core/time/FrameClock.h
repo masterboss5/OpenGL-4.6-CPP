@@ -13,7 +13,7 @@ struct FrameTiming final
 	float64 ElapsedSeconds = 0.0;
 };
 
-class FrameClock final
+class ENGINE_API FrameClock final
 {
   public:
 	explicit FrameClock(float64 MaximumDeltaSeconds = 0.25);

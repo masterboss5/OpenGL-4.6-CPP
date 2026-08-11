@@ -35,7 +35,7 @@ template <typename Value> struct DialogResult final
 	}
 };
 
-class SecureBuffer final
+class ENGINE_API SecureBuffer final
 {
   public:
 	SecureBuffer() = default;
@@ -179,7 +179,7 @@ struct CredentialSelection final
 
 namespace detail
 {
-class DialogOperationBase
+class ENGINE_API DialogOperationBase
 {
   public:
 	virtual ~DialogOperationBase() = default;

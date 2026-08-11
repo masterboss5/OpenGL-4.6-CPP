@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/component/object/CObjectComponent.h"
 #include "src/resource/asset/MaterialAsset.h"
 #include "src/resource/asset/ModelAsset.h"
@@ -44,7 +46,7 @@ struct MeshMaterialOverride final
 	resource::AssetHandle<resource::MaterialInterfaceAsset> Material;
 };
 
-class CObjectMeshComponent final : public CObjectComponent
+class ENGINE_API CObjectMeshComponent final : public CObjectComponent
 {
   public:
 	using Dependencies = TypeList<CObjectTransformComponent>;

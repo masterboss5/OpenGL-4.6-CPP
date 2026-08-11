@@ -1,9 +1,11 @@
 #include "Device.h"
 
+#include "RenderStateCache.h"
 #include "src/core/window/Context.h"
 
 #include <GL/glew.h>
 #include <algorithm>
+#include <atomic>
 #include <sstream>
 
 namespace pipeline::device
@@ -18,11 +20,42 @@ struct NativeFormat final
 };
 constexpr std::array<NativeFormat, static_cast<usize>(DeviceFormat::Count)> NativeFormats{
 	NativeFormat{DeviceFormat::Depth32Float, GL_DEPTH_COMPONENT32F, true},
+	NativeFormat{DeviceFormat::RGBA8SRGB, GL_SRGB8_ALPHA8, false},
 	NativeFormat{DeviceFormat::RGBA16Float, GL_RGBA16F, false},
 	NativeFormat{DeviceFormat::RG16Float, GL_RG16F, false},
 	NativeFormat{DeviceFormat::R32UnsignedInteger, GL_R32UI, false},
 	NativeFormat{DeviceFormat::R32Float, GL_R32F, false},
 	NativeFormat{DeviceFormat::R8Unorm, GL_R8, false}};
+
+void DeleteGPUObject(const GPUObjectType Type, const uint32 Object, const uint64 BindlessHandle = 0) noexcept
+{
+	if (Object == 0)
+		return;
+	const GLuint NativeObject = static_cast<GLuint>(Object);
+	switch (Type)
+	{
+	case GPUObjectType::Buffer:
+		glDeleteBuffers(1, &NativeObject);
+		break;
+	case GPUObjectType::Texture:
+		if (BindlessHandle != 0)
+			glMakeTextureHandleNonResidentARB(BindlessHandle);
+		glDeleteTextures(1, &NativeObject);
+		break;
+	case GPUObjectType::VertexArray:
+		glDeleteVertexArrays(1, &NativeObject);
+		break;
+	case GPUObjectType::Framebuffer:
+		glDeleteFramebuffers(1, &NativeObject);
+		break;
+	case GPUObjectType::Program:
+		glDeleteProgram(NativeObject);
+		break;
+	case GPUObjectType::ProgramPipeline:
+		glDeleteProgramPipelines(1, &NativeObject);
+		break;
+	}
+}
 
 [[nodiscard]] const char *GetErrorName(const GLenum Error) noexcept
 {
@@ -59,6 +92,11 @@ constexpr std::array<NativeFormat, static_cast<usize>(DeviceFormat::Count)> Nati
 }
 } // namespace
 
+struct DeviceDebugCallbackState final
+{
+	std::atomic<Device *> Owner = nullptr;
+};
+
 struct DeviceDebugCallback final
 {
 	static void GLAPIENTRY Receive(GLenum, GLenum, GLuint ID, GLenum Severity, GLsizei, const GLchar *Message,
@@ -68,8 +106,10 @@ struct DeviceDebugCallback final
 			return;
 		try
 		{
-			auto *DeviceInstance = const_cast<Device *>(static_cast<const Device *>(UserData));
-			DeviceInstance->RecordDiagnostic({.ID = static_cast<uint32>(ID), .Severity = ToSeverity(Severity), .Message = Message});
+			auto *State = const_cast<DeviceDebugCallbackState *>(static_cast<const DeviceDebugCallbackState *>(UserData));
+			Device *DeviceInstance = State->Owner.load(std::memory_order_acquire);
+			if (DeviceInstance != nullptr)
+				DeviceInstance->RecordDiagnostic({.ID = static_cast<uint32>(ID), .Severity = ToSeverity(Severity), .Message = Message});
 		}
 		catch (...)
 		{
@@ -81,44 +121,122 @@ struct DeviceDebugCallback final
 
 Device::Device(core::Context &AnchorContext) : AnchorContext(&AnchorContext)
 {
-	AnchorContext.RequireCurrentThread();
-	glewExperimental = GL_TRUE;
-	const GLenum Initialization = glewInit();
-	if (Initialization != GLEW_OK)
+	this->LifetimeState = std::make_shared<DeviceLifetimeState>();
+	this->LifetimeState->Owner.store(this, std::memory_order_release);
+	this->DebugCallbackState = std::make_unique<DeviceDebugCallbackState>();
+	this->DebugCallbackState->Owner.store(this, std::memory_order_release);
+	try
 	{
-		this->Status = DeviceStatus::Failed;
-		throw DeviceError("Failed to initialize OpenGL function dispatch: " +
-						  std::string(reinterpret_cast<const char *>(glewGetErrorString(Initialization))));
+		AnchorContext.RequireCurrentThread();
+		glewExperimental = GL_TRUE;
+		const GLenum Initialization = glewInit();
+		if (Initialization != GLEW_OK)
+		{
+			throw DeviceError("Failed to initialize OpenGL function dispatch: " +
+							  std::string(reinterpret_cast<const char *>(glewGetErrorString(Initialization))));
+		}
+		(void)glGetError();
+		if (GLEW_VERSION_4_6 == GL_FALSE)
+			throw DeviceError("This engine requires OpenGL 4.6 core support");
+		this->RegisterContext(AnchorContext);
+		this->QueryCapabilities();
+		this->StateCaches.emplace(&AnchorContext, std::make_unique<RenderStateCache>(this->Capabilities.MaximumDrawBuffers));
+		this->QueryFormatCapabilities();
+		this->ConfigureDiagnostics(AnchorContext);
+		this->CheckErrors("Device initialization");
 	}
-	(void)glGetError();
-	if (GLEW_VERSION_4_6 == GL_FALSE)
+	catch (...)
 	{
-		this->Status = DeviceStatus::Failed;
-		throw DeviceError("This engine requires OpenGL 4.6 core support");
+		this->Status.store(DeviceStatus::Failed, std::memory_order_release);
+		if (this->DebugCallbackState != nullptr)
+			this->DebugCallbackState->Owner.store(nullptr, std::memory_order_release);
+		this->DisableDiagnostics(AnchorContext);
+		this->Contexts.clear();
+		this->StateCaches.clear();
+		this->AnchorContext = nullptr;
+		throw;
 	}
-	this->RegisterContext(AnchorContext);
-	this->QueryCapabilities();
-	this->QueryFormatCapabilities();
-	this->ConfigureDiagnostics();
-	this->CheckErrors("Device initialization");
 }
 
 Device::~Device()
 {
+	if (this->LifetimeState != nullptr)
+		this->LifetimeState->Owner.store(nullptr, std::memory_order_release);
+	if (this->DebugCallbackState != nullptr)
+		this->DebugCallbackState->Owner.store(nullptr, std::memory_order_release);
 	if (this->AnchorContext != nullptr && this->AnchorContext->IsCurrent())
 	{
+		{
+			std::scoped_lock RetirementLock(this->RetirementMutex);
+			for (const RetiredGPUObject &Retired : this->RetiredGPUObjects)
+				DeleteGPUObject(Retired.Type, Retired.Object, Retired.BindlessHandle);
+			this->RetiredGPUObjects.clear();
+		}
 		std::scoped_lock SyncLock(this->SyncMutex);
 		for (const auto &[id, object] : this->SyncObjects)
 			if (object != nullptr)
 				glDeleteSync(static_cast<GLsync>(object));
 		this->SyncObjects.clear();
-		if (GLEW_VERSION_4_3 != GL_FALSE)
-			glDebugMessageCallback(nullptr, nullptr);
+		this->DisableDiagnostics(*this->AnchorContext);
 	}
 	else
 		this->SyncObjects.clear();
-	this->Contexts.clear();
+	{
+		std::scoped_lock ContextLock(this->ContextMutex);
+		this->Contexts.clear();
+		this->StateCaches.clear();
+	}
+	this->DebugCallbackState.reset();
 	this->AnchorContext = nullptr;
+}
+
+std::shared_ptr<DeviceLifetimeState> Device::GetLifetimeState() const noexcept
+{
+	return this->LifetimeState;
+}
+
+void Device::RetireGPUObject(const GPUObjectType Type, const uint32 Object, const uint64 BindlessHandle) noexcept
+{
+	if (Object == 0)
+		return;
+	try
+	{
+		const uint64 Submitted = this->LatestSubmittedFrame.load(std::memory_order_acquire);
+		std::scoped_lock Lock(this->RetirementMutex);
+		this->RetiredGPUObjects.push_back(
+			{.Type = Type, .Object = Object, .BindlessHandle = BindlessHandle, .RetireAfterFrame = Submitted + 3U});
+	}
+	catch (...)
+	{
+		// Allocation failure must not turn a noexcept resource destructor into termination.
+		// The owning context will reclaim the object at context destruction.
+	}
+}
+
+void Device::NotifyFrameSubmitted(const uint64 FrameNumber) noexcept
+{
+	uint64 Current = this->LatestSubmittedFrame.load(std::memory_order_relaxed);
+	while (Current < FrameNumber &&
+		   !this->LatestSubmittedFrame.compare_exchange_weak(Current, FrameNumber, std::memory_order_release, std::memory_order_relaxed))
+	{
+	}
+}
+
+void Device::CollectRetiredGPUObjects(const uint64 CompletedFrameNumber)
+{
+	(void)this->RequireCurrentContext();
+	std::scoped_lock Lock(this->RetirementMutex);
+	auto Iterator = this->RetiredGPUObjects.begin();
+	while (Iterator != this->RetiredGPUObjects.end())
+	{
+		if (Iterator->RetireAfterFrame > CompletedFrameNumber)
+		{
+			++Iterator;
+			continue;
+		}
+		DeleteGPUObject(Iterator->Type, Iterator->Object, Iterator->BindlessHandle);
+		Iterator = this->RetiredGPUObjects.erase(Iterator);
+	}
 }
 
 const DeviceCapabilities &Device::GetCapabilities() const noexcept
@@ -134,7 +252,7 @@ const DeviceFormatCapabilities &Device::GetFormatCapabilities(const DeviceFormat
 }
 DeviceStatus Device::GetStatus() const noexcept
 {
-	return this->Status;
+	return this->Status.load(std::memory_order_acquire);
 }
 bool Device::SupportsExtension(const std::string_view Extension) const
 {
@@ -151,8 +269,9 @@ std::vector<DeviceDiagnostic> Device::ConsumeDiagnostics()
 
 core::Context &Device::RequireCurrentContext() const
 {
-	if (this->Status != DeviceStatus::Ready)
+	if (this->Status.load(std::memory_order_acquire) != DeviceStatus::Ready)
 		throw DeviceError("GPU operation attempted after Device reset or failure");
+	std::scoped_lock Lock(this->ContextMutex);
 	const auto Iterator = std::find_if(this->Contexts.begin(), this->Contexts.end(),
 									   [](const core::Context *Context) { return Context != nullptr && Context->IsCurrent(); });
 	if (Iterator == this->Contexts.end())
@@ -163,8 +282,9 @@ core::Context &Device::RequireCurrentContext() const
 
 bool Device::CanIssueCommands() const noexcept
 {
-	if (this->Status != DeviceStatus::Ready)
+	if (this->Status.load(std::memory_order_acquire) != DeviceStatus::Ready)
 		return false;
+	std::scoped_lock Lock(this->ContextMutex);
 	for (const core::Context *Context : this->Contexts)
 	{
 		if (Context == nullptr || !Context->IsCurrent())
@@ -209,10 +329,32 @@ void Device::ValidateStatus()
 	if (Reset == GL_NO_ERROR)
 		return;
 	this->Status = DeviceStatus::Reset;
+	std::scoped_lock Lock(this->ContextMutex);
 	for (core::Context *Context : this->Contexts)
 		if (Context != nullptr)
 			Context->MarkReset();
 	throw DeviceError("OpenGL Context reset detected; orderly shutdown is required");
+}
+
+void Device::ApplyGraphicsPipelineState(const pipeline::shader::GraphicsPipelineState &State) const
+{
+	core::Context &Context = this->RequireCurrentContext();
+	std::scoped_lock Lock(this->ContextMutex);
+	const auto Cache = this->StateCaches.find(&Context);
+	if (Cache == this->StateCaches.end() || Cache->second == nullptr)
+		throw DeviceError("Graphics pipeline state cache is unavailable");
+	Cache->second->Apply(State);
+}
+
+void Device::InvalidateGraphicsPipelineStateCache() const noexcept
+{
+	std::scoped_lock Lock(this->ContextMutex);
+	for (const auto &[Context, Cache] : this->StateCaches)
+	{
+		(void)Context;
+		if (Cache != nullptr)
+			Cache->Invalidate();
+	}
 }
 
 DeviceSync Device::CreateSync()
@@ -268,16 +410,27 @@ void Device::RegisterContext(core::Context &Context)
 {
 	if (Context.GetShareGroupName() != this->AnchorContext->GetShareGroupName())
 		throw DeviceError("Cannot register Context from a different share group");
-	if (std::find(this->Contexts.begin(), this->Contexts.end(), &Context) == this->Contexts.end())
-		this->Contexts.push_back(&Context);
+	{
+		std::scoped_lock Lock(this->ContextMutex);
+		if (std::find(this->Contexts.begin(), this->Contexts.end(), &Context) == this->Contexts.end())
+			this->Contexts.push_back(&Context);
+		if (this->Capabilities.MaximumDrawBuffers != 0 && !this->StateCaches.contains(&Context))
+			this->StateCaches.emplace(&Context, std::make_unique<RenderStateCache>(this->Capabilities.MaximumDrawBuffers));
+	}
 	if (this->Capabilities.DebugOutput && Context.IsCurrent())
-		this->ConfigureDiagnostics();
+		this->ConfigureDiagnostics(Context);
+	this->InvalidateGraphicsPipelineStateCache();
 }
 
-void Device::UnregisterContext(core::Context &Context) noexcept
+void Device::UnregisterContext(core::Context &Context)
 {
+	std::scoped_lock Lock(this->ContextMutex);
+	if (Context.GetStatus() == core::ContextStatus::Ready && !Context.IsCurrent())
+		Context.MakeCurrent();
+	this->DisableDiagnostics(Context);
 	const auto Iterator = std::remove(this->Contexts.begin(), this->Contexts.end(), &Context);
 	this->Contexts.erase(Iterator, this->Contexts.end());
+	this->StateCaches.erase(&Context);
 }
 
 void Device::RecordDiagnostic(DeviceDiagnostic Diagnostic)
@@ -388,13 +541,24 @@ void Device::QueryFormatCapabilities()
 	}
 }
 
-void Device::ConfigureDiagnostics()
+void Device::ConfigureDiagnostics(core::Context &Context)
 {
 	if (!this->Capabilities.DebugOutput)
 		return;
+	if (!Context.IsCurrent())
+		throw DeviceError("OpenGL diagnostics can only be configured for the current Context");
 	glEnable(GL_DEBUG_OUTPUT);
 	glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
-	glDebugMessageCallback(DeviceDebugCallback::Receive, this);
+	glDebugMessageCallback(DeviceDebugCallback::Receive, this->DebugCallbackState.get());
 	glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr, GL_FALSE);
+}
+
+void Device::DisableDiagnostics(core::Context &Context) noexcept
+{
+	if (!this->Capabilities.DebugOutput || !Context.IsCurrent())
+		return;
+	glDebugMessageCallback(nullptr, nullptr);
+	glDisable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+	glDisable(GL_DEBUG_OUTPUT);
 }
 } // namespace pipeline::device

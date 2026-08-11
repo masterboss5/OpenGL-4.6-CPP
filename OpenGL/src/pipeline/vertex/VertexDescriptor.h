@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace renderer
+namespace pipeline::vertex
 {
 enum class VertexAttributeDataType : uint8
 {
@@ -58,15 +58,15 @@ struct VertexAttributeDescriptor final
 	usize RelativeOffsetInBytes = 0;
 };
 
-class VertexDescriptor final
+class ENGINE_API VertexDescriptor final
 {
   public:
 	VertexDescriptor(std::span<const VertexBindingDescriptor> Bindings, std::span<const VertexAttributeDescriptor> Attributes);
 	VertexDescriptor(std::initializer_list<VertexBindingDescriptor> Bindings, std::initializer_list<VertexAttributeDescriptor> Attributes);
 
 	void ApplyToVertexArray(pipeline::device::Device &Device, GLuint VertexArrayID) const;
-	void BindVertexBuffer(pipeline::device::Device &Device, GLuint VertexArrayID, GLuint BindingIndex, const VertexBuffer &Buffer,
-						  usize OffsetInBytes = 0) const;
+	void BindVertexBuffer(pipeline::device::Device &Device, GLuint VertexArrayID, GLuint BindingIndex,
+						  const pipeline::buffer::VertexBuffer &Buffer, usize OffsetInBytes = 0) const;
 
 	[[nodiscard]] const VertexBindingDescriptor &GetBinding(GLuint BindingIndex) const;
 	[[nodiscard]] std::span<const VertexBindingDescriptor> GetBindings() const noexcept;
@@ -80,4 +80,4 @@ class VertexDescriptor final
 	void Validate() const;
 	[[nodiscard]] const VertexBindingDescriptor *FindBinding(GLuint BindingIndex) const noexcept;
 };
-} // namespace renderer
+} // namespace pipeline::vertex

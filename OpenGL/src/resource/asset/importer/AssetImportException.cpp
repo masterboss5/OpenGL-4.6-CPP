@@ -58,6 +58,12 @@ AssetModelParseException::AssetModelParseException(resource::AssetType Type, con
 {
 }
 
+AssetMaterialParseException::AssetMaterialParseException(resource::AssetType Type, const std::filesystem::path &SourcePath,
+														 std::string Diagnostic)
+	: AssetImportException(Type, SourcePath, "Unable to parse material: " + Diagnostic)
+{
+}
+
 AssetContentValidationException::AssetContentValidationException(resource::AssetType Type, const std::filesystem::path &SourcePath,
 																 std::string Diagnostic)
 	: AssetImportException(Type, SourcePath, "Imported asset content is invalid: " + Diagnostic)
@@ -72,6 +78,12 @@ AssetImporterNotRegisteredException::AssetImporterNotRegisteredException(resourc
 AssetUnexpectedImportException::AssetUnexpectedImportException(resource::AssetType Type, const std::filesystem::path &SourcePath,
 															   std::string Diagnostic)
 	: AssetImportException(Type, SourcePath, "Unexpected importer failure: " + Diagnostic)
+{
+}
+
+AssetDependencyCycleException::AssetDependencyCycleException(resource::AssetType Type, const std::filesystem::path &SourcePath,
+															 std::string Diagnostic)
+	: AssetImportException(Type, SourcePath, "Asset dependency cycle: " + Diagnostic)
 {
 }
 } // namespace resource::importer

@@ -4,10 +4,13 @@
 
 #include <cassert>
 #include <cstddef>
+#include <exception>
 #include <limits>
+#include <memory>
 #include <new>
 #include <span>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -16,9 +19,19 @@ namespace memory
 template <PoolAllocatable T> class TypedPoolAllocator final
 {
   private:
-	std::byte *Buffer{nullptr};
+	std::allocator<T> Allocator;
+	T *Storage{nullptr};
 	const usize Capacity;
 	usize Count{0};
+	const std::thread::id OwnerThread{std::this_thread::get_id()};
+
+	void RequireOwnerThread() const
+	{
+		if (std::this_thread::get_id() != this->OwnerThread)
+		{
+			throw std::logic_error("TypedPoolAllocator may only be accessed by its owner thread");
+		}
+	}
 
   public:
 	explicit TypedPoolAllocator(usize Capacity) : Capacity(Capacity)
@@ -33,17 +46,20 @@ template <PoolAllocatable T> class TypedPoolAllocator final
 			throw std::bad_array_new_length{};
 		}
 
-		this->Buffer = static_cast<std::byte *>(::operator new(Capacity * sizeof(T), std::align_val_t{alignof(T)}));
+		this->Storage = std::allocator_traits<std::allocator<T>>::allocate(this->Allocator, Capacity);
 	}
 
 	~TypedPoolAllocator() noexcept
 	{
-		this->Reset();
-
-		if (this->Buffer)
+		if (std::this_thread::get_id() != this->OwnerThread)
 		{
-			::operator delete(this->Buffer, this->Capacity * sizeof(T), std::align_val_t{alignof(T)});
+			std::terminate();
 		}
+		for (usize Index = this->Count; Index != 0U; --Index)
+		{
+			std::destroy_at(this->Storage + Index - 1U);
+		}
+		std::allocator_traits<std::allocator<T>>::deallocate(this->Allocator, this->Storage, this->Capacity);
 	}
 
 	TypedPoolAllocator(const TypedPoolAllocator &) = delete;
@@ -53,107 +69,137 @@ template <PoolAllocatable T> class TypedPoolAllocator final
 
 	template <typename... ArgumentTypes> [[nodiscard]] T *Allocate(ArgumentTypes &&...Arguments)
 	{
+		this->RequireOwnerThread();
 		if (this->Count >= this->Capacity)
 		{
 			throw std::bad_alloc{};
 		}
 
-		T *Slot = reinterpret_cast<T *>(this->Buffer + this->Count * sizeof(T));
-		::new (Slot) T(std::forward<ArgumentTypes>(Arguments)...);
+		T *Slot = this->Storage + this->Count;
+		std::construct_at(Slot, std::forward<ArgumentTypes>(Arguments)...);
 		this->Count++;
 
 		return Slot;
 	}
 
-	[[nodiscard]] usize GetCount() const noexcept
+	[[nodiscard]] usize GetCount() const
 	{
+		this->RequireOwnerThread();
 		return this->Count;
 	}
 
-	[[nodiscard]] usize GetCapacity() const noexcept
+	[[nodiscard]] usize GetCapacity() const
 	{
+		this->RequireOwnerThread();
 		return this->Capacity;
 	}
 
-	[[nodiscard]] usize GetRemainingCapacity() const noexcept
+	[[nodiscard]] usize GetRemainingCapacity() const
 	{
+		this->RequireOwnerThread();
 		return this->Capacity - this->Count;
 	}
 
-	[[nodiscard]] bool IsFull() const noexcept
+	[[nodiscard]] bool IsFull() const
 	{
+		this->RequireOwnerThread();
 		return this->Count >= this->Capacity;
 	}
 
-	[[nodiscard]] T &operator[](usize Index) noexcept
+	[[nodiscard]] T &operator[](usize Index)
 	{
+		this->RequireOwnerThread();
 		assert(Index < this->Count);
-		return *reinterpret_cast<T *>(this->Buffer + Index * sizeof(T));
+		return this->Storage[Index];
 	}
 
 	[[nodiscard]] T &At(usize Index)
 	{
+		this->RequireOwnerThread();
 		if (Index >= this->Count)
 		{
 			throw std::out_of_range("TypedPoolAllocator::at index out of range");
 		}
 
-		return *reinterpret_cast<T *>(this->Buffer + Index * sizeof(T));
+		return this->Storage[Index];
 	}
 
-	[[nodiscard]] const T &operator[](usize Index) const noexcept
+	[[nodiscard]] const T &operator[](usize Index) const
 	{
+		this->RequireOwnerThread();
 		assert(Index < this->Count);
-		return *reinterpret_cast<const T *>(this->Buffer + Index * sizeof(T));
+		return this->Storage[Index];
 	}
 
 	[[nodiscard]] const T &At(usize Index) const
 	{
+		this->RequireOwnerThread();
 		if (Index >= this->Count)
 		{
 			throw std::out_of_range{"TypedPoolAllocator::at index out of range"};
 		}
 
-		return *reinterpret_cast<const T *>(this->Buffer + Index * sizeof(T));
+		return this->Storage[Index];
 	}
 
-	[[nodiscard]] bool IsEmpty() const noexcept
+	[[nodiscard]] bool IsEmpty() const
 	{
+		this->RequireOwnerThread();
 		return this->Count == 0;
 	}
 
-	[[nodiscard]] bool Contains(const T *Ptr) const noexcept
+	[[nodiscard]] bool Contains(const T *Ptr) const
 	{
+		this->RequireOwnerThread();
 		if (Ptr == nullptr)
 		{
 			return false;
 		}
 
-		const T *Start = reinterpret_cast<const T *>(this->Buffer);
-		const T *End = Start + this->Count;
-
-		return std::less<const T *>{}(Ptr, End) && !std::less<const T *>{}(Ptr, Start);
+		const usize Address = reinterpret_cast<usize>(Ptr);
+		const usize Begin = reinterpret_cast<usize>(this->Storage);
+		const usize LiveEnd = Begin + this->Count * sizeof(T);
+		return Address >= Begin && Address < LiveEnd && (Address - Begin) % sizeof(T) == 0U;
 	}
 
-	void Reset() noexcept
+	// Reports ownership of raw backing storage, including storage that does not
+	// currently contain a live T. Contains() is the live-object-start query.
+	[[nodiscard]] bool OwnsStorageAddress(const void *Ptr) const
 	{
+		this->RequireOwnerThread();
+		if (Ptr == nullptr)
+		{
+			return false;
+		}
+
+		const usize Address = reinterpret_cast<usize>(Ptr);
+		const usize Begin = reinterpret_cast<usize>(this->Storage);
+		const usize StorageEnd = Begin + this->Capacity * sizeof(T);
+		return Address >= Begin && Address < StorageEnd;
+	}
+
+	void Reset()
+	{
+		// Reset invalidates every pointer, reference, and span previously returned.
+		this->RequireOwnerThread();
 		for (usize I = this->Count; I > 0; --I)
 		{
-			T *Ptr = reinterpret_cast<T *>(this->Buffer + (I - 1) * sizeof(T));
-			Ptr->~T();
+			std::destroy_at(this->Storage + I - 1U);
 		}
 
 		this->Count = 0;
 	}
 
-	[[nodiscard]] std::span<T> Span() noexcept
+	[[nodiscard]] std::span<T> Span()
 	{
-		return std::span<T>(reinterpret_cast<T *>(this->Buffer), this->Count);
+		this->RequireOwnerThread();
+		return std::span<T>(this->Storage, this->Count);
 	}
 
-	[[nodiscard]] std::span<const T> Span() const noexcept
+	[[nodiscard]] std::span<const T> Span() const
 	{
-		return std::span<const T>(reinterpret_cast<const T *>(this->Buffer), this->Count);
+		this->RequireOwnerThread();
+		return std::span<const T>(this->Storage, this->Count);
 	}
 };
 } // namespace memory

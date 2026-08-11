@@ -2,9 +2,10 @@
 
 #include "ShaderException.h"
 #include "src/pipeline/device/Device.h"
-#include "src/renderer/RendererGpuTypes.h"
+#include "src/pipeline/render/RenderData.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <optional>
 #include <string_view>
@@ -14,9 +15,21 @@ namespace pipeline::shader
 {
 namespace
 {
+std::atomic<uint64> InterfaceQueryCount{0};
 GLenum ToGLStage(ShaderStage Stage)
 {
-	return Stage == ShaderStage::Vertex ? GL_VERTEX_SHADER : Stage == ShaderStage::Fragment ? GL_FRAGMENT_SHADER : GL_COMPUTE_SHADER;
+	switch (Stage)
+	{
+	case ShaderStage::Vertex:
+		return GL_VERTEX_SHADER;
+	case ShaderStage::Fragment:
+		return GL_FRAGMENT_SHADER;
+	case ShaderStage::Compute:
+		return GL_COMPUTE_SHADER;
+	case ShaderStage::Include:
+		throw std::invalid_argument("Shader include sources cannot be compiled as standalone stages");
+	}
+	throw std::invalid_argument("Shader source has an invalid stage");
 }
 std::string Log(GLuint Object, bool Program)
 {
@@ -55,74 +68,84 @@ struct StorageBlockContract final
 #define MEMBER_OFFSET(BlockName, MemberName, Type, Field)                                                                                  \
 	if (Block == BlockName && IsMember(Name, MemberName))                                                                                  \
 	return static_cast<GLint>(offsetof(Type, Field))
-	MEMBER_OFFSET("InstanceData", "transform", renderer::GPUInstanceRecord, Transform);
-	MEMBER_OFFSET("VisibleInstances", "transform", renderer::GPUInstanceRecord, Transform);
-	MEMBER_OFFSET("CandidateInstances", "transform", renderer::GPUInstanceRecord, Transform);
-	MEMBER_OFFSET("InstanceData", "previousTransform", renderer::GPUInstanceRecord, PreviousTransform);
-	MEMBER_OFFSET("VisibleInstances", "previousTransform", renderer::GPUInstanceRecord, PreviousTransform);
-	MEMBER_OFFSET("CandidateInstances", "previousTransform", renderer::GPUInstanceRecord, PreviousTransform);
-	MEMBER_OFFSET("InstanceData", "worldBounds", renderer::GPUInstanceRecord, WorldBounds);
-	MEMBER_OFFSET("VisibleInstances", "worldBounds", renderer::GPUInstanceRecord, WorldBounds);
-	MEMBER_OFFSET("CandidateInstances", "worldBounds", renderer::GPUInstanceRecord, WorldBounds);
-	MEMBER_OFFSET("InstanceData", "materialIndex", renderer::GPUInstanceRecord, MaterialIndex);
-	MEMBER_OFFSET("VisibleInstances", "materialIndex", renderer::GPUInstanceRecord, MaterialIndex);
-	MEMBER_OFFSET("CandidateInstances", "materialIndex", renderer::GPUInstanceRecord, MaterialIndex);
-	MEMBER_OFFSET("InstanceData", "objectID", renderer::GPUInstanceRecord, ObjectID);
-	MEMBER_OFFSET("VisibleInstances", "objectID", renderer::GPUInstanceRecord, ObjectID);
-	MEMBER_OFFSET("CandidateInstances", "objectID", renderer::GPUInstanceRecord, ObjectID);
-	MEMBER_OFFSET("InstanceData", "batchIndex", renderer::GPUInstanceRecord, BatchIndex);
-	MEMBER_OFFSET("VisibleInstances", "batchIndex", renderer::GPUInstanceRecord, BatchIndex);
-	MEMBER_OFFSET("CandidateInstances", "batchIndex", renderer::GPUInstanceRecord, BatchIndex);
-	MEMBER_OFFSET("InstanceData", "skinPaletteOffset", renderer::GPUInstanceRecord, SkinPaletteOffset);
-	MEMBER_OFFSET("VisibleInstances", "skinPaletteOffset", renderer::GPUInstanceRecord, SkinPaletteOffset);
-	MEMBER_OFFSET("CandidateInstances", "skinPaletteOffset", renderer::GPUInstanceRecord, SkinPaletteOffset);
-	MEMBER_OFFSET("InstanceData", "previousSkinPaletteOffset", renderer::GPUInstanceRecord, PreviousSkinPaletteOffset);
-	MEMBER_OFFSET("VisibleInstances", "previousSkinPaletteOffset", renderer::GPUInstanceRecord, PreviousSkinPaletteOffset);
-	MEMBER_OFFSET("CandidateInstances", "previousSkinPaletteOffset", renderer::GPUInstanceRecord, PreviousSkinPaletteOffset);
-	MEMBER_OFFSET("InstanceData", "flags", renderer::GPUInstanceRecord, Flags);
-	MEMBER_OFFSET("VisibleInstances", "flags", renderer::GPUInstanceRecord, Flags);
-	MEMBER_OFFSET("CandidateInstances", "flags", renderer::GPUInstanceRecord, Flags);
-	MEMBER_OFFSET("InstanceData", "morphWeightOffset", renderer::GPUInstanceRecord, MorphWeightOffset);
-	MEMBER_OFFSET("VisibleInstances", "morphWeightOffset", renderer::GPUInstanceRecord, MorphWeightOffset);
-	MEMBER_OFFSET("CandidateInstances", "morphWeightOffset", renderer::GPUInstanceRecord, MorphWeightOffset);
-	MEMBER_OFFSET("InstanceData", "morphWeightCount", renderer::GPUInstanceRecord, MorphWeightCount);
-	MEMBER_OFFSET("VisibleInstances", "morphWeightCount", renderer::GPUInstanceRecord, MorphWeightCount);
-	MEMBER_OFFSET("CandidateInstances", "morphWeightCount", renderer::GPUInstanceRecord, MorphWeightCount);
+	MEMBER_OFFSET("InstanceData", "transform", pipeline::render::GPUInstanceRecord, Transform);
+	MEMBER_OFFSET("VisibleInstances", "transform", pipeline::render::GPUInstanceRecord, Transform);
+	MEMBER_OFFSET("CandidateInstances", "transform", pipeline::render::GPUInstanceRecord, Transform);
+	MEMBER_OFFSET("InstanceData", "previousTransform", pipeline::render::GPUInstanceRecord, PreviousTransform);
+	MEMBER_OFFSET("VisibleInstances", "previousTransform", pipeline::render::GPUInstanceRecord, PreviousTransform);
+	MEMBER_OFFSET("CandidateInstances", "previousTransform", pipeline::render::GPUInstanceRecord, PreviousTransform);
+	MEMBER_OFFSET("InstanceData", "worldBounds", pipeline::render::GPUInstanceRecord, WorldBounds);
+	MEMBER_OFFSET("VisibleInstances", "worldBounds", pipeline::render::GPUInstanceRecord, WorldBounds);
+	MEMBER_OFFSET("CandidateInstances", "worldBounds", pipeline::render::GPUInstanceRecord, WorldBounds);
+	MEMBER_OFFSET("InstanceData", "materialIndex", pipeline::render::GPUInstanceRecord, MaterialIndex);
+	MEMBER_OFFSET("VisibleInstances", "materialIndex", pipeline::render::GPUInstanceRecord, MaterialIndex);
+	MEMBER_OFFSET("CandidateInstances", "materialIndex", pipeline::render::GPUInstanceRecord, MaterialIndex);
+	MEMBER_OFFSET("InstanceData", "objectID", pipeline::render::GPUInstanceRecord, ObjectID);
+	MEMBER_OFFSET("VisibleInstances", "objectID", pipeline::render::GPUInstanceRecord, ObjectID);
+	MEMBER_OFFSET("CandidateInstances", "objectID", pipeline::render::GPUInstanceRecord, ObjectID);
+	MEMBER_OFFSET("InstanceData", "batchIndex", pipeline::render::GPUInstanceRecord, BatchIndex);
+	MEMBER_OFFSET("VisibleInstances", "batchIndex", pipeline::render::GPUInstanceRecord, BatchIndex);
+	MEMBER_OFFSET("CandidateInstances", "batchIndex", pipeline::render::GPUInstanceRecord, BatchIndex);
+	MEMBER_OFFSET("InstanceData", "skinPaletteOffset", pipeline::render::GPUInstanceRecord, SkinPaletteOffset);
+	MEMBER_OFFSET("VisibleInstances", "skinPaletteOffset", pipeline::render::GPUInstanceRecord, SkinPaletteOffset);
+	MEMBER_OFFSET("CandidateInstances", "skinPaletteOffset", pipeline::render::GPUInstanceRecord, SkinPaletteOffset);
+	MEMBER_OFFSET("InstanceData", "previousSkinPaletteOffset", pipeline::render::GPUInstanceRecord, PreviousSkinPaletteOffset);
+	MEMBER_OFFSET("VisibleInstances", "previousSkinPaletteOffset", pipeline::render::GPUInstanceRecord, PreviousSkinPaletteOffset);
+	MEMBER_OFFSET("CandidateInstances", "previousSkinPaletteOffset", pipeline::render::GPUInstanceRecord, PreviousSkinPaletteOffset);
+	MEMBER_OFFSET("InstanceData", "flags", pipeline::render::GPUInstanceRecord, Flags);
+	MEMBER_OFFSET("VisibleInstances", "flags", pipeline::render::GPUInstanceRecord, Flags);
+	MEMBER_OFFSET("CandidateInstances", "flags", pipeline::render::GPUInstanceRecord, Flags);
+	MEMBER_OFFSET("InstanceData", "morphWeightOffset", pipeline::render::GPUInstanceRecord, MorphWeightOffset);
+	MEMBER_OFFSET("VisibleInstances", "morphWeightOffset", pipeline::render::GPUInstanceRecord, MorphWeightOffset);
+	MEMBER_OFFSET("CandidateInstances", "morphWeightOffset", pipeline::render::GPUInstanceRecord, MorphWeightOffset);
+	MEMBER_OFFSET("InstanceData", "morphWeightCount", pipeline::render::GPUInstanceRecord, MorphWeightCount);
+	MEMBER_OFFSET("VisibleInstances", "morphWeightCount", pipeline::render::GPUInstanceRecord, MorphWeightCount);
+	MEMBER_OFFSET("CandidateInstances", "morphWeightCount", pipeline::render::GPUInstanceRecord, MorphWeightCount);
 
-	MEMBER_OFFSET("Materials", "baseColorTexture", renderer::GPUMaterialRecord, BaseColorTexture);
-	MEMBER_OFFSET("Materials", "normalTexture", renderer::GPUMaterialRecord, NormalTexture);
-	MEMBER_OFFSET("Materials", "metallicRoughnessTexture", renderer::GPUMaterialRecord, MetallicRoughnessTexture);
-	MEMBER_OFFSET("Materials", "occlusionTexture", renderer::GPUMaterialRecord, OcclusionTexture);
-	MEMBER_OFFSET("Materials", "emissiveTexture", renderer::GPUMaterialRecord, EmissiveTexture);
-	MEMBER_OFFSET("Materials", "specularTexture", renderer::GPUMaterialRecord, SpecularTexture);
-	MEMBER_OFFSET("Materials", "transmissionTexture", renderer::GPUMaterialRecord, TransmissionTexture);
-	MEMBER_OFFSET("Materials", "textureCoordinateSelectors", renderer::GPUMaterialRecord, TextureCoordinateSelectors);
-	MEMBER_OFFSET("Materials", "baseColorFactor", renderer::GPUMaterialRecord, BaseColorFactor);
-	MEMBER_OFFSET("Materials", "emissiveAndMetallic", renderer::GPUMaterialRecord, EmissiveAndMetallic);
-	MEMBER_OFFSET("Materials", "roughnessTransmissionIor", renderer::GPUMaterialRecord, RoughnessTransmissionIOR);
-	MEMBER_OFFSET("Materials", "textureControls", renderer::GPUMaterialRecord, TextureControls);
+	MEMBER_OFFSET("Materials", "baseColorTexture", pipeline::render::GPUMaterialRecord, BaseColorTexture);
+	MEMBER_OFFSET("Materials", "normalTexture", pipeline::render::GPUMaterialRecord, NormalTexture);
+	MEMBER_OFFSET("Materials", "metallicRoughnessTexture", pipeline::render::GPUMaterialRecord, MetallicRoughnessTexture);
+	MEMBER_OFFSET("Materials", "occlusionTexture", pipeline::render::GPUMaterialRecord, OcclusionTexture);
+	MEMBER_OFFSET("Materials", "emissiveTexture", pipeline::render::GPUMaterialRecord, EmissiveTexture);
+	MEMBER_OFFSET("Materials", "specularTexture", pipeline::render::GPUMaterialRecord, SpecularTexture);
+	MEMBER_OFFSET("Materials", "transmissionTexture", pipeline::render::GPUMaterialRecord, TransmissionTexture);
+	MEMBER_OFFSET("Materials", "textureCoordinateSelectors", pipeline::render::GPUMaterialRecord, TextureCoordinateSelectors);
+	MEMBER_OFFSET("Materials", "baseColorFactor", pipeline::render::GPUMaterialRecord, BaseColorFactor);
+	MEMBER_OFFSET("Materials", "emissiveAndMetallic", pipeline::render::GPUMaterialRecord, EmissiveAndMetallic);
+	MEMBER_OFFSET("Materials", "roughnessTransmissionIor", pipeline::render::GPUMaterialRecord, RoughnessTransmissionIOR);
+	MEMBER_OFFSET("Materials", "textureControls", pipeline::render::GPUMaterialRecord, TextureControls);
 
-	MEMBER_OFFSET("Lights", "positionAndRange", renderer::GPULightRecord, PositionAndRange);
-	MEMBER_OFFSET("Lights", "directionAndType", renderer::GPULightRecord, DirectionAndType);
-	MEMBER_OFFSET("Lights", "colorAndIntensity", renderer::GPULightRecord, ColorAndIntensity);
-	MEMBER_OFFSET("Lights", "spotAnglesAndShadow", renderer::GPULightRecord, SpotAnglesAndShadow);
-	MEMBER_OFFSET("ClusterHeaders", "offset", renderer::GPUClusterHeader, Offset);
-	MEMBER_OFFSET("ClusterHeaders", "count", renderer::GPUClusterHeader, Count);
-	MEMBER_OFFSET("ClusterHeaders", "pad0", renderer::GPUClusterHeader, Pad0);
-	MEMBER_OFFSET("ClusterHeaders", "pad1", renderer::GPUClusterHeader, Pad1);
-	MEMBER_OFFSET("ShadowData", "viewProjection", renderer::GPUShadowRecord, ViewProjection);
-	MEMBER_OFFSET("ShadowData", "atlasScaleBias", renderer::GPUShadowRecord, AtlasScaleBias);
-	MEMBER_OFFSET("ShadowData", "depthBiasAndFilter", renderer::GPUShadowRecord, DepthBiasAndFilter);
-	MEMBER_OFFSET("SkinMatrices", "current", renderer::GPUSkinMatrixRecord, Current);
-	MEMBER_OFFSET("SkinMatrices", "previous", renderer::GPUSkinMatrixRecord, Previous);
-	MEMBER_OFFSET("MorphDeltas", "positionDelta", renderer::GPUMorphDeltaRecord, PositionDelta);
-	MEMBER_OFFSET("MorphDeltas", "normalDelta", renderer::GPUMorphDeltaRecord, NormalDelta);
-	MEMBER_OFFSET("MorphWeights", "deltaOffset", renderer::GPUMorphWeightRecord, DeltaOffset);
-	MEMBER_OFFSET("MorphWeights", "currentWeight", renderer::GPUMorphWeightRecord, CurrentWeight);
-	MEMBER_OFFSET("MorphWeights", "previousWeight", renderer::GPUMorphWeightRecord, PreviousWeight);
-	MEMBER_OFFSET("MorphWeights", "padding", renderer::GPUMorphWeightRecord, Padding);
+	MEMBER_OFFSET("Lights", "positionAndRange", pipeline::render::GPULightRecord, PositionAndRange);
+	MEMBER_OFFSET("Lights", "directionAndType", pipeline::render::GPULightRecord, DirectionAndType);
+	MEMBER_OFFSET("Lights", "colorAndIntensity", pipeline::render::GPULightRecord, ColorAndIntensity);
+	MEMBER_OFFSET("Lights", "spotAnglesAndShadow", pipeline::render::GPULightRecord, SpotAnglesAndShadow);
+	MEMBER_OFFSET("ClusterHeaders", "offset", pipeline::render::GPUClusterHeader, Offset);
+	MEMBER_OFFSET("ClusterHeaders", "count", pipeline::render::GPUClusterHeader, Count);
+	MEMBER_OFFSET("ClusterHeaders", "pad0", pipeline::render::GPUClusterHeader, Pad0);
+	MEMBER_OFFSET("ClusterHeaders", "pad1", pipeline::render::GPUClusterHeader, Pad1);
+	MEMBER_OFFSET("ShadowData", "viewProjection", pipeline::render::GPUShadowRecord, ViewProjection);
+	MEMBER_OFFSET("ShadowData", "atlasScaleBias", pipeline::render::GPUShadowRecord, AtlasScaleBias);
+	MEMBER_OFFSET("ShadowData", "depthBiasAndFilter", pipeline::render::GPUShadowRecord, DepthBiasAndFilter);
+	MEMBER_OFFSET("SkinMatrices", "current", pipeline::render::GPUSkinMatrixRecord, Current);
+	MEMBER_OFFSET("SkinMatrices", "previous", pipeline::render::GPUSkinMatrixRecord, Previous);
+	MEMBER_OFFSET("MorphDeltas", "positionDelta", pipeline::render::GPUMorphDeltaRecord, PositionDelta);
+	MEMBER_OFFSET("MorphDeltas", "normalDelta", pipeline::render::GPUMorphDeltaRecord, NormalDelta);
+	MEMBER_OFFSET("MorphWeights", "deltaOffset", pipeline::render::GPUMorphWeightRecord, DeltaOffset);
+	MEMBER_OFFSET("MorphWeights", "currentWeight", pipeline::render::GPUMorphWeightRecord, CurrentWeight);
+	MEMBER_OFFSET("MorphWeights", "previousWeight", pipeline::render::GPUMorphWeightRecord, PreviousWeight);
+	MEMBER_OFFSET("MorphWeights", "padding", pipeline::render::GPUMorphWeightRecord, Padding);
+	if (Block == "DebugLines")
+	{
+		if (IsMember(Name, "startAndWidth"))
+			return 0;
+		if (IsMember(Name, "end"))
+			return static_cast<GLint>(sizeof(glm::vec4));
+		if (IsMember(Name, "color"))
+			return static_cast<GLint>(sizeof(glm::vec4) * 2U);
+	}
 #undef MEMBER_OFFSET
-	if ((Block == "ClusterIndices" && IsDirectArray(Name, "indices")) || (Block == "VisibilityScratch" && IsDirectArray(Name, "scratch")))
+	if ((Block == "ClusterIndices" && IsDirectArray(Name, "indices")) || (Block == "VisibilityScratch" && IsDirectArray(Name, "scratch")) ||
+		(Block == "SelectionMask" && IsDirectArray(Name, "selectionWords")))
 		return 0;
 	if (Block == "IndirectCommands")
 	{
@@ -177,17 +200,18 @@ void ValidateStorageLayout(const GLuint Program, const StorageBlockContract &Con
 	}
 }
 
-void ValidateFrameConstants(const GLuint Program, const ShaderStage Stage, const std::filesystem::path &Path,
-							const ShaderPermutationKey &Permutation)
+[[nodiscard]] bool ValidateFrameConstants(const GLuint Program, const ShaderStage Stage, const std::filesystem::path &Path,
+										  const ShaderPermutationKey &Permutation)
 {
 	const GLuint Block = glGetProgramResourceIndex(Program, GL_UNIFORM_BLOCK, "FrameConstants");
 	if (Block == GL_INVALID_INDEX)
-		return;
+		return false;
 	constexpr std::array<GLenum, 3> Properties{GL_BUFFER_BINDING, GL_BUFFER_DATA_SIZE, GL_NUM_ACTIVE_VARIABLES};
 	std::array<GLint, 3> Values{};
 	glGetProgramResourceiv(Program, GL_UNIFORM_BLOCK, Block, static_cast<GLsizei>(Properties.size()), Properties.data(),
 						   static_cast<GLsizei>(Values.size()), nullptr, Values.data());
-	if (Values[0] != 0 || Values[1] != static_cast<GLint>(sizeof(renderer::GPUFrameConstants)))
+	if (Values[0] != static_cast<GLint>(pipeline::render::RendererBinding::FrameConstants) ||
+		Values[1] != static_cast<GLint>(sizeof(pipeline::render::GPUFrameConstants)))
 		throw ShaderInterfaceException(Stage, Path, Permutation, "FrameConstants binding or std140 size is incompatible");
 	constexpr GLenum ActiveVariablesProperty = GL_ACTIVE_VARIABLES;
 	std::vector<GLint> Variables(static_cast<usize>(Values[2]));
@@ -205,7 +229,7 @@ void ValidateFrameConstants(const GLuint Program, const ShaderStage Stage, const
 		std::optional<GLint> Expected;
 #define FRAME_OFFSET(MemberName, Field)                                                                                                    \
 	if (IsMember(Name, MemberName))                                                                                                        \
-	Expected = static_cast<GLint>(offsetof(renderer::GPUFrameConstants, Field))
+	Expected = static_cast<GLint>(offsetof(pipeline::render::GPUFrameConstants, Field))
 		FRAME_OFFSET("projection", Projection);
 		FRAME_OFFSET("view", View);
 		FRAME_OFFSET("viewProjection", ViewProjection);
@@ -219,25 +243,46 @@ void ValidateFrameConstants(const GLuint Program, const ShaderStage Stage, const
 		if (!Expected || MemberValues[1] != *Expected || (MemberValues[2] > 0 && MemberValues[2] != static_cast<GLint>(sizeof(glm::vec4))))
 			throw ShaderInterfaceException(Stage, Path, Permutation, "FrameConstants has incompatible member " + Name);
 	}
+	return true;
 }
 
-void ValidateEngineBindings(GLuint Program, ShaderStage Stage, const std::filesystem::path &Path, const ShaderPermutationKey &Permutation)
+[[nodiscard]] uint64 ValidateEngineBindings(GLuint Program, ShaderStage Stage, const std::filesystem::path &Path,
+											const ShaderPermutationKey &Permutation)
 {
-	ValidateFrameConstants(Program, Stage, Path, Permutation);
+	uint64 InterfaceMask = 0;
+	if (ValidateFrameConstants(Program, Stage, Path, Permutation))
+		InterfaceMask |= UniformBlockBindingBit(static_cast<uint32>(pipeline::render::RendererBinding::FrameConstants));
 	constexpr std::array StorageContracts{
-		StorageBlockContract{"InstanceData", 0, static_cast<GLint>(sizeof(renderer::GPUInstanceRecord))},
-		StorageBlockContract{"VisibleInstances", 0, static_cast<GLint>(sizeof(renderer::GPUInstanceRecord))},
-		StorageBlockContract{"Materials", 1, static_cast<GLint>(sizeof(renderer::GPUMaterialRecord))},
-		StorageBlockContract{"Lights", 2, static_cast<GLint>(sizeof(renderer::GPULightRecord))},
-		StorageBlockContract{"ClusterHeaders", 3, static_cast<GLint>(sizeof(renderer::GPUClusterHeader))},
-		StorageBlockContract{"ClusterIndices", 4, static_cast<GLint>(sizeof(uint32))},
-		StorageBlockContract{"CandidateInstances", 5, static_cast<GLint>(sizeof(renderer::GPUInstanceRecord))},
-		StorageBlockContract{"VisibilityScratch", 6, static_cast<GLint>(sizeof(uint32))},
-		StorageBlockContract{"IndirectCommands", 7, static_cast<GLint>(sizeof(uint32) * 5U)},
-		StorageBlockContract{"ShadowData", 8, static_cast<GLint>(sizeof(renderer::GPUShadowRecord))},
-		StorageBlockContract{"SkinMatrices", 9, static_cast<GLint>(sizeof(renderer::GPUSkinMatrixRecord))},
-		StorageBlockContract{"MorphDeltas", 10, static_cast<GLint>(sizeof(renderer::GPUMorphDeltaRecord))},
-		StorageBlockContract{"MorphWeights", 11, static_cast<GLint>(sizeof(renderer::GPUMorphWeightRecord))}};
+		StorageBlockContract{"InstanceData", static_cast<GLuint>(pipeline::render::RendererBinding::Instances),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUInstanceRecord))},
+		StorageBlockContract{"VisibleInstances", static_cast<GLuint>(pipeline::render::RendererBinding::Instances),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUInstanceRecord))},
+		StorageBlockContract{"Materials", static_cast<GLuint>(pipeline::render::RendererBinding::Materials),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUMaterialRecord))},
+		StorageBlockContract{"Lights", static_cast<GLuint>(pipeline::render::RendererBinding::Lights),
+							 static_cast<GLint>(sizeof(pipeline::render::GPULightRecord))},
+		StorageBlockContract{"ClusterHeaders", static_cast<GLuint>(pipeline::render::RendererBinding::ClusterHeaders),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUClusterHeader))},
+		StorageBlockContract{"ClusterIndices", static_cast<GLuint>(pipeline::render::RendererBinding::ClusterIndices),
+							 static_cast<GLint>(sizeof(uint32))},
+		StorageBlockContract{"CandidateInstances", static_cast<GLuint>(pipeline::render::RendererBinding::Candidates),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUInstanceRecord))},
+		StorageBlockContract{"VisibilityScratch", static_cast<GLuint>(pipeline::render::RendererBinding::VisibilityScratch),
+							 static_cast<GLint>(sizeof(uint32))},
+		StorageBlockContract{"IndirectCommands", static_cast<GLuint>(pipeline::render::RendererBinding::IndirectCommands),
+							 static_cast<GLint>(sizeof(uint32) * 5U)},
+		StorageBlockContract{"ShadowData", static_cast<GLuint>(pipeline::render::RendererBinding::ShadowData),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUShadowRecord))},
+		StorageBlockContract{"SkinMatrices", static_cast<GLuint>(pipeline::render::RendererBinding::SkinMatrices),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUSkinMatrixRecord))},
+		StorageBlockContract{"MorphDeltas", static_cast<GLuint>(pipeline::render::RendererBinding::MorphDeltas),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUMorphDeltaRecord))},
+		StorageBlockContract{"MorphWeights", static_cast<GLuint>(pipeline::render::RendererBinding::MorphWeights),
+							 static_cast<GLint>(sizeof(pipeline::render::GPUMorphWeightRecord))},
+		StorageBlockContract{"SelectionMask", static_cast<GLuint>(pipeline::render::RendererBinding::SelectionMask),
+							 static_cast<GLint>(sizeof(uint32))},
+		StorageBlockContract{"DebugLines", static_cast<GLuint>(pipeline::render::RendererBinding::DebugLines),
+							 static_cast<GLint>(sizeof(glm::vec4) * 3U)}};
 	for (const StorageBlockContract &Contract : StorageContracts)
 	{
 		const GLuint Block = glGetProgramResourceIndex(Program, GL_SHADER_STORAGE_BLOCK, Contract.Name);
@@ -250,7 +295,9 @@ void ValidateEngineBindings(GLuint Program, ShaderStage Stage, const std::filesy
 			throw ShaderInterfaceException(Stage, Path, Permutation,
 										   std::string(Contract.Name) + " must use SSBO binding " + std::to_string(Contract.Binding));
 		ValidateStorageLayout(Program, Contract, Block, Stage, Path, Permutation);
+		InterfaceMask |= StorageBlockBindingBit(Contract.Binding);
 	}
+	return InterfaceMask;
 }
 
 [[nodiscard]] std::vector<ShaderModule::VertexInput> ReflectVertexInputs(GLuint Program, ShaderStage Stage)
@@ -283,18 +330,94 @@ void ValidateEngineBindings(GLuint Program, ShaderStage Stage, const std::filesy
 	return Inputs;
 }
 
-[[nodiscard]] std::unordered_map<std::string, GLint> ReflectUniformLocations(const GLuint Program)
+[[nodiscard]] bool IsOpaqueUniformType(const GLenum Type) noexcept
 {
-	std::unordered_map<std::string, GLint> Locations;
+	switch (Type)
+	{
+	case GL_SAMPLER_1D:
+	case GL_SAMPLER_2D:
+	case GL_SAMPLER_3D:
+	case GL_SAMPLER_CUBE:
+	case GL_SAMPLER_1D_SHADOW:
+	case GL_SAMPLER_2D_SHADOW:
+	case GL_SAMPLER_1D_ARRAY:
+	case GL_SAMPLER_2D_ARRAY:
+	case GL_SAMPLER_1D_ARRAY_SHADOW:
+	case GL_SAMPLER_2D_ARRAY_SHADOW:
+	case GL_SAMPLER_2D_MULTISAMPLE:
+	case GL_SAMPLER_2D_MULTISAMPLE_ARRAY:
+	case GL_SAMPLER_CUBE_SHADOW:
+	case GL_SAMPLER_CUBE_MAP_ARRAY:
+	case GL_SAMPLER_CUBE_MAP_ARRAY_SHADOW:
+	case GL_INT_SAMPLER_1D:
+	case GL_INT_SAMPLER_2D:
+	case GL_INT_SAMPLER_3D:
+	case GL_INT_SAMPLER_CUBE:
+	case GL_INT_SAMPLER_1D_ARRAY:
+	case GL_INT_SAMPLER_2D_ARRAY:
+	case GL_INT_SAMPLER_2D_MULTISAMPLE:
+	case GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+	case GL_INT_SAMPLER_CUBE_MAP_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_1D:
+	case GL_UNSIGNED_INT_SAMPLER_2D:
+	case GL_UNSIGNED_INT_SAMPLER_3D:
+	case GL_UNSIGNED_INT_SAMPLER_CUBE:
+	case GL_UNSIGNED_INT_SAMPLER_1D_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
+	case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_CUBE_MAP_ARRAY:
+	case GL_IMAGE_1D:
+	case GL_IMAGE_2D:
+	case GL_IMAGE_3D:
+	case GL_IMAGE_2D_RECT:
+	case GL_IMAGE_CUBE:
+	case GL_IMAGE_BUFFER:
+	case GL_IMAGE_1D_ARRAY:
+	case GL_IMAGE_2D_ARRAY:
+	case GL_IMAGE_CUBE_MAP_ARRAY:
+	case GL_IMAGE_2D_MULTISAMPLE:
+	case GL_IMAGE_2D_MULTISAMPLE_ARRAY:
+	case GL_INT_IMAGE_1D:
+	case GL_INT_IMAGE_2D:
+	case GL_INT_IMAGE_3D:
+	case GL_INT_IMAGE_2D_RECT:
+	case GL_INT_IMAGE_CUBE:
+	case GL_INT_IMAGE_BUFFER:
+	case GL_INT_IMAGE_1D_ARRAY:
+	case GL_INT_IMAGE_2D_ARRAY:
+	case GL_INT_IMAGE_CUBE_MAP_ARRAY:
+	case GL_INT_IMAGE_2D_MULTISAMPLE:
+	case GL_INT_IMAGE_2D_MULTISAMPLE_ARRAY:
+	case GL_UNSIGNED_INT_IMAGE_1D:
+	case GL_UNSIGNED_INT_IMAGE_2D:
+	case GL_UNSIGNED_INT_IMAGE_3D:
+	case GL_UNSIGNED_INT_IMAGE_2D_RECT:
+	case GL_UNSIGNED_INT_IMAGE_CUBE:
+	case GL_UNSIGNED_INT_IMAGE_BUFFER:
+	case GL_UNSIGNED_INT_IMAGE_1D_ARRAY:
+	case GL_UNSIGNED_INT_IMAGE_2D_ARRAY:
+	case GL_UNSIGNED_INT_IMAGE_CUBE_MAP_ARRAY:
+	case GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE:
+	case GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE_ARRAY:
+		return true;
+	default:
+		return false;
+	}
+}
+
+[[nodiscard]] std::vector<ShaderModule::UniformResource> ReflectUniformResources(const GLuint Program)
+{
+	std::vector<ShaderModule::UniformResource> Resources;
 	GLint ResourceCount = 0;
 	glGetProgramInterfaceiv(Program, GL_UNIFORM, GL_ACTIVE_RESOURCES, &ResourceCount);
 	if (ResourceCount <= 0)
-		return Locations;
-	Locations.reserve(static_cast<usize>(ResourceCount));
-	constexpr std::array<GLenum, 3> Properties{GL_NAME_LENGTH, GL_LOCATION, GL_BLOCK_INDEX};
+		return Resources;
+	Resources.reserve(static_cast<usize>(ResourceCount));
+	constexpr std::array<GLenum, 5> Properties{GL_NAME_LENGTH, GL_LOCATION, GL_BLOCK_INDEX, GL_TYPE, GL_ARRAY_SIZE};
 	for (uint32 ResourceIndex = 0; ResourceIndex < static_cast<uint32>(ResourceCount); ++ResourceIndex)
 	{
-		std::array<GLint, 3> Values{};
+		std::array<GLint, 5> Values{};
 		glGetProgramResourceiv(Program, GL_UNIFORM, ResourceIndex, static_cast<GLsizei>(Properties.size()), Properties.data(),
 							   static_cast<GLsizei>(Values.size()), nullptr, Values.data());
 		if (Values[1] < 0 || Values[2] != -1 || Values[0] <= 1)
@@ -303,62 +426,72 @@ void ValidateEngineBindings(GLuint Program, ShaderStage Stage, const std::filesy
 		GLsizei Written = 0;
 		glGetProgramResourceName(Program, GL_UNIFORM, ResourceIndex, Values[0], &Written, Name.data());
 		Name.resize(static_cast<usize>(Written));
-		Locations.emplace(std::move(Name), Values[1]);
+		GLint Binding = -1;
+		if (IsOpaqueUniformType(static_cast<GLenum>(Values[3])))
+			glGetUniformiv(Program, Values[1], &Binding);
+		Resources.push_back({.Name = std::move(Name),
+							 .Location = Values[1],
+							 .Type = static_cast<GLenum>(Values[3]),
+							 .ArraySize = Values[4],
+							 .Binding = Binding});
 	}
-	return Locations;
+	return Resources;
 }
 } // namespace
 ShaderModule::ShaderModule(device::Device &Device, const ShaderSourceAsset &Source, ShaderPermutationKey Permutation,
 						   const ShaderPreprocessResult &Preprocessed)
-	: Device(&Device), Stage(Source.GetStage())
+	: Device(Device), Stage(Source.GetStage())
 {
 	(void)this->Device->RequireCurrentContext();
-	const GLuint Shader = glCreateShader(ToGLStage(this->Stage));
-	const GLchar *Text = Preprocessed.Source.c_str();
-	glShaderSource(Shader, 1, &Text, nullptr);
-	glCompileShader(Shader);
-	GLint Compiled = GL_FALSE;
-	glGetShaderiv(Shader, GL_COMPILE_STATUS, &Compiled);
-	if (Compiled != GL_TRUE)
-	{
-		const std::string Diagnostic = Log(Shader, false);
-		glDeleteShader(Shader);
-		throw ShaderCompilationException(this->Stage, Source.GetSourcePath(), Permutation, Diagnostic);
-	}
-	this->ProgramID = glCreateProgram();
-	glProgramParameteri(this->ProgramID, GL_PROGRAM_SEPARABLE, GL_TRUE);
-	glAttachShader(this->ProgramID, Shader);
-	glLinkProgram(this->ProgramID);
-	glDeleteShader(Shader);
-	GLint Linked = GL_FALSE;
-	glGetProgramiv(this->ProgramID, GL_LINK_STATUS, &Linked);
-	if (Linked != GL_TRUE)
-	{
-		const std::string Diagnostic = Log(this->ProgramID, true);
-		glDeleteProgram(this->ProgramID);
-		this->ProgramID = 0;
-		throw ShaderLinkException(this->Stage, Source.GetSourcePath(), Permutation, Diagnostic);
-	}
+	GLuint Shader = glCreateShader(ToGLStage(this->Stage));
+	if (Shader == 0)
+		throw ShaderCompilationException(this->Stage, Source.GetSourcePath(), Permutation, "OpenGL could not allocate the shader object");
 	try
 	{
-		ValidateEngineBindings(this->ProgramID, this->Stage, Source.GetSourcePath(), Permutation);
+		const GLchar *Text = Preprocessed.Source.c_str();
+		glShaderSource(Shader, 1, &Text, nullptr);
+		glCompileShader(Shader);
+		GLint Compiled = GL_FALSE;
+		glGetShaderiv(Shader, GL_COMPILE_STATUS, &Compiled);
+		if (Compiled != GL_TRUE)
+			throw ShaderCompilationException(this->Stage, Source.GetSourcePath(), Permutation, Log(Shader, false));
+		this->ProgramID = glCreateProgram();
+		if (this->ProgramID == 0)
+			throw ShaderLinkException(this->Stage, Source.GetSourcePath(), Permutation, "OpenGL could not allocate the shader program");
+		glProgramParameteri(this->ProgramID, GL_PROGRAM_SEPARABLE, GL_TRUE);
+		glAttachShader(this->ProgramID, Shader);
+		glLinkProgram(this->ProgramID);
+		glDeleteShader(Shader);
+		Shader = 0;
+		GLint Linked = GL_FALSE;
+		glGetProgramiv(this->ProgramID, GL_LINK_STATUS, &Linked);
+		if (Linked != GL_TRUE)
+			throw ShaderLinkException(this->Stage, Source.GetSourcePath(), Permutation, Log(this->ProgramID, true));
+		InterfaceQueryCount.fetch_add(1, std::memory_order_relaxed);
+		this->EngineInterfaceMask = ValidateEngineBindings(this->ProgramID, this->Stage, Source.GetSourcePath(), Permutation);
 		this->VertexInputs = ReflectVertexInputs(this->ProgramID, this->Stage);
-		this->UniformLocations = ReflectUniformLocations(this->ProgramID);
+		this->UniformResources = ReflectUniformResources(this->ProgramID);
+		this->UniformLocations.reserve(this->UniformResources.size());
+		for (const UniformResource &Resource : this->UniformResources)
+			this->UniformLocations.emplace(Resource.Name, Resource.Location);
+		this->Device->CheckErrors("ShaderModule creation");
 	}
 	catch (...)
 	{
-		glDeleteProgram(this->ProgramID);
+		if (Shader != 0)
+			glDeleteShader(Shader);
+		if (this->ProgramID != 0)
+			glDeleteProgram(this->ProgramID);
 		this->ProgramID = 0;
 		throw;
 	}
-	this->Device->CheckErrors("ShaderModule creation");
 }
 ShaderModule::~ShaderModule()
 {
 	if (this->ProgramID != 0)
 	{
-		if (this->Device != nullptr && this->Device->CanIssueCommands())
-			glDeleteProgram(this->ProgramID);
+		if (device::Device *LiveDevice = this->Device.TryGet(); LiveDevice != nullptr)
+			LiveDevice->RetireGPUObject(device::GPUObjectType::Program, this->ProgramID);
 		this->ProgramID = 0;
 	}
 }
@@ -377,5 +510,17 @@ const std::vector<ShaderModule::VertexInput> &ShaderModule::GetVertexInputs() co
 const std::unordered_map<std::string, GLint> &ShaderModule::GetUniformLocations() const noexcept
 {
 	return this->UniformLocations;
+}
+const std::vector<ShaderModule::UniformResource> &ShaderModule::GetUniformResources() const noexcept
+{
+	return this->UniformResources;
+}
+uint64 ShaderModule::GetEngineInterfaceMask() const noexcept
+{
+	return this->EngineInterfaceMask;
+}
+uint64 ShaderModule::GetInterfaceQueryCountForValidation() noexcept
+{
+	return InterfaceQueryCount.load(std::memory_order_relaxed);
 }
 } // namespace pipeline::shader

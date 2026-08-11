@@ -29,6 +29,18 @@ struct ObjectHandle final
 	[[nodiscard]] bool operator==(const ObjectHandle &) const noexcept = default;
 };
 
+struct ObjectHandleHash final
+{
+	[[nodiscard]] usize operator()(const ObjectHandle &Handle) const noexcept
+	{
+		uint64 Hash = 1'469'598'103'934'665'603ULL;
+		Hash = (Hash ^ Handle.Scene) * 1'099'511'628'211ULL;
+		Hash = (Hash ^ Handle.Slot) * 1'099'511'628'211ULL;
+		Hash = (Hash ^ Handle.Generation) * 1'099'511'628'211ULL;
+		return static_cast<usize>(Hash);
+	}
+};
+
 template <IsCObjectComponent T> struct ComponentHandle final
 {
 	SceneID Scene = 0;

@@ -14,14 +14,21 @@ void main()
     // Reversed-Z uses maximum reduction: larger depth is closer. Mip zero is
     // a direct copy of the depth buffer; every later level reduces its
     // immediately preceding pyramid level.
-    ivec2 sourceCoordinate = coordinate * int(sourceScale);
+    const ivec2 destinationExtent = imageSize(destinationPyramid);
+    const ivec2 sourceCoordinate = coordinate * int(sourceScale);
     ivec2 extent = ivec2(sourceExtent);
     float maximumDepth = 0.0;
-    for (int y = 0; y < int(sourceScale); ++y)
+    ivec2 sourceEnd = sourceCoordinate + ivec2(int(sourceScale) - 1);
+    // GL mip dimensions are rounded down. Expand the final tile to include
+    // the unpaired source row/column so the reduction remains conservative.
+    if (sourceScale > 1U && coordinate.x == destinationExtent.x - 1) sourceEnd.x = extent.x - 1;
+    if (sourceScale > 1U && coordinate.y == destinationExtent.y - 1) sourceEnd.y = extent.y - 1;
+    sourceEnd = min(sourceEnd, extent - 1);
+    for (int y = sourceCoordinate.y; y <= sourceEnd.y; ++y)
     {
-        for (int x = 0; x < int(sourceScale); ++x)
+        for (int x = sourceCoordinate.x; x <= sourceEnd.x; ++x)
         {
-            maximumDepth = max(maximumDepth, texelFetch(sourceDepth, min(sourceCoordinate + ivec2(x, y), extent - 1), int(sourceMip)).r);
+            maximumDepth = max(maximumDepth, texelFetch(sourceDepth, ivec2(x, y), int(sourceMip)).r);
         }
     }
     imageStore(destinationPyramid, coordinate, vec4(maximumDepth));

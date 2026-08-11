@@ -1,12 +1,14 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/scene/SceneHandles.h"
 
 #include <stdexcept>
 
 namespace world
 {
-class SceneException : public std::runtime_error
+class ENGINE_API SceneException : public std::runtime_error
 {
   public:
 	explicit SceneException(string Diagnostic) : std::runtime_error(std::move(Diagnostic))
@@ -14,7 +16,7 @@ class SceneException : public std::runtime_error
 	}
 };
 
-class InvalidObjectHandleException final : public SceneException
+class ENGINE_API InvalidObjectHandleException final : public SceneException
 {
   public:
 	explicit InvalidObjectHandleException(ObjectHandle Handle)
@@ -24,7 +26,7 @@ class InvalidObjectHandleException final : public SceneException
 	}
 };
 
-class InvalidComponentHandleException final : public SceneException
+class ENGINE_API InvalidComponentHandleException final : public SceneException
 {
   public:
 	InvalidComponentHandleException(uint32 Slot, uint32 Generation, string_view ComponentName)
@@ -34,7 +36,7 @@ class InvalidComponentHandleException final : public SceneException
 	}
 };
 
-class ComponentAlreadyAttachedException final : public SceneException
+class ENGINE_API ComponentAlreadyAttachedException final : public SceneException
 {
   public:
 	ComponentAlreadyAttachedException(ObjectHandle Object, string_view ComponentName)
@@ -43,7 +45,7 @@ class ComponentAlreadyAttachedException final : public SceneException
 	}
 };
 
-class MissingComponentDependencyException final : public SceneException
+class ENGINE_API MissingComponentDependencyException final : public SceneException
 {
   public:
 	MissingComponentDependencyException(ObjectHandle Object, string_view ComponentName, string_view DependencyName)
@@ -53,7 +55,7 @@ class MissingComponentDependencyException final : public SceneException
 	}
 };
 
-class ComponentStillRequiredException final : public SceneException
+class ENGINE_API ComponentStillRequiredException final : public SceneException
 {
   public:
 	ComponentStillRequiredException(ObjectHandle Object, string_view ComponentName, string_view DependentName)
@@ -63,7 +65,7 @@ class ComponentStillRequiredException final : public SceneException
 	}
 };
 
-class SceneCapacityException final : public SceneException
+class ENGINE_API SceneCapacityException final : public SceneException
 {
   public:
 	explicit SceneCapacityException(string Diagnostic) : SceneException(std::move(Diagnostic))
@@ -71,7 +73,7 @@ class SceneCapacityException final : public SceneException
 	}
 };
 
-class SceneCommandExecutionException final : public SceneException
+class ENGINE_API SceneCommandExecutionException final : public SceneException
 {
   public:
 	SceneCommandExecutionException(usize CommandIndex, string Description)

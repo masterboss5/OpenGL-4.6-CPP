@@ -5,6 +5,7 @@ layout(local_size_x = 1, local_size_y = 1) in;
 layout(binding = 0) uniform sampler2D sourceHDR;
 layout(r32f, binding = 0) uniform coherent image2D exposureOutput;
 uniform uint historyValid;
+uniform float deltaSeconds;
 
 void main()
 {
@@ -24,6 +25,8 @@ void main()
     float averageLuminance = exp(logLuminanceSum / float(SampleDimension * SampleDimension));
     float targetExposure = clamp(0.18 / averageLuminance, 0.0625, 16.0);
     float priorExposure = historyValid != 0U ? imageLoad(exposureOutput, ivec2(0)).r : targetExposure;
-    float adaptedExposure = mix(priorExposure, targetExposure, 0.08);
+	float adaptationRate = targetExposure < priorExposure ? 3.0 : 1.5;
+	float adaptation = 1.0 - exp(-adaptationRate * clamp(deltaSeconds, 0.0, 0.25));
+	float adaptedExposure = mix(priorExposure, targetExposure, adaptation);
     imageStore(exposureOutput, ivec2(0), vec4(adaptedExposure));
 }

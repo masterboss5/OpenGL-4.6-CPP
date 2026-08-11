@@ -11,99 +11,126 @@ namespace pipeline::shader
 {
 namespace
 {
-[[nodiscard]] GLenum ToGLCompare(CompareFunction Value)
+constexpr std::array<string_view, static_cast<usize>(VertexUniform::Count)> VertexUniformNames{
+	"shadowViewIndex", "gizmoPivot", "gizmoBasis", "gizmoScale", "gizmoOperation", "activeHandle"};
+constexpr std::array<string_view, static_cast<usize>(FragmentUniform::Count)> FragmentUniformNames{"trackOverdraw", "lightCount",
+																								   "clusterCount"};
+constexpr std::array<GLenum, static_cast<usize>(VertexUniform::Count)> VertexUniformTypes{
+	GL_UNSIGNED_INT, GL_FLOAT_VEC3, GL_FLOAT_MAT3, GL_FLOAT, GL_UNSIGNED_INT, GL_UNSIGNED_INT};
+constexpr std::array<GLenum, static_cast<usize>(FragmentUniform::Count)> FragmentUniformTypes{GL_UNSIGNED_INT, GL_UNSIGNED_INT,
+																							  GL_UNSIGNED_INT};
+
+[[nodiscard]] GLint ResolveUniform(const std::unordered_map<std::string, GLint> &Locations, const string_view Name)
 {
-	switch (Value)
-	{
-	case CompareFunction::Never:
-		return GL_NEVER;
-	case CompareFunction::Less:
-		return GL_LESS;
-	case CompareFunction::Equal:
-		return GL_EQUAL;
-	case CompareFunction::LessEqual:
-		return GL_LEQUAL;
-	case CompareFunction::Greater:
-		return GL_GREATER;
-	case CompareFunction::NotEqual:
-		return GL_NOTEQUAL;
-	case CompareFunction::GreaterEqual:
-		return GL_GEQUAL;
-	case CompareFunction::Always:
-		return GL_ALWAYS;
-	}
-	return GL_ALWAYS;
-}
-[[nodiscard]] GLenum ToGLBlendFactor(BlendFactor Value)
-{
-	switch (Value)
-	{
-	case BlendFactor::Zero:
-		return GL_ZERO;
-	case BlendFactor::One:
-		return GL_ONE;
-	case BlendFactor::SourceColor:
-		return GL_SRC_COLOR;
-	case BlendFactor::OneMinusSourceColor:
-		return GL_ONE_MINUS_SRC_COLOR;
-	case BlendFactor::DestinationColor:
-		return GL_DST_COLOR;
-	case BlendFactor::OneMinusDestinationColor:
-		return GL_ONE_MINUS_DST_COLOR;
-	case BlendFactor::SourceAlpha:
-		return GL_SRC_ALPHA;
-	case BlendFactor::OneMinusSourceAlpha:
-		return GL_ONE_MINUS_SRC_ALPHA;
-	case BlendFactor::DestinationAlpha:
-		return GL_DST_ALPHA;
-	case BlendFactor::OneMinusDestinationAlpha:
-		return GL_ONE_MINUS_DST_ALPHA;
-	}
-	return GL_ONE;
-}
-[[nodiscard]] GLenum ToGLBlendOperation(BlendOperation Value)
-{
-	switch (Value)
-	{
-	case BlendOperation::Add:
-		return GL_FUNC_ADD;
-	case BlendOperation::Subtract:
-		return GL_FUNC_SUBTRACT;
-	case BlendOperation::ReverseSubtract:
-		return GL_FUNC_REVERSE_SUBTRACT;
-	case BlendOperation::Minimum:
-		return GL_MIN;
-	case BlendOperation::Maximum:
-		return GL_MAX;
-	}
-	return GL_FUNC_ADD;
+	const auto Found = Locations.find(std::string(Name));
+	return Found == Locations.end() ? -1 : Found->second;
 }
 
-[[nodiscard]] bool MatchesVertexInput(const renderer::VertexAttributeDescriptor &Attribute, GLenum ShaderType)
+[[nodiscard]] bool IsSamplerType(const GLenum Type) noexcept
+{
+	switch (Type)
+	{
+	case GL_SAMPLER_1D:
+	case GL_SAMPLER_2D:
+	case GL_SAMPLER_3D:
+	case GL_SAMPLER_CUBE:
+	case GL_SAMPLER_1D_SHADOW:
+	case GL_SAMPLER_2D_SHADOW:
+	case GL_SAMPLER_1D_ARRAY:
+	case GL_SAMPLER_2D_ARRAY:
+	case GL_SAMPLER_1D_ARRAY_SHADOW:
+	case GL_SAMPLER_2D_ARRAY_SHADOW:
+	case GL_SAMPLER_2D_MULTISAMPLE:
+	case GL_SAMPLER_2D_MULTISAMPLE_ARRAY:
+	case GL_SAMPLER_CUBE_SHADOW:
+	case GL_SAMPLER_BUFFER:
+	case GL_SAMPLER_2D_RECT:
+	case GL_SAMPLER_2D_RECT_SHADOW:
+	case GL_SAMPLER_CUBE_MAP_ARRAY:
+	case GL_SAMPLER_CUBE_MAP_ARRAY_SHADOW:
+	case GL_INT_SAMPLER_1D:
+	case GL_INT_SAMPLER_2D:
+	case GL_INT_SAMPLER_3D:
+	case GL_INT_SAMPLER_CUBE:
+	case GL_INT_SAMPLER_1D_ARRAY:
+	case GL_INT_SAMPLER_2D_ARRAY:
+	case GL_INT_SAMPLER_2D_MULTISAMPLE:
+	case GL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+	case GL_INT_SAMPLER_BUFFER:
+	case GL_INT_SAMPLER_2D_RECT:
+	case GL_INT_SAMPLER_CUBE_MAP_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_1D:
+	case GL_UNSIGNED_INT_SAMPLER_2D:
+	case GL_UNSIGNED_INT_SAMPLER_3D:
+	case GL_UNSIGNED_INT_SAMPLER_CUBE:
+	case GL_UNSIGNED_INT_SAMPLER_1D_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_2D_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE:
+	case GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY:
+	case GL_UNSIGNED_INT_SAMPLER_BUFFER:
+	case GL_UNSIGNED_INT_SAMPLER_2D_RECT:
+	case GL_UNSIGNED_INT_SAMPLER_CUBE_MAP_ARRAY:
+		return true;
+	default:
+		return false;
+	}
+}
+
+[[nodiscard]] bool IsImageType(const GLenum Type) noexcept
+{
+	return (Type >= GL_IMAGE_1D && Type <= GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE_ARRAY);
+}
+
+void ValidateResourceContracts(const std::vector<ShaderResourceContract> &Contracts,
+							   const std::vector<ShaderModule::UniformResource> &Resources, const ShaderStage Stage,
+							   const std::filesystem::path &Path, const ShaderPermutationKey &Permutation)
+{
+	for (const ShaderResourceContract &Contract : Contracts)
+	{
+		if (Contract.Name.empty() || Contract.Type == GL_NONE || Contract.ArraySize <= 0)
+			throw ShaderInterfaceException(Stage, Path, Permutation, "Shader resource contract is invalid");
+		const auto Found = std::ranges::find(Resources, Contract.Name, &ShaderModule::UniformResource::Name);
+		if (Found == Resources.end())
+			throw ShaderInterfaceException(Stage, Path, Permutation, "Required shader resource is absent: " + Contract.Name);
+		if (Found->Type != Contract.Type || Found->ArraySize != Contract.ArraySize)
+			throw ShaderInterfaceException(Stage, Path, Permutation,
+										   "Shader resource type or array size is incompatible: " + Contract.Name);
+		const bool IsSampler = IsSamplerType(Found->Type);
+		const bool IsImage = IsImageType(Found->Type);
+		if ((Contract.ResourceClass == ShaderResourceClass::Uniform && (IsSampler || IsImage)) ||
+			(Contract.ResourceClass == ShaderResourceClass::Sampler && !IsSampler) ||
+			(Contract.ResourceClass == ShaderResourceClass::Image && !IsImage))
+			throw ShaderInterfaceException(Stage, Path, Permutation, "Shader resource class is incompatible: " + Contract.Name);
+		if (Contract.ResourceClass != ShaderResourceClass::Uniform && (Contract.Binding < 0 || Found->Binding != Contract.Binding))
+			throw ShaderInterfaceException(Stage, Path, Permutation, "Shader resource binding is incompatible: " + Contract.Name);
+	}
+}
+
+[[nodiscard]] bool MatchesVertexInput(const pipeline::vertex::VertexAttributeDescriptor &Attribute, GLenum ShaderType)
 {
 	const auto IsFloating = [&Attribute]()
 	{
-		return Attribute.Input == renderer::VertexAttributeInput::FloatingPoint &&
-			   Attribute.DataType != renderer::VertexAttributeDataType::Float64;
+		return Attribute.Input == pipeline::vertex::VertexAttributeInput::FloatingPoint &&
+			   Attribute.DataType != pipeline::vertex::VertexAttributeDataType::Float64;
 	};
 	const auto IsDouble = [&Attribute]()
 	{
-		return Attribute.Input == renderer::VertexAttributeInput::FloatingPoint &&
-			   Attribute.DataType == renderer::VertexAttributeDataType::Float64;
+		return Attribute.Input == pipeline::vertex::VertexAttributeInput::FloatingPoint &&
+			   Attribute.DataType == pipeline::vertex::VertexAttributeDataType::Float64;
 	};
 	const auto IsSignedInteger = [&Attribute]()
 	{
-		return Attribute.Input == renderer::VertexAttributeInput::Integer &&
-			   (Attribute.DataType == renderer::VertexAttributeDataType::Int8 ||
-				Attribute.DataType == renderer::VertexAttributeDataType::Int16 ||
-				Attribute.DataType == renderer::VertexAttributeDataType::Int32);
+		return Attribute.Input == pipeline::vertex::VertexAttributeInput::Integer &&
+			   (Attribute.DataType == pipeline::vertex::VertexAttributeDataType::Int8 ||
+				Attribute.DataType == pipeline::vertex::VertexAttributeDataType::Int16 ||
+				Attribute.DataType == pipeline::vertex::VertexAttributeDataType::Int32);
 	};
 	const auto IsUnsignedInteger = [&Attribute]()
 	{
-		return Attribute.Input == renderer::VertexAttributeInput::Integer &&
-			   (Attribute.DataType == renderer::VertexAttributeDataType::UInt8 ||
-				Attribute.DataType == renderer::VertexAttributeDataType::UInt16 ||
-				Attribute.DataType == renderer::VertexAttributeDataType::UInt32);
+		return Attribute.Input == pipeline::vertex::VertexAttributeInput::Integer &&
+			   (Attribute.DataType == pipeline::vertex::VertexAttributeDataType::UInt8 ||
+				Attribute.DataType == pipeline::vertex::VertexAttributeDataType::UInt16 ||
+				Attribute.DataType == pipeline::vertex::VertexAttributeDataType::UInt32);
 	};
 	switch (ShaderType)
 	{
@@ -145,18 +172,51 @@ namespace
 }
 } // namespace
 
-GraphicsPipeline::GraphicsPipeline(device::Device &Device, const GraphicsPipelineDescriptor &Descriptor, const ShaderModule &Vertex,
-								   const ShaderModule &Fragment)
-	: Device(&Device), VertexProgramID(Vertex.GetProgramID()), Descriptor(Descriptor), VertexInputs(Vertex.GetVertexInputs()),
-	  VertexUniformLocations(Vertex.GetUniformLocations())
+GraphicsPipeline::GraphicsPipeline(device::Device &Device, const GraphicsPipelineDescriptor &Descriptor,
+								   std::shared_ptr<const ShaderModule> Vertex, std::shared_ptr<const ShaderModule> Fragment)
+	: Device(Device), VertexProgramID(Vertex ? Vertex->GetProgramID() : 0), FragmentProgramID(Fragment ? Fragment->GetProgramID() : 0),
+	  Descriptor(Descriptor), VertexModule(std::move(Vertex)), FragmentModule(std::move(Fragment)),
+	  VertexInputs(this->VertexModule ? this->VertexModule->GetVertexInputs() : std::vector<ShaderModule::VertexInput>{}),
+	  VertexUniformLocations(this->VertexModule ? this->VertexModule->GetUniformLocations() : std::unordered_map<std::string, GLint>{}),
+	  FragmentUniformLocations(this->FragmentModule ? this->FragmentModule->GetUniformLocations()
+													: std::unordered_map<std::string, GLint>{})
 {
-	if (Vertex.GetStage() != ShaderStage::Vertex || Fragment.GetStage() != ShaderStage::Fragment)
+	if (!this->VertexModule || !this->FragmentModule || this->VertexModule->GetStage() != ShaderStage::Vertex ||
+		this->FragmentModule->GetStage() != ShaderStage::Fragment)
 		throw ShaderPipelineException(ShaderStage::Vertex, Descriptor.Vertex.Path, Descriptor.Permutation,
 									  "Graphics pipeline requires vertex and fragment modules");
+	if ((this->VertexModule->GetEngineInterfaceMask() & Descriptor.RequiredVertexEngineInterface) !=
+		Descriptor.RequiredVertexEngineInterface)
+		throw ShaderInterfaceException(ShaderStage::Vertex, Descriptor.Vertex.Path, Descriptor.Permutation,
+									   "Vertex shader is missing a required engine UBO/SSBO binding");
+	if ((this->FragmentModule->GetEngineInterfaceMask() & Descriptor.RequiredFragmentEngineInterface) !=
+		Descriptor.RequiredFragmentEngineInterface)
+		throw ShaderInterfaceException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
+									   "Fragment shader is missing a required engine UBO/SSBO binding");
+	ValidateResourceContracts(Descriptor.RequiredVertexResources, this->VertexModule->GetUniformResources(), ShaderStage::Vertex,
+							  Descriptor.Vertex.Path, Descriptor.Permutation);
+	ValidateResourceContracts(Descriptor.RequiredFragmentResources, this->FragmentModule->GetUniformResources(), ShaderStage::Fragment,
+							  Descriptor.Fragment.Path, Descriptor.Permutation);
 	if (!Descriptor.State.ColorAttachmentBlends.empty() &&
 		Descriptor.State.ColorAttachmentBlends.size() != Descriptor.State.RenderTargets.ColorAttachmentCount)
 		throw ShaderPipelineException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
 									  "Per-attachment blend state must exactly match the render-target color attachment count");
+	if (Descriptor.State.RenderTargets.ColorAttachmentCount > this->Device->GetCapabilities().MaximumDrawBuffers)
+		throw ShaderPipelineException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
+									  "Graphics pipeline exceeds the device's maximum draw-buffer count");
+	if (Descriptor.State.RenderTargets.ColorAttachmentCount > Descriptor.State.RenderTargets.ColorFormats.size())
+		throw ShaderPipelineException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
+									  "Graphics pipeline exceeds the declared render-target format capacity");
+	for (usize Index = Descriptor.State.RenderTargets.ColorAttachmentCount; Index < Descriptor.State.RenderTargets.ColorFormats.size();
+		 ++Index)
+	{
+		if (Descriptor.State.RenderTargets.ColorFormats[Index] != GL_NONE)
+			throw ShaderPipelineException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
+										  "Render-target formats are specified beyond the pipeline color attachment count");
+	}
+	if (!Descriptor.State.RenderTargets.HasDepth && Descriptor.State.RenderTargets.DepthFormat != GL_NONE)
+		throw ShaderPipelineException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
+									  "A depth format cannot be specified for a pipeline without a depth attachment");
 	if (Descriptor.State.Multisample.SampleCount == 0 ||
 		Descriptor.State.Multisample.SampleCount != Descriptor.State.RenderTargets.SampleCount)
 		throw ShaderPipelineException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
@@ -164,42 +224,117 @@ GraphicsPipeline::GraphicsPipeline(device::Device &Device, const GraphicsPipelin
 	if (Descriptor.State.Multisample.MinimumSampleShading < 0.0f || Descriptor.State.Multisample.MinimumSampleShading > 1.0f)
 		throw ShaderPipelineException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
 									  "Minimum sample shading must be in the [0, 1] range");
-	(void)this->Device->RequireCurrentContext();
-	glCreateProgramPipelines(1, &this->PipelineID);
-	glUseProgramStages(this->PipelineID, GL_VERTEX_SHADER_BIT, Vertex.GetProgramID());
-	glUseProgramStages(this->PipelineID, GL_FRAGMENT_SHADER_BIT, Fragment.GetProgramID());
-	glValidateProgramPipeline(this->PipelineID);
-	GLint Valid = GL_FALSE;
-	glGetProgramPipelineiv(this->PipelineID, GL_VALIDATE_STATUS, &Valid);
-	if (Valid != GL_TRUE)
+	for (usize Index = 0; Index < this->VertexUniformLocationsByID.size(); ++Index)
+		this->VertexUniformLocationsByID[Index] = ResolveUniform(this->VertexUniformLocations, VertexUniformNames[Index]);
+	for (usize Index = 0; Index < this->FragmentUniformLocationsByID.size(); ++Index)
+		this->FragmentUniformLocationsByID[Index] = ResolveUniform(this->FragmentUniformLocations, FragmentUniformNames[Index]);
+	for (usize Index = 0; Index < this->VertexUniformLocationsByID.size(); ++Index)
 	{
-		glDeleteProgramPipelines(1, &this->PipelineID);
-		this->PipelineID = 0;
-		throw ShaderPipelineException(ShaderStage::Vertex, Descriptor.Vertex.Path, Descriptor.Permutation,
-									  "OpenGL rejected the separable program pipeline");
+		if ((Descriptor.RequiredVertexUniforms & (uint64{1} << Index)) != 0 && this->VertexUniformLocationsByID[Index] < 0)
+			throw ShaderInterfaceException(ShaderStage::Vertex, Descriptor.Vertex.Path, Descriptor.Permutation,
+										   "Required vertex uniform is absent: " + string(VertexUniformNames[Index]));
+		if ((Descriptor.RequiredVertexUniforms & (uint64{1} << Index)) != 0)
+			ValidateResourceContracts(
+				{ShaderResourceContract{.Name = string(VertexUniformNames[Index]), .Type = VertexUniformTypes[Index]}},
+				this->VertexModule->GetUniformResources(), ShaderStage::Vertex, Descriptor.Vertex.Path, Descriptor.Permutation);
 	}
-	this->Device->CheckErrors("GraphicsPipeline creation");
+	for (usize Index = 0; Index < this->FragmentUniformLocationsByID.size(); ++Index)
+	{
+		if ((Descriptor.RequiredFragmentUniforms & (uint64{1} << Index)) != 0 && this->FragmentUniformLocationsByID[Index] < 0)
+			throw ShaderInterfaceException(ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation,
+										   "Required fragment uniform is absent: " + string(FragmentUniformNames[Index]));
+		if ((Descriptor.RequiredFragmentUniforms & (uint64{1} << Index)) != 0)
+			ValidateResourceContracts(
+				{ShaderResourceContract{.Name = string(FragmentUniformNames[Index]), .Type = FragmentUniformTypes[Index]}},
+				this->FragmentModule->GetUniformResources(), ShaderStage::Fragment, Descriptor.Fragment.Path, Descriptor.Permutation);
+	}
+	(void)this->Device->RequireCurrentContext();
+	try
+	{
+		glCreateProgramPipelines(1, &this->PipelineID);
+		if (this->PipelineID == 0)
+			throw ShaderPipelineException(ShaderStage::Vertex, Descriptor.Vertex.Path, Descriptor.Permutation,
+										  "OpenGL could not allocate the separable program pipeline");
+		glUseProgramStages(this->PipelineID, GL_VERTEX_SHADER_BIT, this->VertexProgramID);
+		glUseProgramStages(this->PipelineID, GL_FRAGMENT_SHADER_BIT, this->FragmentProgramID);
+		glValidateProgramPipeline(this->PipelineID);
+		GLint Valid = GL_FALSE;
+		glGetProgramPipelineiv(this->PipelineID, GL_VALIDATE_STATUS, &Valid);
+		if (Valid != GL_TRUE)
+			throw ShaderPipelineException(ShaderStage::Vertex, Descriptor.Vertex.Path, Descriptor.Permutation,
+										  "OpenGL rejected the separable program pipeline");
+		this->Device->CheckErrors("GraphicsPipeline creation");
+	}
+	catch (...)
+	{
+		if (this->PipelineID != 0)
+			glDeleteProgramPipelines(1, &this->PipelineID);
+		this->PipelineID = 0;
+		throw;
+	}
 }
-void GraphicsPipeline::SetVertexUniformUInt(string_view Name, uint32 Value) const
+void GraphicsPipeline::SetVertexUniformUInt(const VertexUniform Uniform, const uint32 Value) const
 {
 	(void)this->Device->RequireCurrentContext();
-	const auto LocationIt = this->VertexUniformLocations.find(std::string(Name));
-	if (LocationIt != this->VertexUniformLocations.end())
-	{
-		glProgramUniform1ui(this->VertexProgramID, LocationIt->second, Value);
-	}
+	const usize Index = static_cast<usize>(Uniform);
+	if (Index >= this->VertexUniformLocationsByID.size() || this->VertexUniformLocationsByID[Index] < 0)
+		throw ShaderInterfaceException(ShaderStage::Vertex, this->Descriptor.Vertex.Path, this->Descriptor.Permutation,
+									   "Required typed vertex uniform is absent from the realized pipeline");
+	glProgramUniform1ui(this->VertexProgramID, this->VertexUniformLocationsByID[Index], Value);
 }
 
-void GraphicsPipeline::ValidateVertexDescriptor(const renderer::VertexDescriptor &VertexDescriptor) const
+void GraphicsPipeline::SetFragmentUniformUInt(const FragmentUniform Uniform, const uint32 Value) const
+{
+	(void)this->Device->RequireCurrentContext();
+	const usize Index = static_cast<usize>(Uniform);
+	if (Index >= this->FragmentUniformLocationsByID.size() || this->FragmentUniformLocationsByID[Index] < 0)
+		throw ShaderInterfaceException(ShaderStage::Fragment, this->Descriptor.Fragment.Path, this->Descriptor.Permutation,
+									   "Required typed fragment uniform is absent from the realized pipeline");
+	glProgramUniform1ui(this->FragmentProgramID, this->FragmentUniformLocationsByID[Index], Value);
+}
+
+void GraphicsPipeline::SetVertexUniformFloat(const VertexUniform Uniform, const float32 Value) const
+{
+	(void)this->Device->RequireCurrentContext();
+	const usize Index = static_cast<usize>(Uniform);
+	if (Index >= this->VertexUniformLocationsByID.size() || this->VertexUniformLocationsByID[Index] < 0)
+		throw ShaderInterfaceException(ShaderStage::Vertex, this->Descriptor.Vertex.Path, this->Descriptor.Permutation,
+									   "Required typed vertex uniform is absent from the realized pipeline");
+	glProgramUniform1f(this->VertexProgramID, this->VertexUniformLocationsByID[Index], Value);
+}
+
+void GraphicsPipeline::SetVertexUniformFloat3(const VertexUniform Uniform, const glm::vec3 &Value) const
+{
+	(void)this->Device->RequireCurrentContext();
+	const usize Index = static_cast<usize>(Uniform);
+	if (Index >= this->VertexUniformLocationsByID.size() || this->VertexUniformLocationsByID[Index] < 0)
+		throw ShaderInterfaceException(ShaderStage::Vertex, this->Descriptor.Vertex.Path, this->Descriptor.Permutation,
+									   "Required typed vertex uniform is absent from the realized pipeline");
+	glProgramUniform3fv(this->VertexProgramID, this->VertexUniformLocationsByID[Index], 1, &Value.x);
+}
+
+void GraphicsPipeline::SetVertexUniformMatrix3(const VertexUniform Uniform, const glm::mat3 &Value) const
+{
+	(void)this->Device->RequireCurrentContext();
+	const usize Index = static_cast<usize>(Uniform);
+	if (Index >= this->VertexUniformLocationsByID.size() || this->VertexUniformLocationsByID[Index] < 0)
+		throw ShaderInterfaceException(ShaderStage::Vertex, this->Descriptor.Vertex.Path, this->Descriptor.Permutation,
+									   "Required typed vertex uniform is absent from the realized pipeline");
+	glProgramUniformMatrix3fv(this->VertexProgramID, this->VertexUniformLocationsByID[Index], 1, GL_FALSE, &Value[0][0]);
+}
+
+void GraphicsPipeline::ValidateVertexDescriptor(const pipeline::vertex::VertexDescriptor &VertexDescriptor) const
 {
 	const uint64 LayoutHash = VertexDescriptor.GetLayoutHash();
-	if (ValidatedVertexLayouts.contains(LayoutHash))
+	const auto CachedLayout = std::find(this->ValidatedVertexLayouts.begin(),
+										this->ValidatedVertexLayouts.begin() + this->ValidatedVertexLayoutCount, LayoutHash);
+	if (CachedLayout != this->ValidatedVertexLayouts.begin() + this->ValidatedVertexLayoutCount)
 		return;
 	for (const ShaderModule::VertexInput &Input : this->VertexInputs)
 	{
 		const auto Attributes = VertexDescriptor.GetAttributes();
 		const auto Attribute =
-			std::find_if(Attributes.begin(), Attributes.end(), [&Input](const renderer::VertexAttributeDescriptor &Candidate)
+			std::find_if(Attributes.begin(), Attributes.end(), [&Input](const pipeline::vertex::VertexAttributeDescriptor &Candidate)
 						 { return Candidate.Location == static_cast<GLuint>(Input.Location); });
 		if (Attribute == Attributes.end() || !MatchesVertexInput(*Attribute, Input.Type))
 		{
@@ -208,14 +343,15 @@ void GraphicsPipeline::ValidateVertexDescriptor(const renderer::VertexDescriptor
 											   std::to_string(Input.Location));
 		}
 	}
-	ValidatedVertexLayouts.emplace(LayoutHash);
+	if (this->ValidatedVertexLayoutCount < this->ValidatedVertexLayouts.size())
+		this->ValidatedVertexLayouts[this->ValidatedVertexLayoutCount++] = LayoutHash;
 }
 GraphicsPipeline::~GraphicsPipeline()
 {
 	if (this->PipelineID != 0)
 	{
-		if (this->Device != nullptr && this->Device->CanIssueCommands())
-			glDeleteProgramPipelines(1, &this->PipelineID);
+		if (device::Device *LiveDevice = this->Device.TryGet(); LiveDevice != nullptr)
+			LiveDevice->RetireGPUObject(device::GPUObjectType::ProgramPipeline, this->PipelineID);
 		this->PipelineID = 0;
 	}
 }
@@ -226,73 +362,7 @@ void GraphicsPipeline::Bind() const
 	// Clear it before binding separable graphics stages.
 	glUseProgram(0);
 	glBindProgramPipeline(this->PipelineID);
-	// Color-write state is global OpenGL state. Every graphics pipeline must
-	// establish it explicitly instead of inheriting a depth-only or external
-	// pass's mask.
-	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-	if (Descriptor.State.DepthStencil.DepthTest)
-		glEnable(GL_DEPTH_TEST);
-	else
-		glDisable(GL_DEPTH_TEST);
-	glDepthMask(Descriptor.State.DepthStencil.DepthWrite ? GL_TRUE : GL_FALSE);
-	glDepthFunc(ToGLCompare(Descriptor.State.DepthStencil.DepthCompare));
-	if (Descriptor.State.ColorAttachmentBlends.empty())
-	{
-		if (Descriptor.State.Blend.Enabled)
-		{
-			glEnable(GL_BLEND);
-			glBlendFuncSeparate(
-				ToGLBlendFactor(Descriptor.State.Blend.SourceColor), ToGLBlendFactor(Descriptor.State.Blend.DestinationColor),
-				ToGLBlendFactor(Descriptor.State.Blend.SourceAlpha), ToGLBlendFactor(Descriptor.State.Blend.DestinationAlpha));
-			glBlendEquationSeparate(ToGLBlendOperation(Descriptor.State.Blend.ColorOperation),
-									ToGLBlendOperation(Descriptor.State.Blend.AlphaOperation));
-		}
-		else
-			glDisable(GL_BLEND);
-	}
-	else
-	{
-		glDisable(GL_BLEND);
-		for (uint32 AttachmentIndex = 0; AttachmentIndex < Descriptor.State.RenderTargets.ColorAttachmentCount; ++AttachmentIndex)
-		{
-			const BlendState &Blend = Descriptor.State.ColorAttachmentBlends[AttachmentIndex];
-			if (Blend.Enabled)
-				glEnablei(GL_BLEND, AttachmentIndex);
-			else
-				glDisablei(GL_BLEND, AttachmentIndex);
-			glBlendFuncSeparatei(AttachmentIndex, ToGLBlendFactor(Blend.SourceColor), ToGLBlendFactor(Blend.DestinationColor),
-								 ToGLBlendFactor(Blend.SourceAlpha), ToGLBlendFactor(Blend.DestinationAlpha));
-			glBlendEquationSeparatei(AttachmentIndex, ToGLBlendOperation(Blend.ColorOperation), ToGLBlendOperation(Blend.AlphaOperation));
-		}
-	}
-	glPolygonMode(GL_FRONT_AND_BACK, Descriptor.State.Rasterizer.Wireframe ? GL_LINE : GL_FILL);
-	if (Descriptor.State.Rasterizer.CullMode == CullMode::None)
-		glDisable(GL_CULL_FACE);
-	else
-	{
-		glEnable(GL_CULL_FACE);
-		glCullFace(Descriptor.State.Rasterizer.CullMode == CullMode::Back ? GL_BACK : GL_FRONT);
-	}
-	glFrontFace(Descriptor.State.Rasterizer.FrontFace == FrontFace::CounterClockwise ? GL_CCW : GL_CW);
-	if (Descriptor.State.Multisample.SampleCount > 1)
-		glEnable(GL_MULTISAMPLE);
-	else
-		glDisable(GL_MULTISAMPLE);
-	if (Descriptor.State.Multisample.SampleShading)
-	{
-		glEnable(GL_SAMPLE_SHADING);
-		glMinSampleShading(Descriptor.State.Multisample.MinimumSampleShading);
-	}
-	else
-		glDisable(GL_SAMPLE_SHADING);
-	if (Descriptor.State.Multisample.AlphaToCoverage)
-		glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-	else
-		glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
-	if (Descriptor.State.Multisample.AlphaToOne)
-		glEnable(GL_SAMPLE_ALPHA_TO_ONE);
-	else
-		glDisable(GL_SAMPLE_ALPHA_TO_ONE);
+	this->Device->ApplyGraphicsPipelineState(this->Descriptor.State);
 }
 GLenum GraphicsPipeline::GetGLTopology() const noexcept
 {

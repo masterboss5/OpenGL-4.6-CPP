@@ -362,6 +362,7 @@ Window &WindowManager::RecreateWindow(const WindowID ID, const WindowSpecificati
 		}
 		Group.Device->UnregisterContext(*OldContext);
 		OldContext.reset();
+		OldContextIterator->second->MakeCurrent();
 		ReplacementWindow.reset();
 		RecreationCommitted = true;
 		this->EnqueueWindowEvent(
@@ -414,13 +415,15 @@ void WindowManager::DestroyWindow(const WindowID ID)
 	}
 }
 
-Window *WindowManager::FindManagedWindow(const WindowID ID) noexcept
+Window *WindowManager::FindManagedWindow(const WindowID ID)
 {
+	this->RequireOwnerThread();
 	const auto Iterator = this->Windows.find(ID);
 	return Iterator == this->Windows.end() ? nullptr : Iterator->second.get();
 }
-const Window *WindowManager::FindManagedWindow(const WindowID ID) const noexcept
+const Window *WindowManager::FindManagedWindow(const WindowID ID) const
 {
+	this->RequireOwnerThread();
 	const auto Iterator = this->Windows.find(ID);
 	return Iterator == this->Windows.end() ? nullptr : Iterator->second.get();
 }
@@ -439,7 +442,7 @@ void WindowManager::SetPrimaryWindow(const WindowID ID)
 	this->PrimaryWindow = ID;
 }
 
-std::vector<MonitorInfo> WindowManager::GetMonitors() const
+void WindowManager::GetMonitorsInto(std::vector<MonitorInfo> &Destination) const
 {
 	this->RequireOwnerThread();
 	int32 MonitorCount = 0;
@@ -447,8 +450,9 @@ std::vector<MonitorInfo> WindowManager::GetMonitors() const
 	if (NativeMonitors == nullptr || MonitorCount <= 0)
 		throw WindowException(GetGLFWDiagnostic("Monitor enumeration"));
 	GLFWmonitor *Primary = glfwGetPrimaryMonitor();
-	std::vector<MonitorInfo> Result;
-	Result.reserve(static_cast<usize>(MonitorCount));
+	Destination.reserve(std::max(Destination.capacity(), static_cast<usize>(MonitorCount)));
+	Destination.resize(static_cast<usize>(MonitorCount));
+	usize OutputIndex = 0;
 	for (int32 MonitorIndex = 0; MonitorIndex < MonitorCount; ++MonitorIndex)
 	{
 		GLFWmonitor *Monitor = NativeMonitors[MonitorIndex];
@@ -456,7 +460,8 @@ std::vector<MonitorInfo> WindowManager::GetMonitors() const
 		const char *DisplayName = glfwGetMonitorName(Monitor);
 		if (Identifier == nullptr)
 			continue;
-		MonitorInfo Info;
+		MonitorInfo &Info = Destination[OutputIndex++];
+		Info.Modes.clear();
 		Info.ID.Value = Identifier;
 		Info.DisplayName = DisplayName == nullptr ? Info.ID.Value : DisplayName;
 		int32 X = 0, Y = 0, Width = 0, Height = 0;
@@ -481,7 +486,7 @@ std::vector<MonitorInfo> WindowManager::GetMonitors() const
 		const GLFWvidmode *Modes = glfwGetVideoModes(Monitor, &ModeCount);
 		if (Modes == nullptr || ModeCount <= 0)
 			throw WindowException(GetGLFWDiagnostic("Monitor video-mode query"));
-		Info.Modes.reserve(static_cast<usize>(ModeCount));
+		Info.Modes.reserve(std::max(Info.Modes.capacity(), static_cast<usize>(ModeCount)));
 		for (int32 ModeIndex = 0; ModeIndex < ModeCount; ++ModeIndex)
 		{
 			const GLFWvidmode &Mode = Modes[ModeIndex];
@@ -492,10 +497,16 @@ std::vector<MonitorInfo> WindowManager::GetMonitors() const
 								  .RefreshRate = static_cast<uint32>(Mode.refreshRate)});
 		}
 		Info.Primary = Monitor == Primary;
-		Result.push_back(std::move(Info));
 	}
-	if (Result.empty())
+	Destination.resize(OutputIndex);
+	if (Destination.empty())
 		throw WindowException("Monitor enumeration returned no usable monitors");
+}
+
+std::vector<MonitorInfo> WindowManager::GetMonitors() const
+{
+	std::vector<MonitorInfo> Result;
+	this->GetMonitorsInto(Result);
 	return Result;
 }
 
@@ -509,6 +520,7 @@ MonitorInfo WindowManager::GetPrimaryMonitor() const
 }
 pipeline::device::Device &WindowManager::GetDevice(const std::string_view ContextGroup) const
 {
+	this->RequireOwnerThread();
 	return *this->RequireContextGroup(ContextGroup).Device;
 }
 pipeline::device::Device &WindowManager::GetDevice(const Window &Window) const
@@ -517,6 +529,7 @@ pipeline::device::Device &WindowManager::GetDevice(const Window &Window) const
 }
 Context &WindowManager::GetAnchorContext(const std::string_view ContextGroup) const
 {
+	this->RequireOwnerThread();
 	return *this->RequireContextGroup(ContextGroup).AnchorContext;
 }
 
@@ -543,29 +556,41 @@ void WindowManager::WakeEventLoop()
 	glfwPostEmptyEvent();
 }
 
-std::vector<WindowEvent> WindowManager::ConsumeEvents()
+void WindowManager::ConsumeEventsInto(std::vector<WindowEvent> &Destination)
 {
 	this->RequireOwnerThread();
-	std::vector<WindowEvent> Result;
-	Result.reserve(this->Events.size());
+	Destination.clear();
+	Destination.reserve(std::max(Destination.capacity(), this->Events.size()));
 	while (!this->Events.empty())
 	{
-		Result.push_back(std::move(this->Events.front()));
+		Destination.push_back(std::move(this->Events.front()));
 		this->Events.pop_front();
 	}
+}
+
+void WindowManager::ConsumeInputEventsInto(std::vector<input::InputEvent> &Destination)
+{
+	this->RequireOwnerThread();
+	Destination.clear();
+	Destination.reserve(std::max(Destination.capacity(), this->InputEvents.size()));
+	while (!this->InputEvents.empty())
+	{
+		Destination.push_back(std::move(this->InputEvents.front()));
+		this->InputEvents.pop_front();
+	}
+}
+
+std::vector<WindowEvent> WindowManager::ConsumeEvents()
+{
+	std::vector<WindowEvent> Result;
+	this->ConsumeEventsInto(Result);
 	return Result;
 }
 
 std::vector<input::InputEvent> WindowManager::ConsumeInputEvents()
 {
-	this->RequireOwnerThread();
 	std::vector<input::InputEvent> Result;
-	Result.reserve(this->InputEvents.size());
-	while (!this->InputEvents.empty())
-	{
-		Result.push_back(std::move(this->InputEvents.front()));
-		this->InputEvents.pop_front();
-	}
+	this->ConsumeInputEventsInto(Result);
 	return Result;
 }
 
@@ -702,13 +727,18 @@ void WindowManager::EnqueueInputEvent(input::InputEvent Event)
 
 void WindowManager::RecordNativeException(std::exception_ptr Exception) noexcept
 {
+	std::scoped_lock Lock(this->NativeExceptionMutex);
 	if (this->PendingNativeException == nullptr)
 		this->PendingNativeException = std::move(Exception);
 }
 
 void WindowManager::RethrowNativeException()
 {
-	std::exception_ptr Pending = std::exchange(this->PendingNativeException, nullptr);
+	std::exception_ptr Pending;
+	{
+		std::scoped_lock Lock(this->NativeExceptionMutex);
+		Pending = std::exchange(this->PendingNativeException, nullptr);
+	}
 	if (Pending != nullptr)
 		std::rethrow_exception(Pending);
 }
@@ -727,6 +757,7 @@ void WindowManager::ConfigureWindowHints(const WindowSpecification &Specificatio
 	glfwWindowHint(GLFW_FOCUSED, Specification.Focused ? GLFW_TRUE : GLFW_FALSE);
 	glfwWindowHint(GLFW_DECORATED, Specification.Decorated ? GLFW_TRUE : GLFW_FALSE);
 	glfwWindowHint(GLFW_RESIZABLE, Specification.Resizable ? GLFW_TRUE : GLFW_FALSE);
+	glfwWindowHint(GLFW_MAXIMIZED, Specification.Maximized && !Specification.HeadlessValidation ? GLFW_TRUE : GLFW_FALSE);
 	glfwWindowHint(GLFW_FLOATING, Specification.Floating ? GLFW_TRUE : GLFW_FALSE);
 	glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, Specification.TransparentFramebuffer ? GLFW_TRUE : GLFW_FALSE);
 	glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);

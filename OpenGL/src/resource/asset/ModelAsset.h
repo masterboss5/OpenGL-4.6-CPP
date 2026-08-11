@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/resource/Asset.h"
 #include "src/resource/asset/AnimationAsset.h"
 #include "src/resource/asset/AssetHandle.h"
@@ -31,7 +33,7 @@ struct ModelMeshInstance final
 	AssetHandle<MeshAsset> Mesh;
 };
 
-class ModelAsset final : public Asset
+class ENGINE_API ModelAsset final : public Asset
 {
   public:
 	inline static constexpr resource::AssetType AssetType = resource::AssetType::Model;

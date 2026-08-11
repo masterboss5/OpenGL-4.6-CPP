@@ -3,7 +3,7 @@
 
 #include <glm.hpp>
 
-struct alignas(16) SpotLightSource
+struct alignas(16) ENGINE_API SpotLightSource
 {
   public:
 	glm::vec3 Position;
@@ -41,12 +41,13 @@ struct alignas(16) SpotLightSource
 	float32 Constant;
 	float32 Linear;
 	float32 Quadratic;
-	float32 Pad13;
+	float32 CastShadows;
 
 	//------------112-------
 
 	SpotLightSource(const glm::vec3 &Position, const glm::vec3 &Direction, float32 CutOff, float32 OuterCutOff, const glm::vec3 &Ambient,
-					const glm::vec3 &Diffuse, const glm::vec3 &Specular, float32 Constant, float32 Linear, float32 Quadratic);
+					const glm::vec3 &Diffuse, const glm::vec3 &Specular, float32 Constant, float32 Linear, float32 Quadratic,
+					bool CastShadows = true);
 
 	void LookAt(const glm::vec3 &Target);
 };

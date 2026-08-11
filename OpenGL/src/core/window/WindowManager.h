@@ -7,6 +7,7 @@
 #include <deque>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -27,7 +28,7 @@ namespace core
 {
 class Context;
 
-class WindowManager final
+class ENGINE_API WindowManager final
 {
   public:
 	WindowManager();
@@ -41,10 +42,11 @@ class WindowManager final
 	[[nodiscard]] Window &CreateWindow(const WindowSpecification &Specification);
 	[[nodiscard]] Window &RecreateWindow(WindowID ID, const WindowSpecification &Specification);
 	void DestroyWindow(WindowID ID);
-	[[nodiscard]] Window *FindManagedWindow(WindowID ID) noexcept;
-	[[nodiscard]] const Window *FindManagedWindow(WindowID ID) const noexcept;
+	[[nodiscard]] Window *FindManagedWindow(WindowID ID);
+	[[nodiscard]] const Window *FindManagedWindow(WindowID ID) const;
 	[[nodiscard]] Window &GetPrimaryWindow() const;
 	void SetPrimaryWindow(WindowID ID);
+	void GetMonitorsInto(std::vector<MonitorInfo> &Destination) const;
 	[[nodiscard]] std::vector<MonitorInfo> GetMonitors() const;
 	[[nodiscard]] MonitorInfo GetPrimaryMonitor() const;
 	[[nodiscard]] pipeline::device::Device &GetDevice(std::string_view ContextGroup) const;
@@ -53,6 +55,8 @@ class WindowManager final
 	void PollEvents();
 	void WaitEvents(float64 TimeoutSeconds);
 	void WakeEventLoop();
+	void ConsumeEventsInto(std::vector<WindowEvent> &Destination);
+	void ConsumeInputEventsInto(std::vector<input::InputEvent> &Destination);
 	[[nodiscard]] std::vector<WindowEvent> ConsumeEvents();
 	[[nodiscard]] std::vector<input::InputEvent> ConsumeInputEvents();
 	[[nodiscard]] EventSubscription SubscribeWindowEvents(int32 Priority, EventDispatcher<WindowEvent>::Callback Callback);
@@ -87,6 +91,7 @@ class WindowManager final
 	uint64 NextWindowID = 1;
 	bool GLFWInitialized = false;
 	bool COMInitialized = false;
+	std::mutex NativeExceptionMutex;
 	std::exception_ptr PendingNativeException;
 };
 } // namespace core

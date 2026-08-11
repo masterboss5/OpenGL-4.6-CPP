@@ -17,7 +17,7 @@ namespace detail
 template <typename T> class DenseGenerationalPool;
 }
 
-class Object final
+class ENGINE_API Object final
 {
 	friend class Scene;
 	friend class detail::DenseGenerationalPool<Object>;

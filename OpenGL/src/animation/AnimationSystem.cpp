@@ -31,11 +31,57 @@ struct JointTransform final
 
 struct EvaluatedPose final
 {
+	struct MorphWeight final
+	{
+		resource::AssetID MorphSet;
+		resource::MorphTargetID Target = 0;
+		float32 Weight = 0.0f;
+	};
+	struct ContributingClip final
+	{
+		resource::AssetHandle<resource::AnimationClipAsset> Handle;
+		resource::AssetPtr<resource::AnimationClipAsset> Asset;
+	};
+
 	resource::AssetHandle<resource::SkeletonAsset> Skeleton;
+	resource::AssetPtr<resource::SkeletonAsset> PinnedSkeleton;
 	std::vector<JointTransform> Joints;
-	std::unordered_map<resource::MorphTargetID, float32> MorphWeights;
-	std::vector<resource::AssetHandle<resource::AnimationClipAsset>> ContributingClips;
+	std::vector<MorphWeight> MorphWeights;
+	std::vector<ContributingClip> ContributingClips;
 };
+
+template <typename T> [[nodiscard]] resource::AssetPtr<T> PinRequired(const resource::AssetHandle<T> &Handle, const string_view Role)
+{
+	resource::AssetPtr<T> Pinned = Handle.Pin();
+	if (Pinned == nullptr)
+		throw std::runtime_error(string(Role) + " is unavailable during animation evaluation");
+	return Pinned;
+}
+
+[[nodiscard]] bool IsFinite(const glm::vec3 &Value) noexcept
+{
+	return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
+}
+
+[[nodiscard]] bool IsFinite(const glm::quat &Value) noexcept
+{
+	return std::isfinite(Value.w) && std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
+}
+
+[[nodiscard]] glm::quat NormalizeRotation(const glm::quat &Value)
+{
+	const float64 Maximum = std::max({std::abs(static_cast<float64>(Value.w)), std::abs(static_cast<float64>(Value.x)),
+									  std::abs(static_cast<float64>(Value.y)), std::abs(static_cast<float64>(Value.z))});
+	if (!std::isfinite(Maximum) || Maximum == 0.0)
+		throw std::runtime_error("Animation evaluation produced a degenerate quaternion");
+	const glm::dvec4 Scaled(static_cast<float64>(Value.w) / Maximum, static_cast<float64>(Value.x) / Maximum,
+							static_cast<float64>(Value.y) / Maximum, static_cast<float64>(Value.z) / Maximum);
+	const float64 Norm = Maximum * std::sqrt(glm::dot(Scaled, Scaled));
+	if (!std::isfinite(Norm) || Norm <= std::numeric_limits<float32>::epsilon())
+		throw std::runtime_error("Animation evaluation produced a non-finite quaternion norm");
+	return {static_cast<float32>(static_cast<float64>(Value.w) / Norm), static_cast<float32>(static_cast<float64>(Value.x) / Norm),
+			static_cast<float32>(static_cast<float64>(Value.y) / Norm), static_cast<float32>(static_cast<float64>(Value.z) / Norm)};
+}
 
 [[nodiscard]] JointTransform Decompose(const glm::mat4 &Matrix)
 {
@@ -46,7 +92,9 @@ struct EvaluatedPose final
 	{
 		throw std::runtime_error("Skeleton reference transform cannot be decomposed");
 	}
-	Result.Rotation = glm::normalize(Result.Rotation);
+	if (!IsFinite(Result.Scale) || !IsFinite(Result.Translation) || !IsFinite(Result.Rotation))
+		throw std::runtime_error("Skeleton reference transform decomposed to non-finite values");
+	Result.Rotation = NormalizeRotation(Result.Rotation);
 	return Result;
 }
 
@@ -58,9 +106,12 @@ struct EvaluatedPose final
 
 [[nodiscard]] JointTransform Interpolate(const JointTransform &Left, const JointTransform &Right, float32 Alpha)
 {
-	return {.Translation = glm::mix(Left.Translation, Right.Translation, Alpha),
-			.Rotation = glm::normalize(glm::slerp(Left.Rotation, Right.Rotation, Alpha)),
-			.Scale = glm::mix(Left.Scale, Right.Scale, Alpha)};
+	JointTransform Result{.Translation = glm::mix(Left.Translation, Right.Translation, Alpha),
+						  .Rotation = NormalizeRotation(glm::slerp(Left.Rotation, Right.Rotation, Alpha)),
+						  .Scale = glm::mix(Left.Scale, Right.Scale, Alpha)};
+	if (!IsFinite(Result.Translation) || !IsFinite(Result.Scale))
+		throw std::runtime_error("Animation interpolation produced non-finite transform data");
+	return Result;
 }
 
 [[nodiscard]] JointTransform SampleTrack(const resource::AnimationJointTrack &Track, float32 Time)
@@ -116,7 +167,8 @@ struct EvaluatedPose final
 	Result.Skeleton = Clip.GetSkeleton();
 	if (Clip.GetSkeleton())
 	{
-		auto Skeleton = Clip.GetSkeleton().Pin();
+		resource::AssetPtr<resource::SkeletonAsset> Skeleton = PinRequired(Clip.GetSkeleton(), "Animation clip skeleton");
+		Result.PinnedSkeleton = Skeleton;
 		Result.Joints.reserve(Skeleton->GetJoints().size());
 		for (const resource::SkeletonJoint &Joint : Skeleton->GetJoints())
 			Result.Joints.push_back(Decompose(Joint.ReferenceLocalTransform));
@@ -130,7 +182,7 @@ struct EvaluatedPose final
 		}
 	}
 	for (const resource::AnimationMorphTrack &Track : Clip.GetMorphTracks())
-		Result.MorphWeights[Track.MorphTarget] = SampleMorphTrack(Track, Time);
+		Result.MorphWeights.push_back({Track.MorphSet, Track.MorphTarget, SampleMorphTrack(Track, Time)});
 	return Result;
 }
 
@@ -148,20 +200,27 @@ struct EvaluatedPose final
 		else
 		{
 			Left.Joints[Joint].Translation += Right.Joints[Joint].Translation * Alpha;
-			Left.Joints[Joint].Rotation = glm::normalize(
+			Left.Joints[Joint].Rotation = NormalizeRotation(
 				Left.Joints[Joint].Rotation * glm::slerp(glm::quat(1.0f, 0.0f, 0.0f, 0.0f), Right.Joints[Joint].Rotation, Alpha));
 			Left.Joints[Joint].Scale *= glm::mix(glm::vec3(1.0f), Right.Joints[Joint].Scale, Alpha);
 		}
 	}
-	for (const auto &[target, weight] : Right.MorphWeights)
+	for (const EvaluatedPose::MorphWeight &RightWeight : Right.MorphWeights)
 	{
-		float32 &Destination = Left.MorphWeights[target];
-		Destination = Additive ? Destination + weight * Alpha : glm::mix(Destination, weight, Alpha);
+		auto Existing =
+			std::find_if(Left.MorphWeights.begin(), Left.MorphWeights.end(), [&RightWeight](const EvaluatedPose::MorphWeight &Value)
+						 { return Value.Target == RightWeight.Target && Value.MorphSet == RightWeight.MorphSet; });
+		if (Existing == Left.MorphWeights.end())
+			Left.MorphWeights.push_back(RightWeight);
+		else
+			Existing->Weight =
+				Additive ? Existing->Weight + RightWeight.Weight * Alpha : glm::mix(Existing->Weight, RightWeight.Weight, Alpha);
 	}
-	for (const auto &Clip : Right.ContributingClips)
+	for (const EvaluatedPose::ContributingClip &Clip : Right.ContributingClips)
 	{
 		const auto Found = std::find_if(Left.ContributingClips.begin(), Left.ContributingClips.end(),
-										[&Clip](const auto &Candidate) { return Candidate.GetID() == Clip.GetID(); });
+										[&Clip](const EvaluatedPose::ContributingClip &Candidate)
+										{ return Candidate.Handle.GetID() == Clip.Handle.GetID(); });
 		if (Found == Left.ContributingClips.end())
 			Left.ContributingClips.push_back(Clip);
 	}
@@ -186,8 +245,9 @@ struct EvaluatedPose final
 		EvaluatedPose Result;
 		if (Node.Type == resource::AnimationGraphNodeType::Clip)
 		{
-			Result = SampleClip(*Node.Clip.Pin(), PlaybackTime);
-			Result.ContributingClips.push_back(Node.Clip);
+			resource::AssetPtr<resource::AnimationClipAsset> Clip = PinRequired(Node.Clip, "Animation graph clip");
+			Result = SampleClip(*Clip, PlaybackTime);
+			Result.ContributingClips.push_back({Node.Clip, std::move(Clip)});
 		}
 		else
 		{
@@ -219,10 +279,14 @@ void PublishAnimationEvents(components::CObjectAnimationComponent &Component, co
 							const components::AnimationPlaybackInterval &Playback)
 {
 	constexpr uint64 MaximumEventsPerUpdate = 65'536;
+	if (Playback.Current <= Playback.Previous)
+		return;
 	uint64 Published = 0;
-	for (const auto &ClipHandle : Pose.ContributingClips)
+	for (const EvaluatedPose::ContributingClip &ContributingClip : Pose.ContributingClips)
 	{
-		auto Clip = ClipHandle.Pin();
+		const resource::AssetPtr<resource::AnimationClipAsset> &Clip = ContributingClip.Asset;
+		if (Clip == nullptr)
+			throw std::runtime_error("Animation event source clip lost its retained asset");
 		if (Clip->GetEvents().empty())
 			continue;
 		const float64 Duration = static_cast<float64>(Clip->GetDuration());
@@ -236,11 +300,12 @@ void PublishAnimationEvents(components::CObjectAnimationComponent &Component, co
 			for (const resource::AnimationEvent &Event : Clip->GetEvents())
 			{
 				const float64 Occurrence = static_cast<float64>(Cycle) * Duration + static_cast<float64>(Event.Time);
-				if (Occurrence <= Playback.Previous || Occurrence > Playback.Current)
+				const bool InitialStartEvent = Playback.Previous == 0.0 && Cycle == 0 && Event.Time == 0.0f;
+				if ((!InitialStartEvent && Occurrence <= Playback.Previous) || Occurrence > Playback.Current)
 					continue;
 				if (++Published > MaximumEventsPerUpdate)
 					throw std::overflow_error("Animation update produced too many events");
-				Component.PublishTriggeredEvent({ClipHandle.GetID(), Event.ID, Occurrence, Event.Name});
+				Component.PublishTriggeredEvent({ContributingClip.Handle.GetID(), Event.ID, Occurrence, Event.Name});
 			}
 			if (Cycle == std::numeric_limits<uint64>::max())
 				break;
@@ -269,12 +334,10 @@ void UpdateComponent(world::Scene::WriteAccess &Access, components::CObjectAnima
 	if (!Component.IsEnabled())
 		return;
 	const components::AnimationPlaybackInterval Playback = Component.AdvancePlayback(DeltaSeconds);
-	auto Graph = Component.GetGraph().Pin();
+	resource::AssetPtr<resource::AnimationGraphAsset> Graph = PinRequired(Component.GetGraph(), "Animation component graph");
 	EvaluatedPose Pose = EvaluateGraph(*Graph, Component, Playback.Current);
 	PublishAnimationEvents(Component, Pose, Playback);
-	resource::AssetPtr<resource::SkeletonAsset> Skeleton;
-	if (Pose.Skeleton)
-		Skeleton = Pose.Skeleton.Pin();
+	resource::AssetPtr<resource::SkeletonAsset> Skeleton = Pose.PinnedSkeleton;
 	if (Component.IsRootMotionEnabled())
 	{
 		if (Skeleton == nullptr)
@@ -284,21 +347,30 @@ void UpdateComponent(world::Scene::WriteAccess &Access, components::CObjectAnima
 			throw std::runtime_error("Root-motion evaluation changed skeleton within one update");
 		if (Pose.ContributingClips.empty())
 			throw std::runtime_error("Root motion requires at least one contributing animation clip");
-		const float64 LoopDuration = Pose.ContributingClips.front().Pin()->GetDuration();
-		for (const auto &ClipHandle : Pose.ContributingClips)
+		const float64 LoopDuration = Pose.ContributingClips.front().Asset->GetDuration();
+		for (const EvaluatedPose::ContributingClip &ContributingClip : Pose.ContributingClips)
 		{
-			if (std::abs(static_cast<float64>(ClipHandle.Pin()->GetDuration()) - LoopDuration) > std::numeric_limits<float32>::epsilon())
+			if (ContributingClip.Asset == nullptr)
+				throw std::runtime_error("Root-motion source clip lost its retained asset");
+			if (std::abs(static_cast<float64>(ContributingClip.Asset->GetDuration()) - LoopDuration) >
+				std::numeric_limits<float32>::epsilon())
 			{
 				throw std::runtime_error("Root-motion blends require synchronized clip durations");
 			}
 		}
-		const auto Root = std::find_if(Skeleton->GetJoints().begin(), Skeleton->GetJoints().end(), [](const resource::SkeletonJoint &Joint)
-									   { return Joint.ParentIndex == resource::InvalidJointIndex; });
-		if (Root == Skeleton->GetJoints().end())
-			throw std::runtime_error("Root-motion skeleton has no root joint");
-		const uint32 RootIndex = static_cast<uint32>(std::distance(Skeleton->GetJoints().begin(), Root));
+		const resource::JointID RootMotionJoint = Pose.ContributingClips.front().Asset->GetRootMotionJoint();
+		if (RootMotionJoint == 0)
+			throw std::runtime_error("Root-motion clip does not declare a source joint");
+		for (const EvaluatedPose::ContributingClip &ContributingClip : Pose.ContributingClips)
+			if (ContributingClip.Asset->GetRootMotionJoint() != RootMotionJoint)
+				throw std::runtime_error("Root-motion blends require the same declared source joint");
+		const resource::SkeletonJoint *Root = Skeleton->FindJoint(RootMotionJoint);
+		if (Root == nullptr)
+			throw std::runtime_error("Root-motion source joint is absent from the evaluated skeleton");
+		const uint32 RootIndex = static_cast<uint32>(Root - Skeleton->GetJoints().data());
 		glm::vec3 TranslationDelta = Pose.Joints[RootIndex].Translation - PreviousPose.Joints[RootIndex].Translation;
-		glm::quat RotationDelta = glm::normalize(glm::inverse(PreviousPose.Joints[RootIndex].Rotation) * Pose.Joints[RootIndex].Rotation);
+		glm::quat RotationDelta =
+			NormalizeRotation(glm::inverse(PreviousPose.Joints[RootIndex].Rotation) * Pose.Joints[RootIndex].Rotation);
 		const uint64 PreviousCycle = static_cast<uint64>(std::floor(Playback.Previous / LoopDuration));
 		const uint64 CurrentCycle = static_cast<uint64>(std::floor(Playback.Current / LoopDuration));
 		if (CurrentCycle > PreviousCycle)
@@ -314,18 +386,18 @@ void UpdateComponent(world::Scene::WriteAccess &Access, components::CObjectAnima
 			TranslationDelta = (EndRoot.Translation - PreviousPose.Joints[RootIndex].Translation) +
 							   (Pose.Joints[RootIndex].Translation - StartRoot.Translation) +
 							   static_cast<float32>(CrossedCycles - 1U) * (EndRoot.Translation - StartRoot.Translation);
-			RotationDelta = glm::normalize(glm::inverse(PreviousPose.Joints[RootIndex].Rotation) * EndRoot.Rotation);
-			const glm::quat FullLoopRotation = glm::normalize(glm::inverse(StartRoot.Rotation) * EndRoot.Rotation);
+			RotationDelta = NormalizeRotation(glm::inverse(PreviousPose.Joints[RootIndex].Rotation) * EndRoot.Rotation);
+			const glm::quat FullLoopRotation = NormalizeRotation(glm::inverse(StartRoot.Rotation) * EndRoot.Rotation);
 			for (uint64 Cycle = 1; Cycle < CrossedCycles; ++Cycle)
-				RotationDelta = glm::normalize(RotationDelta * FullLoopRotation);
-			RotationDelta = glm::normalize(RotationDelta * glm::inverse(StartRoot.Rotation) * Pose.Joints[RootIndex].Rotation);
+				RotationDelta = NormalizeRotation(RotationDelta * FullLoopRotation);
+			RotationDelta = NormalizeRotation(RotationDelta * glm::inverse(StartRoot.Rotation) * Pose.Joints[RootIndex].Rotation);
 		}
 		const auto TransformHandle = Access.GetComponent<components::CObjectTransformComponent>(Component.GetOwner());
 		if (!TransformHandle.IsValid())
 			throw std::runtime_error("Animation root motion requires the owner's Transform component");
 		auto &Transform = Access.Resolve(TransformHandle);
 		Transform.Translate(TranslationDelta);
-		Transform.SetRotation(glm::normalize(Transform.GetRotation() * RotationDelta));
+		Transform.SetRotation(NormalizeRotation(Transform.GetRotation() * RotationDelta));
 		Pose.Joints[RootIndex] = Decompose(Root->ReferenceLocalTransform);
 	}
 	if (Skeleton != nullptr)
@@ -334,10 +406,11 @@ void UpdateComponent(world::Scene::WriteAccess &Access, components::CObjectAnima
 		Component.PublishRigPose(Pose.Skeleton.GetID(), std::move(SkinPose));
 		for (const auto &ProfileHandle : Component.GetRetargetProfiles())
 		{
-			auto Profile = ProfileHandle.Pin();
+			resource::AssetPtr<resource::RetargetProfileAsset> Profile = PinRequired(ProfileHandle, "Animation retarget profile");
 			if (Profile->GetSource().GetID() != Pose.Skeleton.GetID())
 				continue;
-			auto DestinationSkeleton = Profile->GetDestination().Pin();
+			resource::AssetPtr<resource::SkeletonAsset> DestinationSkeleton =
+				PinRequired(Profile->GetDestination(), "Animation retarget destination skeleton");
 			std::vector<JointTransform> DestinationPose;
 			DestinationPose.reserve(DestinationSkeleton->GetJoints().size());
 			for (const resource::SkeletonJoint &Joint : DestinationSkeleton->GetJoints())
@@ -356,9 +429,9 @@ void UpdateComponent(world::Scene::WriteAccess &Access, components::CObjectAnima
 				DestinationPose[DestinationIndex].Translation =
 					DestinationReference.Translation +
 					(SourceAnimated.Translation - SourceReference.Translation) * Mapping.TranslationScale;
-				const glm::quat SourceRotationDelta = glm::normalize(SourceAnimated.Rotation * glm::inverse(SourceReference.Rotation));
+				const glm::quat SourceRotationDelta = NormalizeRotation(SourceAnimated.Rotation * glm::inverse(SourceReference.Rotation));
 				DestinationPose[DestinationIndex].Rotation =
-					glm::normalize(DestinationReference.Rotation * Mapping.RotationOffset * SourceRotationDelta);
+					NormalizeRotation(DestinationReference.Rotation * Mapping.RotationOffset * SourceRotationDelta);
 				DestinationPose[DestinationIndex].Scale =
 					DestinationReference.Scale * (SourceAnimated.Scale / glm::max(SourceReference.Scale, glm::vec3(0.0001f)));
 			}
@@ -366,9 +439,9 @@ void UpdateComponent(world::Scene::WriteAccess &Access, components::CObjectAnima
 		}
 	}
 	Component.BeginMorphEvaluation();
-	for (const auto &[target, weight] : Pose.MorphWeights)
+	for (const EvaluatedPose::MorphWeight &Weight : Pose.MorphWeights)
 	{
-		Component.ApplyEvaluatedMorphWeight(target, weight);
+		Component.ApplyEvaluatedMorphWeight(Weight.MorphSet, Weight.Target, Weight.Weight);
 	}
 }
 } // namespace
@@ -379,6 +452,8 @@ void AnimationSystem::Update(world::Scene &Scene, float32 DeltaSeconds) const
 		throw std::invalid_argument("Animation update requires a finite non-negative delta time");
 	auto Access = Scene.Write();
 	auto Components = Access.Components<components::CObjectAnimationComponent>();
+	if (Components.empty())
+		return;
 	concurrency::parallel_for(uint32{0}, static_cast<uint32>(Components.size()), [&Access, Components, DeltaSeconds](uint32 Index)
 							  { UpdateComponent(Access, Components[Index], DeltaSeconds); });
 }

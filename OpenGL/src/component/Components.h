@@ -1,13 +1,10 @@
 #pragma once
+#include "src/concepts.h"
 #include "src/meta.h"
 #include "src/types.h"
 
 namespace components
 {
-
-template <typename T>
-concept HasDependencies = requires { typename T::Dependencies; };
-
 template <typename T, bool = HasDependencies<T>> struct GetDependenciesImpl
 {
 	using Type = TypeList<>;

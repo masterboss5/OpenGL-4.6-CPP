@@ -363,6 +363,7 @@ struct WindowSpecification final
 	bool Focused = true;
 	bool Decorated = true;
 	bool Resizable = true;
+	bool Maximized = false;
 	bool Floating = false;
 	bool TransparentFramebuffer = false;
 	bool HeadlessValidation = false;

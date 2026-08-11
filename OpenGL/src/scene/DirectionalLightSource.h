@@ -3,11 +3,11 @@
 
 #include <glm.hpp>
 
-struct alignas(16) DirectionalLightSource
+struct alignas(16) ENGINE_API DirectionalLightSource
 {
   public:
 	glm::vec3 Direction;
-	float32 Pad14;
+	float32 CastShadows;
 
 	//-----------16-------
 
@@ -26,7 +26,8 @@ struct alignas(16) DirectionalLightSource
 
 	//------------64-------
 
-	DirectionalLightSource(const glm::vec3 &Direction, const glm::vec3 &Ambient, const glm::vec3 &Diffuse, const glm::vec3 &Specular);
+	DirectionalLightSource(const glm::vec3 &Direction, const glm::vec3 &Ambient, const glm::vec3 &Diffuse, const glm::vec3 &Specular,
+						   bool CastShadows = true);
 };
 
 static_assert(std::is_trivially_copyable_v<DirectionalLightSource>, "SSBO element type must be trivially copyable");

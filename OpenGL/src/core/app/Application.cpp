@@ -1,15 +1,16 @@
 #include "Application.h"
 
 #include "src/pipeline/device/Device.h"
-#include "src/renderer/RenderCoreValidation.h"
 
 #include <GL/glew.h>
+#include <exception>
 #include <stdexcept>
 
 namespace core
 {
 Application::Application(ApplicationSpecification Specification)
-	: DeterministicRenderValidation(Specification.DeterministicRenderValidation)
+	: Services(*this, this->WindowManager, this->InputSystem, this->TaskScheduler, this->RenderThread, this->Diagnostics),
+	  MaximumFrameCount(Specification.MaximumFrameCount), ApplicationThreadID(std::this_thread::get_id())
 {
 	this->Window = &this->WindowManager.CreateWindow(Specification.Window);
 	pipeline::device::Device &Device = this->WindowManager.GetDevice(*this->Window);
@@ -22,10 +23,6 @@ Application::Application(ApplicationSpecification Specification)
 	else
 		glDisable(GL_FRAMEBUFFER_SRGB);
 	Device.CheckErrors("Application render convention initialization");
-	if (this->DeterministicRenderValidation)
-		renderer::validation::RunDeterministicRenderCoreChecks(Device);
-	(void)this->Window->SetPresentationMode(PresentationMode::Off);
-	this->Window->SetCursorMode(CursorMode::Relative);
 }
 
 Application::Application(WindowSpecification WindowSpecification)
@@ -40,63 +37,126 @@ Application::~Application()
 
 void Application::Main()
 {
-	this->Running = true;
-	while (this->Running)
+	this->RequireApplicationThread();
+	this->Running.store(true, std::memory_order_release);
+	uint64 FrameCount = 0;
+	try
 	{
-		const FrameTiming Timing = this->FrameClock.Tick();
-		this->WindowManager.PollEvents();
-		this->InputSystem.BeginFrame(this->WindowManager);
-		for (const WindowEvent &Event : this->WindowManager.ConsumeEvents())
+		while (this->Running.load(std::memory_order_acquire))
 		{
-			if (Event.Window == this->Window->GetID() && Event.Type == WindowEventType::CloseRequested)
-				this->Running = false;
+			this->CommitPendingLayers();
+			const FrameTiming Timing = this->FrameClock.Tick();
+			this->WindowManager.PollEvents();
+			this->InputSystem.BeginFrame(this->WindowManager);
+			this->WindowManager.ConsumeEventsInto(this->WindowEventsScratch);
+			for (const WindowEvent &Event : this->WindowEventsScratch)
+			{
+				if (Event.Window == this->Window->GetID() && Event.Type == WindowEventType::CloseRequested)
+					this->Stop();
+			}
+			if (this->Window->ShouldClose())
+				this->Stop();
+			if (!this->Running.load(std::memory_order_acquire))
+				break;
+
+			const ApplicationFrame Frame(Timing, this->Window->GetID(), this->Window->GetFramebufferExtent(),
+										 this->InputSystem.GetSnapshot(this->Window->GetID()), this->WindowEventsScratch, this->Services);
+
+			this->DispatchingLayers = true;
+			for (const auto &Layer : this->Layers)
+			{
+				Layer->Run(Frame);
+				if (!this->Running.load(std::memory_order_acquire))
+					break;
+			}
+			this->DispatchingLayers = false;
+
+			++FrameCount;
+			if (this->MaximumFrameCount != 0 && FrameCount >= this->MaximumFrameCount)
+				this->Stop();
 		}
-		this->Running = this->Running && !this->Window->ShouldClose();
-		if (!this->Running)
-			break;
-
-		pipeline::device::Device &Device = this->WindowManager.GetDevice(*this->Window);
-		Device.ValidateStatus();
-		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		glEnable(GL_DEPTH_TEST);
-		glDepthFunc(GL_GREATER);
-		Device.CheckErrors("Application frame initialization");
-
-		const ApplicationFrame Frame{.Timing = Timing,
-									 .Window = this->Window->GetID(),
-									 .FramebufferExtent = this->Window->GetFramebufferExtent(),
-									 .Input = &this->InputSystem.GetSnapshot(this->Window->GetID())};
-
-		for (const auto &Layer : this->Layers)
+	}
+	catch (const std::exception &Exception)
+	{
+		this->DispatchingLayers = false;
+		this->Stop();
+		try
 		{
-			Layer->Run(Frame);
+			this->Diagnostics.Publish(diagnostics::DiagnosticSeverity::Fatal, "Application", Exception.what());
 		}
-
-		this->Window->Present();
+		catch (...)
+		{
+		}
+		throw;
+	}
+	catch (...)
+	{
+		this->DispatchingLayers = false;
+		this->Stop();
+		try
+		{
+			this->Diagnostics.Publish(diagnostics::DiagnosticSeverity::Fatal, "Application", "Unknown application-layer exception");
+		}
+		catch (...)
+		{
+		}
+		throw;
 	}
 }
 
 void Application::Stop()
 {
-	this->Running = false;
+	this->Running.store(false, std::memory_order_release);
 }
 
 usize Application::GetLayerCount() const
 {
-	return this->Layers.size();
+	this->RequireApplicationThread();
+	return this->Layers.size() + this->PendingLayers.size();
+}
+
+void Application::RequireApplicationThread() const
+{
+	if (std::this_thread::get_id() != this->ApplicationThreadID)
+		throw std::logic_error("Application operation requires the application thread");
+}
+
+bool Application::IsApplicationThread() const noexcept
+{
+	return std::this_thread::get_id() == this->ApplicationThreadID;
+}
+
+void Application::QueueLayer(std::unique_ptr<ApplicationLayer> Layer)
+{
+	if (this->DispatchingLayers)
+		this->PendingLayers.push_back(std::move(Layer));
+	else
+		this->Layers.push_back(std::move(Layer));
+}
+
+void Application::CommitPendingLayers()
+{
+	if (this->PendingLayers.empty())
+		return;
+	this->Layers.reserve(this->Layers.size() + this->PendingLayers.size());
+	for (std::unique_ptr<ApplicationLayer> &Layer : this->PendingLayers)
+		this->Layers.push_back(std::move(Layer));
+	this->PendingLayers.clear();
 }
 
 Window &Application::GetPrimaryWindow() const
 {
+	this->RequireApplicationThread();
 	return *this->Window;
 }
-WindowManager &Application::GetWindowManager() noexcept
+WindowManager &Application::GetWindowManager()
 {
+	this->RequireApplicationThread();
 	return this->WindowManager;
 }
-input::InputSystem &Application::GetInputSystem() noexcept
+input::InputSystem &Application::GetInputSystem()
 {
+	this->RequireApplicationThread();
 	return this->InputSystem;
 }
 } // namespace core

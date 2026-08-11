@@ -5,6 +5,11 @@
 /*Must include all components*/
 
 #include "src/component/object/CObjectAnimationComponent.h"
+#include "src/component/object/CObjectBehaviorComponent.h"
+#include "src/component/object/CObjectCameraComponent.h"
+#include "src/component/object/CObjectHierarchyComponent.h"
+#include "src/component/object/CObjectIdentityComponent.h"
+#include "src/component/object/CObjectLightComponents.h"
 #include "src/component/object/CObjectMeshComponent.h"
 #include "src/component/object/CObjectTransformComponent.h"
 

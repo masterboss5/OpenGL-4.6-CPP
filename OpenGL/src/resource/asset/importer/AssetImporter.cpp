@@ -1,6 +1,9 @@
 #include "AssetImporter.h"
 
-#include <locale>
+#include "src/core/io/SecurePath.h"
+
+#include <cctype>
+#include <limits>
 
 namespace resource::importer
 {
@@ -34,29 +37,30 @@ void AssetImporter::ValidateImportRequest(const std::filesystem::path &Path) con
 		throw AssetUnsupportedFormatException(this->GetAssetType(), Path);
 	}
 
-	std::ifstream AccessProbe(Path, std::ios::in | std::ios::binary);
-	if (!AccessProbe.is_open())
+	try
 	{
-		throw AssetFileReadException(this->GetAssetType(), Path, "Unable to open source file");
+		(void)core::io::SecurePath::ReadFileRangeWithin(Path.parent_path(), Path.filename(), 0, 0, std::numeric_limits<uint64>::max(),
+														"Asset import source");
+	}
+	catch (const core::io::SecurePathException &Exception)
+	{
+		throw AssetFileReadException(this->GetAssetType(), Path, Exception.what());
 	}
 }
 
 std::string AssetImporter::ReadTextSource(const std::filesystem::path &Path) const
 {
-	std::ifstream Input(Path, std::ios::in | std::ios::binary);
-	if (!Input.is_open())
+	constexpr uint64 MaximumTextAssetBytes = 64U * 1024U * 1024U;
+	std::vector<uint8> Bytes;
+	try
 	{
-		throw AssetFileReadException(this->GetAssetType(), Path, "Unable to open source file");
+		Bytes = core::io::SecurePath::ReadFileWithin(Path.parent_path(), Path.filename(), MaximumTextAssetBytes, "Text asset source");
 	}
-
-	std::ostringstream Buffer;
-	Buffer << Input.rdbuf();
-	if (Input.bad())
+	catch (const core::io::SecurePathException &Exception)
 	{
-		throw AssetFileReadException(this->GetAssetType(), Path, "I/O failure while reading source file");
+		throw AssetFileReadException(this->GetAssetType(), Path, Exception.what());
 	}
-
-	std::string Source = Buffer.str();
+	std::string Source(Bytes.begin(), Bytes.end());
 	if (Source.empty())
 	{
 		throw AssetContentValidationException(this->GetAssetType(), Path, "Source file is empty");
@@ -67,11 +71,8 @@ std::string AssetImporter::ReadTextSource(const std::filesystem::path &Path) con
 std::string AssetImporter::GetNormalizedExtension(const std::filesystem::path &Path)
 {
 	std::string Extension = Path.extension().string();
-	const std::locale Locale = std::locale::classic();
 	for (auto &Character : Extension)
-	{
-		Character = std::tolower(Character, Locale);
-	}
+		Character = static_cast<char>(std::tolower(static_cast<unsigned char>(Character)));
 	return Extension;
 }
 } // namespace resource::importer

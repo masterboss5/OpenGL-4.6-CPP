@@ -353,7 +353,7 @@ struct InputEvent final
 	ControllerStateEvent ControllerState;
 };
 
-class InputSnapshot final
+class ENGINE_API InputSnapshot final
 {
   public:
 	[[nodiscard]] const ButtonSnapshot &GetKey(Key Key) const;
@@ -508,7 +508,7 @@ struct ActionState final
 	bool Released = false;
 };
 
-class InputBindingConflictError final : public std::invalid_argument
+class ENGINE_API InputBindingConflictError final : public std::invalid_argument
 {
   public:
 	explicit InputBindingConflictError(const std::string &Diagnostic) : std::invalid_argument(Diagnostic)

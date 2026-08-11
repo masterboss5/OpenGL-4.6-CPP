@@ -144,6 +144,7 @@ template <IsAsset T> class AssetHandle final
 	}
 
 	friend class AssetManager;
+	friend class GeneratedAssetStage;
 	friend class importer::AssetImportContext;
 	template <IsAsset U> friend class AssetHandle;
 	template <IsAsset U> friend class WeakAssetHandle;

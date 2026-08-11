@@ -1,5 +1,6 @@
 #pragma once
 #include <concepts>
+#include <functional>
 #include <type_traits>
 
 namespace components
@@ -33,6 +34,9 @@ concept IsAssetWithStaticType = IsAsset<T> && requires { std::remove_cvref_t<T>:
 
 template <typename T>
 concept IsCObjectComponent = components::ComponentRegistration<std::remove_cvref_t<T>>::value;
+
+template <typename T>
+concept HasDependencies = requires { typename std::remove_cvref_t<T>::Dependencies; };
 
 template <typename T>
 concept IsApplicationLayer = std::derived_from<std::remove_cvref_t<T>, ApplicationLayer>;
@@ -72,3 +76,9 @@ concept Arithmetic = Integral<T> || FloatingPoint<T>;
 
 template <typename T>
 concept Enumeration = std::is_enum_v<std::remove_cvref_t<T>>;
+
+template <typename T>
+concept TaskCallable = std::invocable<std::remove_reference_t<T> &>;
+
+template <typename T>
+concept MemberObjectPointer = std::is_member_object_pointer_v<std::remove_cvref_t<T>>;

@@ -1,5 +1,7 @@
 #include "ShaderSourceAsset.h"
 
+#include <functional>
+
 namespace pipeline::shader
 {
 ShaderSourceAsset::ShaderSourceAsset(ShaderStage Stage, std::filesystem::path SourcePath, std::string Source,

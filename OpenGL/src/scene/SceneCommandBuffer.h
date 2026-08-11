@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/scene/Scene.h"
 
 #include <memory>
@@ -12,7 +14,7 @@
 
 namespace world
 {
-class SceneCommandBuffer final
+class ENGINE_API SceneCommandBuffer final
 {
   public:
 	SceneCommandBuffer() = default;
@@ -40,6 +42,7 @@ class SceneCommandBuffer final
 
 	[[nodiscard]] usize Size() const noexcept;
 	[[nodiscard]] bool Empty() const noexcept;
+	void Absorb(SceneCommandBuffer &Source);
 	void Execute(Scene &Scene);
 	void Clear() noexcept;
 

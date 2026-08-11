@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <limits>
 
-namespace renderer
+namespace pipeline::vertex
 {
 namespace
 {
@@ -33,7 +33,7 @@ namespace
 		return GL_UNSIGNED_INT;
 	}
 
-	throw VertexBufferError("VertexDescriptor contains an unknown attribute data type");
+	throw pipeline::buffer::VertexBufferError("VertexDescriptor contains an unknown attribute data type");
 }
 
 [[nodiscard]] usize GetTypeSize(VertexAttributeDataType DataType)
@@ -60,7 +60,7 @@ namespace
 		return sizeof(uint32);
 	}
 
-	throw VertexBufferError("VertexDescriptor contains an unknown attribute data type");
+	throw pipeline::buffer::VertexBufferError("VertexDescriptor contains an unknown attribute data type");
 }
 
 [[nodiscard]] bool IsIntegerType(VertexAttributeDataType DataType)
@@ -73,7 +73,7 @@ void RequireVertexArray(GLuint VertexArrayID)
 {
 	if (VertexArrayID == 0 || glIsVertexArray(VertexArrayID) == GL_FALSE)
 	{
-		throw VertexBufferError("VertexDescriptor requires a created vertex array object");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor requires a created vertex array object");
 	}
 }
 } // namespace
@@ -103,14 +103,14 @@ void VertexDescriptor::ApplyToVertexArray(pipeline::device::Device &Device, GLui
 	{
 		if (Binding.BindingIndex >= Capabilities.MaximumVertexBindings)
 		{
-			throw VertexBufferError("VertexDescriptor binding index exceeds OpenGL limits");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor binding index exceeds OpenGL limits");
 		}
 	}
 	for (const VertexAttributeDescriptor &Attribute : this->Attributes)
 	{
 		if (Attribute.Location >= Capabilities.MaximumVertexAttributes)
 		{
-			throw VertexBufferError("VertexDescriptor attribute location exceeds OpenGL limits");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor attribute location exceeds OpenGL limits");
 		}
 	}
 
@@ -156,34 +156,34 @@ void VertexDescriptor::ApplyToVertexArray(pipeline::device::Device &Device, GLui
 }
 
 void VertexDescriptor::BindVertexBuffer(pipeline::device::Device &Device, GLuint VertexArrayID, GLuint BindingIndex,
-										const VertexBuffer &Buffer, usize OffsetInBytes) const
+										const pipeline::buffer::VertexBuffer &Buffer, usize OffsetInBytes) const
 {
 	(void)Device.RequireCurrentContext();
 	RequireVertexArray(VertexArrayID);
 	if (&Buffer.GetDevice() != &Device)
 	{
-		throw VertexBufferError("VertexDescriptor cannot bind a VertexBuffer owned by another Device");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor cannot bind a VertexBuffer owned by another Device");
 	}
 	const VertexBindingDescriptor &Binding = this->GetBinding(BindingIndex);
 	if (Buffer.IsMapped())
 	{
-		throw VertexBufferError("VertexDescriptor cannot bind a mapped VertexBuffer");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor cannot bind a mapped VertexBuffer");
 	}
 	if (Buffer.GetStrideInBytes() != Binding.StrideInBytes)
 	{
-		throw VertexBufferError("VertexDescriptor binding stride does not match the VertexBuffer stride");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor binding stride does not match the VertexBuffer stride");
 	}
 	if (OffsetInBytes >= Buffer.GetSizeInBytes())
 	{
-		throw VertexBufferError("VertexDescriptor binding offset exceeds VertexBuffer storage");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor binding offset exceeds VertexBuffer storage");
 	}
 	if (OffsetInBytes > static_cast<usize>(std::numeric_limits<GLintptr>::max()))
 	{
-		throw VertexBufferError("VertexDescriptor binding offset exceeds OpenGL limits");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor binding offset exceeds OpenGL limits");
 	}
 	if (Binding.StrideInBytes > static_cast<usize>(std::numeric_limits<GLsizei>::max()))
 	{
-		throw VertexBufferError("VertexDescriptor binding stride exceeds OpenGL limits");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor binding stride exceeds OpenGL limits");
 	}
 
 	Device.CheckErrors("VertexDescriptor::bindVertexBuffer precondition");
@@ -197,7 +197,7 @@ const VertexBindingDescriptor &VertexDescriptor::GetBinding(GLuint BindingIndex)
 	const VertexBindingDescriptor *Binding = this->FindBinding(BindingIndex);
 	if (Binding == nullptr)
 	{
-		throw VertexBufferError("VertexDescriptor does not contain the requested vertex binding");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor does not contain the requested vertex binding");
 	}
 
 	return *Binding;
@@ -253,24 +253,24 @@ void VertexDescriptor::Validate() const
 {
 	if (this->Bindings.empty() || this->Attributes.empty())
 	{
-		throw VertexBufferError("VertexDescriptor requires at least one binding and one attribute");
+		throw pipeline::buffer::VertexBufferError("VertexDescriptor requires at least one binding and one attribute");
 	}
 
 	for (const VertexBindingDescriptor &Binding : this->Bindings)
 	{
 		if (Binding.StrideInBytes == 0)
 		{
-			throw VertexBufferError("VertexDescriptor binding stride must be greater than zero");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor binding stride must be greater than zero");
 		}
 		if ((Binding.InputRate == VertexInputRate::PerVertex && Binding.InstanceStepRate != 0) ||
 			(Binding.InputRate == VertexInputRate::PerInstance && Binding.InstanceStepRate == 0))
 		{
-			throw VertexBufferError("VertexDescriptor binding input rate and instance step rate are inconsistent");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor binding input rate and instance step rate are inconsistent");
 		}
 		if (std::count_if(this->Bindings.begin(), this->Bindings.end(),
 						  [&Binding](const VertexBindingDescriptor &Other) { return Other.BindingIndex == Binding.BindingIndex; }) != 1)
 		{
-			throw VertexBufferError("VertexDescriptor contains duplicate binding indices");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor contains duplicate binding indices");
 		}
 	}
 
@@ -279,35 +279,36 @@ void VertexDescriptor::Validate() const
 		const VertexBindingDescriptor *Binding = this->FindBinding(Attribute.BindingIndex);
 		if (Binding == nullptr)
 		{
-			throw VertexBufferError("VertexDescriptor attribute references an unknown binding");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor attribute references an unknown binding");
 		}
 		if (Attribute.ComponentCount == 0 || Attribute.ComponentCount > 4)
 		{
-			throw VertexBufferError("VertexDescriptor attribute component count must be between one and four");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor attribute component count must be between one and four");
 		}
 		if (Attribute.Input == VertexAttributeInput::Integer && (!IsIntegerType(Attribute.DataType) || Attribute.Normalized))
 		{
-			throw VertexBufferError("Integer VertexDescriptor attributes require an integer type and cannot be normalized");
+			throw pipeline::buffer::VertexBufferError(
+				"Integer VertexDescriptor attributes require an integer type and cannot be normalized");
 		}
 		if (Attribute.Normalized && !IsIntegerType(Attribute.DataType))
 		{
-			throw VertexBufferError("Only integer VertexDescriptor attributes can be normalized");
+			throw pipeline::buffer::VertexBufferError("Only integer VertexDescriptor attributes can be normalized");
 		}
 
 		const usize AttributeSize = GetTypeSize(Attribute.DataType) * Attribute.ComponentCount;
 		if (Attribute.RelativeOffsetInBytes > Binding->StrideInBytes ||
 			AttributeSize > Binding->StrideInBytes - Attribute.RelativeOffsetInBytes)
 		{
-			throw VertexBufferError("VertexDescriptor attribute exceeds its binding stride");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor attribute exceeds its binding stride");
 		}
 		if (Attribute.RelativeOffsetInBytes > static_cast<usize>(std::numeric_limits<GLuint>::max()))
 		{
-			throw VertexBufferError("VertexDescriptor attribute offset exceeds OpenGL limits");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor attribute offset exceeds OpenGL limits");
 		}
 		if (std::count_if(this->Attributes.begin(), this->Attributes.end(),
 						  [&Attribute](const VertexAttributeDescriptor &Other) { return Other.Location == Attribute.Location; }) != 1)
 		{
-			throw VertexBufferError("VertexDescriptor contains duplicate attribute locations");
+			throw pipeline::buffer::VertexBufferError("VertexDescriptor contains duplicate attribute locations");
 		}
 	}
 }
@@ -318,4 +319,4 @@ const VertexBindingDescriptor *VertexDescriptor::FindBinding(GLuint BindingIndex
 									   { return Binding.BindingIndex == BindingIndex; });
 	return Iterator == this->Bindings.end() ? nullptr : &*Iterator;
 }
-} // namespace renderer
+} // namespace pipeline::vertex

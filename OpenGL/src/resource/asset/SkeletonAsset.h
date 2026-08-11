@@ -22,7 +22,7 @@ struct SkeletonJoint final
 	glm::mat4 InverseBindMatrix{1.0f};
 };
 
-class SkeletonAsset final : public Asset
+class ENGINE_API SkeletonAsset final : public Asset
 {
   public:
 	inline static constexpr resource::AssetType AssetType = resource::AssetType::Skeleton;

@@ -1,7 +1,10 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/pipeline/texture/Texture2D.h"
 #include "src/resource/Asset.h"
+#include "src/resource/asset/AssetTypes.h"
 
 #include <memory>
 #include <span>
@@ -10,9 +13,11 @@
 
 namespace resource
 {
-class Texture2DAsset final : public Asset
+class ENGINE_API Texture2DAsset final : public Asset
 {
   public:
+	inline static constexpr resource::AssetType AssetType = resource::AssetType::Texture2D;
+
 	Texture2DAsset(std::string Name, int32 Width, int32 Height, int32 Channels, std::vector<uint8> Pixels);
 
 	[[nodiscard]] bool RequiresGPURealization() const noexcept override;
@@ -22,7 +27,7 @@ class Texture2DAsset final : public Asset
 	[[nodiscard]] int32 GetHeight() const noexcept;
 	[[nodiscard]] int32 GetChannels() const noexcept;
 	[[nodiscard]] std::span<const uint8> GetPixels() const noexcept;
-	[[nodiscard]] const renderer::texture::Texture2D *GetGPUTexture() const noexcept;
+	[[nodiscard]] const pipeline::texture::Texture2D *GetGPUTexture() const noexcept;
 
   private:
 	std::string Name;
@@ -30,6 +35,6 @@ class Texture2DAsset final : public Asset
 	int32 Height;
 	int32 Channels;
 	std::vector<uint8> Pixels;
-	std::unique_ptr<renderer::texture::Texture2D> GPUTexture;
+	std::unique_ptr<pipeline::texture::Texture2D> GPUTexture;
 };
 } // namespace resource

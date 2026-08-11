@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/resource/Asset.h"
 #include "src/resource/asset/AssetHandle.h"
 #include "src/resource/asset/SkeletonAsset.h"
@@ -38,8 +40,30 @@ struct AnimationMorphKey final
 
 struct AnimationMorphTrack final
 {
+	AssetID MorphSet;
 	uint64 MorphTarget = 0;
 	std::vector<AnimationMorphKey> Keys;
+};
+
+enum class AnimationInterpolationMode : uint8
+{
+	Linear
+};
+
+enum class AnimationLoopPolicy : uint8
+{
+	Loop
+};
+
+enum class AnimationEventBoundaryPolicy : uint8
+{
+	IncludeStartThenPreviousExclusiveCurrentInclusive
+};
+
+enum class RootMotionExtractionPolicy : uint8
+{
+	Disabled,
+	ExtractTranslationAndRotation
 };
 
 struct AnimationEvent final
@@ -49,13 +73,17 @@ struct AnimationEvent final
 	string Name;
 };
 
-class AnimationClipAsset final : public Asset
+class ENGINE_API AnimationClipAsset final : public Asset
 {
   public:
 	inline static constexpr AssetType AssetType = AssetType::AnimationClip;
-	AnimationClipAsset(string Name, AssetHandle<SkeletonAsset> Skeleton, float32 Duration, float32 SampleRate,
-					   std::vector<AnimationJointTrack> JointTracks, std::vector<AnimationMorphTrack> MorphTracks,
-					   std::vector<AnimationEvent> Events, bool ContainsRootMotion);
+	AnimationClipAsset(
+		string Name, AssetHandle<SkeletonAsset> Skeleton, float32 Duration, float32 SampleRate,
+		std::vector<AnimationJointTrack> JointTracks, std::vector<AnimationMorphTrack> MorphTracks, std::vector<AnimationEvent> Events,
+		RootMotionExtractionPolicy RootMotionPolicy = RootMotionExtractionPolicy::Disabled, JointID RootMotionJoint = 0,
+		AnimationInterpolationMode Interpolation = AnimationInterpolationMode::Linear,
+		AnimationLoopPolicy LoopPolicy = AnimationLoopPolicy::Loop,
+		AnimationEventBoundaryPolicy EventBoundaryPolicy = AnimationEventBoundaryPolicy::IncludeStartThenPreviousExclusiveCurrentInclusive);
 
 	[[nodiscard]] string_view GetName() const noexcept
 	{
@@ -87,7 +115,15 @@ class AnimationClipAsset final : public Asset
 	}
 	[[nodiscard]] bool HasRootMotion() const noexcept
 	{
-		return this->ContainsRootMotion;
+		return this->RootMotionPolicy != RootMotionExtractionPolicy::Disabled;
+	}
+	[[nodiscard]] JointID GetRootMotionJoint() const noexcept
+	{
+		return this->RootMotionJoint;
+	}
+	[[nodiscard]] RootMotionExtractionPolicy GetRootMotionPolicy() const noexcept
+	{
+		return this->RootMotionPolicy;
 	}
 
   private:
@@ -98,7 +134,11 @@ class AnimationClipAsset final : public Asset
 	std::vector<AnimationJointTrack> JointTracks;
 	std::vector<AnimationMorphTrack> MorphTracks;
 	std::vector<AnimationEvent> Events;
-	bool ContainsRootMotion = false;
+	RootMotionExtractionPolicy RootMotionPolicy = RootMotionExtractionPolicy::Disabled;
+	JointID RootMotionJoint = 0;
+	AnimationInterpolationMode Interpolation = AnimationInterpolationMode::Linear;
+	AnimationLoopPolicy LoopPolicy = AnimationLoopPolicy::Loop;
+	AnimationEventBoundaryPolicy EventBoundaryPolicy = AnimationEventBoundaryPolicy::IncludeStartThenPreviousExclusiveCurrentInclusive;
 };
 
 enum class AnimationParameterType : uint8
@@ -135,7 +175,7 @@ struct AnimationGraphNode final
 	AnimationParameterID ControllingParameter = 0;
 };
 
-class AnimationGraphAsset final : public Asset
+class ENGINE_API AnimationGraphAsset final : public Asset
 {
   public:
 	inline static constexpr AssetType AssetType = AssetType::AnimationGraph;
@@ -174,12 +214,18 @@ struct RetargetJointMapping final
 	float32 TranslationScale = 1.0f;
 };
 
-class RetargetProfileAsset final : public Asset
+enum class RetargetTranslationUnitPolicy : uint8
+{
+	ExplicitPerJointScale
+};
+
+class ENGINE_API RetargetProfileAsset final : public Asset
 {
   public:
 	inline static constexpr AssetType AssetType = AssetType::RetargetProfile;
 	RetargetProfileAsset(AssetHandle<SkeletonAsset> Source, AssetHandle<SkeletonAsset> Destination,
-						 std::vector<RetargetJointMapping> Mappings);
+						 std::vector<RetargetJointMapping> Mappings,
+						 RetargetTranslationUnitPolicy UnitPolicy = RetargetTranslationUnitPolicy::ExplicitPerJointScale);
 
 	[[nodiscard]] const AssetHandle<SkeletonAsset> &GetSource() const noexcept
 	{
@@ -198,5 +244,8 @@ class RetargetProfileAsset final : public Asset
 	AssetHandle<SkeletonAsset> Source;
 	AssetHandle<SkeletonAsset> Destination;
 	std::vector<RetargetJointMapping> Mappings;
+	uint64 SourceCompatibilitySignature = 0;
+	uint64 DestinationCompatibilitySignature = 0;
+	RetargetTranslationUnitPolicy UnitPolicy = RetargetTranslationUnitPolicy::ExplicitPerJointScale;
 };
 } // namespace resource

@@ -14,16 +14,32 @@ void ValidateFactors(const PBRMaterialFactors &Factors)
 	if (!Finite(Factors.BaseColor.x) || !Finite(Factors.BaseColor.y) || !Finite(Factors.BaseColor.z) || !Finite(Factors.BaseColor.w) ||
 		!Finite(Factors.Emissive.x) || !Finite(Factors.Emissive.y) || !Finite(Factors.Emissive.z) || !Finite(Factors.Metallic) ||
 		!Finite(Factors.Roughness) || !Finite(Factors.Specular) || !Finite(Factors.NormalScale) || !Finite(Factors.OcclusionStrength) ||
-		!Finite(Factors.AlphaCutoff) || !Finite(Factors.IndexOfRefraction))
+		!Finite(Factors.AlphaCutoff) || !Finite(Factors.ClearCoat) || !Finite(Factors.ClearCoatRoughness) ||
+		!Finite(Factors.Transmission) || !Finite(Factors.IndexOfRefraction))
 	{
 		throw std::invalid_argument("Material factors must be finite");
 	}
-	if (Factors.Metallic < 0.0f || Factors.Metallic > 1.0f || Factors.Roughness < 0.0f || Factors.Roughness > 1.0f ||
-		Factors.Specular < 0.0f || Factors.Specular > 1.0f || Factors.AlphaCutoff < 0.0f || Factors.AlphaCutoff > 1.0f ||
-		Factors.IndexOfRefraction < 1.0f)
+	const auto Unit = [](const float32 Value) { return Value >= 0.0f && Value <= 1.0f; };
+	if (!Unit(Factors.BaseColor.x) || !Unit(Factors.BaseColor.y) || !Unit(Factors.BaseColor.z) || !Unit(Factors.BaseColor.w) ||
+		Factors.Emissive.x < 0.0f || Factors.Emissive.y < 0.0f || Factors.Emissive.z < 0.0f || Factors.Metallic < 0.0f ||
+		Factors.Metallic > 1.0f || Factors.Roughness < 0.0f || Factors.Roughness > 1.0f || Factors.Specular < 0.0f ||
+		Factors.Specular > 1.0f || Factors.AlphaCutoff < 0.0f || Factors.AlphaCutoff > 1.0f || Factors.ClearCoat < 0.0f ||
+		Factors.ClearCoat > 1.0f || Factors.ClearCoatRoughness < 0.0f || Factors.ClearCoatRoughness > 1.0f || Factors.Transmission < 0.0f ||
+		Factors.Transmission > 1.0f || Factors.NormalScale < 0.0f || Factors.NormalScale > 8.0f || !Unit(Factors.OcclusionStrength) ||
+		Factors.IndexOfRefraction < 1.0f || Factors.IndexOfRefraction > 4.0f)
 	{
 		throw std::invalid_argument("Material factors are outside their physical range");
 	}
+}
+
+void ValidatePipeline(const MaterialPipelineContract &Pipeline, const PBRMaterialFactors &Factors)
+{
+	if (Pipeline.ShadingModel > MaterialShadingModel::Hair || Pipeline.BlendMode > MaterialBlendMode::Additive)
+		throw std::invalid_argument("Material pipeline contains an unknown shading model or blend mode");
+	if (Factors.Transmission > 0.0f && Pipeline.BlendMode != MaterialBlendMode::Translucent)
+		throw std::invalid_argument("Material transmission requires the translucent blend mode");
+	if (Factors.ClearCoat > 0.0f && Pipeline.ShadingModel != MaterialShadingModel::ClearCoat)
+		throw std::invalid_argument("Clear-coat factors require the clear-coat shading model");
 }
 
 void ValidateTextures(const std::vector<MaterialTextureBinding> &Textures)
@@ -57,6 +73,7 @@ MaterialAsset::MaterialAsset(string Name, MaterialPipelineContract PipelineContr
 	: MaterialInterfaceAsset(std::move(Name), PipelineContract), Factors(Factors), Textures(std::move(Textures))
 {
 	ValidateFactors(this->Factors);
+	ValidatePipeline(this->GetPipelineContract(), this->Factors);
 	ValidateTextures(this->Textures);
 }
 
@@ -69,6 +86,7 @@ MaterialInstanceAsset::MaterialInstanceAsset(string Name, AssetHandle<MaterialIn
 	if (!this->Parent)
 		throw std::invalid_argument("Material instance requires a parent material handle");
 	ValidateFactors(this->ResolvedFactors);
+	ValidatePipeline(this->GetPipelineContract(), this->ResolvedFactors);
 	ValidateTextures(this->ResolvedTextures);
 }
 } // namespace resource

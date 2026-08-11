@@ -15,7 +15,7 @@ class WindowManager;
 
 namespace core::input
 {
-class InputSystem final
+class ENGINE_API InputSystem final
 {
   public:
 	InputSystem() = default;
@@ -75,6 +75,7 @@ class InputSystem final
 	std::unordered_map<SnapshotKey, InputSnapshot, SnapshotKeyHash> Snapshots;
 	std::unordered_map<ActionID, InputAction> Actions;
 	std::vector<ActionContext> Contexts;
+	std::vector<InputEvent> InputEventsScratch;
 	std::array<std::optional<ControllerCapabilities>, 4> ControllerCapabilitySlots;
 	std::array<uint32, 4> ControllerPackets{};
 	std::array<std::chrono::steady_clock::time_point, 4> ControllerCapabilityRefresh{};

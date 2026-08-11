@@ -8,7 +8,7 @@
 
 namespace pipeline::shader
 {
-class ShaderException : public std::runtime_error
+class ENGINE_API ShaderException : public std::runtime_error
 {
   public:
 	ShaderException(ShaderStage Stage, std::filesystem::path Path, ShaderPermutationKey Permutation, std::string Diagnostic);
@@ -21,27 +21,27 @@ class ShaderException : public std::runtime_error
 	std::filesystem::path Path;
 	std::string Diagnostic;
 };
-class ShaderPreprocessException final : public ShaderException
+class ENGINE_API ShaderPreprocessException final : public ShaderException
 {
   public:
 	using ShaderException::ShaderException;
 };
-class ShaderCompilationException final : public ShaderException
+class ENGINE_API ShaderCompilationException final : public ShaderException
 {
   public:
 	using ShaderException::ShaderException;
 };
-class ShaderLinkException final : public ShaderException
+class ENGINE_API ShaderLinkException final : public ShaderException
 {
   public:
 	using ShaderException::ShaderException;
 };
-class ShaderInterfaceException final : public ShaderException
+class ENGINE_API ShaderInterfaceException final : public ShaderException
 {
   public:
 	using ShaderException::ShaderException;
 };
-class ShaderPipelineException final : public ShaderException
+class ENGINE_API ShaderPipelineException final : public ShaderException
 {
   public:
 	using ShaderException::ShaderException;

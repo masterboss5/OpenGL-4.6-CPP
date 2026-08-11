@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/resource/Asset.h"
 #include "src/resource/asset/AssetHandle.h"
 #include "src/resource/asset/MaterialAsset.h"
@@ -15,7 +17,7 @@ using MeshSectionID = uint64;
 using MaterialSlotID = uint64;
 using MorphTargetID = uint64;
 
-struct Bounds final
+struct ENGINE_API Bounds final
 {
 	glm::vec3 Minimum{0.0f};
 	glm::vec3 Maximum{0.0f};
@@ -148,7 +150,7 @@ struct MeshAssetData final
 	string DerivedDataKey;
 };
 
-class MeshAsset : public Asset
+class ENGINE_API MeshAsset : public Asset
 {
   public:
 	[[nodiscard]] virtual MeshKind GetKind() const noexcept = 0;
@@ -192,7 +194,7 @@ class MeshAsset : public Asset
 	MeshAssetData Data;
 };
 
-class StaticMeshAsset final : public MeshAsset
+class ENGINE_API StaticMeshAsset final : public MeshAsset
 {
   public:
 	inline static constexpr AssetType AssetType = AssetType::StaticMesh;
@@ -221,7 +223,7 @@ struct SkinningPartition final
 	std::vector<BoneInfluenceBounds> BoneBounds;
 };
 
-class SkeletalMeshAsset final : public MeshAsset
+class ENGINE_API SkeletalMeshAsset final : public MeshAsset
 {
   public:
 	inline static constexpr AssetType AssetType = AssetType::SkeletalMesh;

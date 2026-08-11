@@ -11,6 +11,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace resource
@@ -32,10 +33,13 @@ struct AssetDependency final
 };
 
 class AssetManager;
+class AssetLoadTransaction;
+class GeneratedAssetStage;
+class AssetRecordHandle;
 template <IsAsset T> class AssetHandle;
 template <IsAsset T> class WeakAssetHandle;
 
-class AssetRecord final
+class ENGINE_API AssetRecord final
 {
   public:
 	AssetRecord(const AssetRecord &) = delete;
@@ -118,15 +122,21 @@ class AssetRecord final
 	string Error;
 	std::vector<AssetID> Dependencies;
 	std::unordered_map<AssetID, std::filesystem::file_time_type> DependencyWriteTimes;
-	AssetPtr<Asset> Asset;
+	AssetPtr<resource::Asset> Asset;
+	AssetPtr<resource::Asset> PendingGPUAsset;
+	std::vector<AssetID> PendingDependencies;
+	std::unordered_map<AssetID, std::filesystem::file_time_type> PendingDependencyWriteTimes;
 	mutable std::shared_mutex PublicationMutex;
 	mutable std::condition_variable_any PublicationChanged;
 	std::exception_ptr LoadException;
 	uint64 ActiveLoadOperation = 0;
 	bool IsImportRoot = false;
+	bool HasReadyGeneration = false;
+	bool GPURealizationQueued = false;
 	std::atomic<uint64> PublishedGeneration{0};
 	std::atomic<uint32> StrongReferences{1};
 	std::atomic<uint32> WeakReferences{1};
+	std::atomic<bool> AcceptingStrongReferences{true};
 
 	AssetRecord(AssetID ID, std::filesystem::path CanonicalPath, AssetType Type)
 		: ID(std::move(ID)), CanonicalPath(std::move(CanonicalPath)), Type(Type)
@@ -142,12 +152,19 @@ class AssetRecord final
 
 	[[nodiscard]] bool TryRetainStrong() noexcept
 	{
+		if (!this->AcceptingStrongReferences.load(std::memory_order_acquire))
+			return false;
 		uint32 References = this->StrongReferences.load(std::memory_order_acquire);
 		while (References != 0)
 		{
 			if (this->StrongReferences.compare_exchange_weak(References, References + 1, std::memory_order_acq_rel,
 															 std::memory_order_acquire))
 			{
+				if (!this->AcceptingStrongReferences.load(std::memory_order_acquire))
+				{
+					this->ReleaseStrong();
+					return false;
+				}
 				return true;
 			}
 		}
@@ -160,8 +177,10 @@ class AssetRecord final
 		{
 			return;
 		}
+		this->AcceptingStrongReferences.store(false, std::memory_order_release);
 		{
 			std::unique_lock Lock(this->PublicationMutex);
+			this->PendingGPUAsset.Reset();
 			this->Asset.Reset();
 		}
 		this->ReleaseWeak();
@@ -181,7 +200,109 @@ class AssetRecord final
 	}
 
 	friend class AssetManager;
+	friend class AssetLoadTransaction;
+	friend class GeneratedAssetStage;
+	friend class AssetRecordHandle;
 	template <IsAsset T> friend class AssetHandle;
 	template <IsAsset T> friend class WeakAssetHandle;
+};
+
+class ENGINE_API AssetRecordHandle final
+{
+  public:
+	AssetRecordHandle() = default;
+	AssetRecordHandle(std::nullptr_t) noexcept
+	{
+	}
+
+	AssetRecordHandle(const AssetRecordHandle &Other) noexcept : Record(Other.Record)
+	{
+		if (this->Record != nullptr)
+			this->Record->RetainStrong();
+	}
+
+	AssetRecordHandle(AssetRecordHandle &&Other) noexcept : Record(std::exchange(Other.Record, nullptr))
+	{
+	}
+
+	~AssetRecordHandle()
+	{
+		this->Reset();
+	}
+
+	AssetRecordHandle &operator=(const AssetRecordHandle &Other) noexcept
+	{
+		if (this == &Other)
+			return *this;
+		AssetRecord *Replacement = Other.Record;
+		if (Replacement != nullptr)
+			Replacement->RetainStrong();
+		this->Reset();
+		this->Record = Replacement;
+		return *this;
+	}
+
+	AssetRecordHandle &operator=(AssetRecordHandle &&Other) noexcept
+	{
+		if (this == &Other)
+			return *this;
+		this->Reset();
+		this->Record = std::exchange(Other.Record, nullptr);
+		return *this;
+	}
+
+	[[nodiscard]] const AssetRecord *Get() const noexcept
+	{
+		return this->Record;
+	}
+
+	[[nodiscard]] const AssetRecord &operator*() const
+	{
+		if (this->Record == nullptr)
+			throw std::logic_error("Cannot dereference an empty asset record handle");
+		return *this->Record;
+	}
+
+	[[nodiscard]] const AssetRecord *operator->() const
+	{
+		return &**this;
+	}
+
+	[[nodiscard]] explicit operator bool() const noexcept
+	{
+		return this->Record != nullptr;
+	}
+
+	[[nodiscard]] bool operator==(std::nullptr_t) const noexcept
+	{
+		return this->Record == nullptr;
+	}
+
+	void Reset() noexcept
+	{
+		if (this->Record != nullptr)
+			std::exchange(this->Record, nullptr)->ReleaseStrong();
+	}
+
+  private:
+	struct AdoptStrongReference final
+	{
+	};
+
+	AssetRecord *Record = nullptr;
+
+	explicit AssetRecordHandle(AssetRecord *Record) noexcept : Record(Record)
+	{
+		if (this->Record != nullptr)
+			this->Record->RetainStrong();
+	}
+
+	AssetRecordHandle(AssetRecord *Record, AdoptStrongReference) noexcept : Record(Record)
+	{
+	}
+
+	friend class AssetManager;
+	friend class AssetLoadTransaction;
+	friend class GeneratedAssetStage;
 };
 } // namespace resource

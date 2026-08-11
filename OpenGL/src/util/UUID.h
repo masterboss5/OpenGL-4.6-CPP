@@ -1,75 +1,114 @@
 #pragma once
+
 #include "src/types.h"
 
+#include <charconv>
+#include <compare>
+#include <format>
 #include <functional>
+#include <optional>
 #include <random>
-#include <string>
+#include <stdexcept>
 
 namespace util
 {
 class UUID final
 {
-  private:
-	uint64 Left = 0;
-	uint64 Right = 0;
-
   public:
-	UUID() = default;
-	UUID(uint64 Left, uint64 Right) : Left(Left), Right(Right)
+	constexpr UUID() noexcept = default;
+	constexpr UUID(const uint64 Left, const uint64 Right) noexcept : Left(Left), Right(Right)
 	{
 	}
 
-	[[nodiscard]] inline static UUID GenerateRandomUUID()
+	[[nodiscard]] static UUID GenerateRandomUUID()
 	{
-		thread_local static std::mt19937_64 Rng{std::random_device{}()};
-		thread_local static std::uniform_int_distribution<uint64> Dist;
-		return UUID{Dist(Rng), Dist(Rng)};
+		thread_local std::mt19937_64 Generator{std::random_device{}()};
+		thread_local std::uniform_int_distribution<uint64> Distribution;
+		uint64 Left = Distribution(Generator);
+		uint64 Right = Distribution(Generator);
+		Left = (Left & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
+		Right = (Right & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
+		return UUID(Left, Right);
 	}
 
-	bool operator==(const UUID &Other) const
+	[[nodiscard]] static std::optional<UUID> TryParse(const string_view Text) noexcept
 	{
-		return this->Left == Other.Left && this->Right == Other.Right;
+		if (Text.size() != 36 || Text[8] != '-' || Text[13] != '-' || Text[18] != '-' || Text[23] != '-')
+			return std::nullopt;
+
+		string Digits;
+		Digits.reserve(32);
+		for (const auto Character : Text)
+		{
+			if (Character != '-')
+				Digits.push_back(Character);
+		}
+		if (Digits.size() != 32)
+			return std::nullopt;
+
+		uint64 Left = 0;
+		uint64 Right = 0;
+		const auto LeftResult = std::from_chars(Digits.data(), Digits.data() + 16, Left, 16);
+		const auto RightResult = std::from_chars(Digits.data() + 16, Digits.data() + 32, Right, 16);
+		if (LeftResult.ec != std::errc{} || LeftResult.ptr != Digits.data() + 16 || RightResult.ec != std::errc{} ||
+			RightResult.ptr != Digits.data() + 32)
+		{
+			return std::nullopt;
+		}
+		return UUID(Left, Right);
 	}
 
-	bool operator!=(const UUID &Other) const
+	[[nodiscard]] static UUID Parse(const string_view Text)
 	{
-		return !(*this == Other);
+		const std::optional<UUID> Result = UUID::TryParse(Text);
+		if (!Result.has_value())
+			throw std::invalid_argument("UUID text must use the canonical 8-4-4-4-12 hexadecimal form");
+		return *Result;
 	}
 
-	[[nodiscard]] bool IsValid() const
+	[[nodiscard]] constexpr bool IsValid() const noexcept
 	{
-		return Left != 0 || Right != 0;
+		return this->Left != 0 || this->Right != 0;
 	}
 
-	[[nodiscard]] explicit operator bool() const
+	[[nodiscard]] constexpr explicit operator bool() const noexcept
 	{
 		return this->IsValid();
 	}
 
-	std::string ToString() const
+	[[nodiscard]] string ToString() const
 	{
-		return static_cast<std::string>(*this);
+		return std::format("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", static_cast<uint32>(this->Left >> 32),
+						   static_cast<uint16>(this->Left >> 16), static_cast<uint16>(this->Left), static_cast<uint16>(this->Right >> 48),
+						   this->Right & 0x0000FFFFFFFFFFFFULL);
 	}
 
-	explicit operator std::string() const
+	[[nodiscard]] constexpr uint64 GetLeft() const noexcept
 	{
-		char Buffer[37];
-		snprintf(Buffer, sizeof(Buffer), "%08x-%04x-%04x-%04x-%012llx", (uint32)(Left >> 32), (uint16)(Left >> 16), (uint16)(Left & 0xFFFF),
-				 (uint16)(Right >> 48), (unsigned long long)(Right & 0x0000FFFFFFFFFFFF));
-		return std::string(Buffer);
+		return this->Left;
 	}
+
+	[[nodiscard]] constexpr uint64 GetRight() const noexcept
+	{
+		return this->Right;
+	}
+
+	[[nodiscard]] constexpr auto operator<=>(const UUID &) const noexcept = default;
+
+  private:
+	uint64 Left = 0;
+	uint64 Right = 0;
 
 	friend std::hash<UUID>;
 };
 } // namespace util
 
-namespace std
+template <> struct std::hash<util::UUID>
 {
-template <> struct hash<util::UUID>
-{
-	usize operator()(const util::UUID &ID) const
+	[[nodiscard]] usize operator()(const util::UUID &ID) const noexcept
 	{
-		return std::hash<uint64>{}(ID.Left) ^ (std::hash<uint64>{}(ID.Right) << 1);
+		const usize LeftHash = std::hash<uint64>{}(ID.Left);
+		const usize RightHash = std::hash<uint64>{}(ID.Right);
+		return LeftHash ^ (RightHash + static_cast<usize>(0x9E3779B97F4A7C15ULL) + (LeftHash << 6) + (LeftHash >> 2));
 	}
 };
-} // namespace std

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "src/concepts.h"
+#include "src/pipeline/device/Device.h"
 #include "src/types.h"
 
 #include <GL/glew.h>
@@ -13,12 +14,7 @@
 #include <string_view>
 #include <type_traits>
 
-namespace pipeline::device
-{
-class Device;
-}
-
-namespace renderer
+namespace pipeline::buffer
 {
 enum class VertexBufferStorage : uint32
 {
@@ -63,13 +59,13 @@ struct VertexBufferDescriptor final
 	std::string_view DebugName = "VertexBuffer";
 };
 
-class VertexBufferError final : public std::runtime_error
+class ENGINE_API VertexBufferError final : public std::runtime_error
 {
   public:
 	explicit VertexBufferError(const std::string &Message);
 };
 
-class VertexBuffer final
+class ENGINE_API VertexBuffer final
 {
   public:
 	VertexBuffer(pipeline::device::Device &Device, const VertexBufferDescriptor &Descriptor);
@@ -142,7 +138,7 @@ class VertexBuffer final
 	[[nodiscard]] pipeline::device::Device &GetDevice() const;
 
   private:
-	pipeline::device::Device *Device = nullptr;
+	pipeline::device::DeviceHandle Device;
 	GLuint ID = 0;
 	usize SizeInBytes = 0;
 	usize StrideInBytes = 0;
@@ -157,4 +153,4 @@ class VertexBuffer final
 	void ValidateRange(usize OffsetInBytes, usize RangeSizeInBytes, std::string_view Operation) const;
 	void Release() noexcept;
 };
-} // namespace renderer
+} // namespace pipeline::buffer

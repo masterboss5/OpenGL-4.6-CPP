@@ -18,7 +18,7 @@ enum class ContextStatus : uint8
 	Lost
 };
 
-class Context final
+class ENGINE_API Context final
 {
   public:
 	~Context();
@@ -31,8 +31,11 @@ class Context final
 	void MakeCurrent();
 	void ReleaseCurrent();
 	void BindRenderThread();
+	void PrepareThreadTransfer();
+	void AdoptCurrentThread();
 	void RequireCurrentThread() const;
 	[[nodiscard]] bool IsCurrent() const noexcept;
+	[[nodiscard]] bool IsThreadTransferPending() const noexcept;
 	[[nodiscard]] bool IsOffscreen() const noexcept;
 	[[nodiscard]] ContextStatus GetStatus() const noexcept;
 	[[nodiscard]] const std::string &GetShareGroupName() const noexcept;

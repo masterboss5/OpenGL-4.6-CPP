@@ -1,5 +1,7 @@
 #pragma once
 
+#include "src/core/EngineAPI.h"
+
 #include "src/component/object/CObjectComponent.h"
 #include "src/resource/asset/AnimationAsset.h"
 #include "src/resource/asset/MeshAsset.h"
@@ -42,6 +44,7 @@ struct AnimationMorphWeight final
 	resource::MorphTargetID Target = 0;
 	float32 Weight = 0.0f;
 	float32 PreviousWeight = 0.0f;
+	resource::AssetID MorphSet;
 };
 
 struct AnimationPlaybackInterval final
@@ -58,7 +61,7 @@ struct TriggeredAnimationEvent final
 	string Name;
 };
 
-class CObjectAnimationComponent final : public CObjectComponent
+class ENGINE_API CObjectAnimationComponent final : public CObjectComponent
 {
   public:
 	using Dependencies = TypeList<CObjectMeshComponent>;
@@ -77,6 +80,7 @@ class CObjectAnimationComponent final : public CObjectComponent
 		return this->Parameters;
 	}
 	void SetMorphWeight(resource::MorphTargetID Target, float32 Weight);
+	void SetMorphWeight(resource::AssetID MorphSet, resource::MorphTargetID Target, float32 Weight);
 	[[nodiscard]] std::span<const AnimationMorphWeight> GetMorphWeights() const noexcept
 	{
 		return this->MorphWeights;
@@ -114,10 +118,11 @@ class CObjectAnimationComponent final : public CObjectComponent
 	{
 		this->RootMotionEnabled = Value;
 	}
-	[[nodiscard]] AnimationPlaybackInterval AdvancePlayback(float32 DeltaSeconds) noexcept;
+	[[nodiscard]] AnimationPlaybackInterval AdvancePlayback(float32 DeltaSeconds);
 	void PublishRigPose(resource::AssetID Skeleton, std::vector<glm::mat4> Pose);
 	void BeginMorphEvaluation() noexcept;
 	void ApplyEvaluatedMorphWeight(resource::MorphTargetID Target, float32 Weight);
+	void ApplyEvaluatedMorphWeight(resource::AssetID MorphSet, resource::MorphTargetID Target, float32 Weight);
 	void PublishTriggeredEvent(TriggeredAnimationEvent Event);
 	[[nodiscard]] std::span<const TriggeredAnimationEvent> GetTriggeredEvents() const noexcept
 	{

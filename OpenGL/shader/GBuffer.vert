@@ -85,7 +85,7 @@ void main()
 			previousPosition += delta.positionDelta.xyz * morph.previousWeight;
 			currentNormal += delta.normalDelta.xyz * morph.currentWeight;
 		}
-		currentNormal = normalize(currentNormal);
+		currentNormal = dot(currentNormal, currentNormal) > 0.00000001 ? normalize(currentNormal) : vec3(0.0, 1.0, 0.0);
 	}
 	mat4 currentSkin = mat4(1.0);
 	mat4 previousSkin = mat4(1.0);
@@ -103,9 +103,13 @@ void main()
 	vec4 localPosition = currentSkin * vec4(currentPosition, 1.0);
 	vec4 worldPosition = instance.transform * localPosition;
     outputData.worldPosition = worldPosition.xyz;
-	mat3 normalTransform = mat3(transpose(inverse(instance.transform * currentSkin)));
-	outputData.worldNormal = normalize(normalTransform * currentNormal);
-	outputData.worldTangent = vec4(normalize(normalTransform * tangent.xyz), tangent.w);
+	mat3 objectBasis = mat3(instance.transform * currentSkin);
+	float basisDeterminant = determinant(objectBasis);
+	mat3 normalTransform = abs(basisDeterminant) > 0.00000001 ? transpose(inverse(objectBasis)) : mat3(1.0);
+	vec3 transformedNormal = normalTransform * currentNormal;
+	vec3 transformedTangent = normalTransform * tangent.xyz;
+	outputData.worldNormal = dot(transformedNormal, transformedNormal) > 0.00000001 ? normalize(transformedNormal) : vec3(0.0, 1.0, 0.0);
+	outputData.worldTangent = vec4(dot(transformedTangent, transformedTangent) > 0.00000001 ? normalize(transformedTangent) : vec3(1.0, 0.0, 0.0), tangent.w);
     outputData.textureCoordinates[0] = uv0;
     outputData.textureCoordinates[1] = uv1;
     outputData.textureCoordinates[2] = uv2;

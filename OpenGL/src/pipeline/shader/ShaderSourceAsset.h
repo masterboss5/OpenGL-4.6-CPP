@@ -9,7 +9,7 @@
 
 namespace pipeline::shader
 {
-class ShaderSourceAsset final : public resource::Asset
+class ENGINE_API ShaderSourceAsset final : public resource::Asset
 {
   public:
 	ShaderSourceAsset(ShaderStage Stage, std::filesystem::path SourcePath, std::string Source, std::vector<std::filesystem::path> Includes);

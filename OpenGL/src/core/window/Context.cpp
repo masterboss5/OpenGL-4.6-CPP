@@ -1,5 +1,8 @@
 #include "Context.h"
 
+#include <atomic>
+#include <exception>
+#include <mutex>
 #include <utility>
 
 #define WIN32_LEAN_AND_MEAN
@@ -26,10 +29,12 @@ struct Context::StateData final
 	PFNWGLDESTROYPBUFFERARBPROC DestroyPbuffer = nullptr;
 	std::string ShareGroupName;
 	WindowID WindowID;
+	mutable std::mutex OwnershipMutex;
 	std::thread::id RenderThread;
-	ContextStatus Status = ContextStatus::Ready;
+	std::atomic<ContextStatus> Status = ContextStatus::Ready;
 	bool Offscreen = false;
 	bool OwnsWindowDeviceContext = false;
+	bool ThreadTransferPending = false;
 };
 
 Context::Context(void *NativeWindow, std::string ShareGroupName, const WindowID WindowID, const bool Offscreen)
@@ -80,7 +85,14 @@ Context::Context(OffscreenHandles Handles, std::string ShareGroupName) : State(s
 
 Context::~Context()
 {
-	if (this->IsCurrent())
+	std::scoped_lock Lock(this->State->OwnershipMutex);
+	if (this->State->ThreadTransferPending ||
+		(this->State->RenderThread != std::thread::id{} && this->State->RenderThread != std::this_thread::get_id()))
+	{
+		std::terminate();
+	}
+	this->State->Status.store(ContextStatus::Lost, std::memory_order_release);
+	if (wglGetCurrentContext() == this->State->RenderingContext)
 		wglMakeCurrent(nullptr, nullptr);
 	if (this->State->Offscreen)
 	{
@@ -108,8 +120,11 @@ Context::~Context()
 
 void Context::MakeCurrent()
 {
-	if (this->State->Status != ContextStatus::Ready)
+	std::scoped_lock Lock(this->State->OwnershipMutex);
+	if (this->State->Status.load(std::memory_order_acquire) != ContextStatus::Ready)
 		throw ContextException("Cannot bind a reset or lost Context");
+	if (this->State->ThreadTransferPending)
+		throw ContextException("Cannot bind a Context while its thread transfer is pending");
 	if (this->State->RenderThread != std::thread::id{} && this->State->RenderThread != std::this_thread::get_id())
 		throw ContextException("Context may only be made current on its assigned render thread");
 	if (wglMakeCurrent(this->State->DeviceContext, this->State->RenderingContext) == FALSE)
@@ -119,26 +134,70 @@ void Context::MakeCurrent()
 
 void Context::ReleaseCurrent()
 {
-	if (!this->IsCurrent())
+	std::scoped_lock Lock(this->State->OwnershipMutex);
+	if (wglGetCurrentContext() != this->State->RenderingContext)
 		throw ContextException("Cannot release a Context that is not current on this thread");
-	wglMakeCurrent(nullptr, nullptr);
+	if (wglMakeCurrent(nullptr, nullptr) == FALSE)
+		throw ContextException("Failed to release the current Context");
 }
 
 void Context::BindRenderThread()
 {
+	std::scoped_lock Lock(this->State->OwnershipMutex);
 	const std::thread::id Current = std::this_thread::get_id();
+	if (this->State->ThreadTransferPending)
+		throw ContextException("Context has a pending thread transfer; adopt it instead of binding it");
 	if (this->State->RenderThread != std::thread::id{} && this->State->RenderThread != Current)
 		throw ContextException("Context render-thread affinity is already assigned");
 	this->State->RenderThread = Current;
 }
 
+void Context::PrepareThreadTransfer()
+{
+	std::scoped_lock Lock(this->State->OwnershipMutex);
+	const std::thread::id Current = std::this_thread::get_id();
+	if (this->State->ThreadTransferPending)
+		throw ContextException("Context already has a pending thread transfer");
+	if (this->State->RenderThread != Current)
+		throw ContextException("Only the assigned render thread may transfer a Context");
+	if (wglGetCurrentContext() == this->State->RenderingContext && wglMakeCurrent(nullptr, nullptr) == FALSE)
+		throw ContextException("Failed to release the Context for thread transfer");
+	this->State->RenderThread = {};
+	this->State->ThreadTransferPending = true;
+}
+
+void Context::AdoptCurrentThread()
+{
+	std::scoped_lock Lock(this->State->OwnershipMutex);
+	if (!this->State->ThreadTransferPending)
+		throw ContextException("Context has not been prepared for a thread transfer");
+	if (this->State->RenderThread != std::thread::id{})
+		throw ContextException("Context thread transfer cannot replace an assigned render thread");
+
+	this->State->RenderThread = std::this_thread::get_id();
+	try
+	{
+		if (this->State->Status.load(std::memory_order_acquire) != ContextStatus::Ready)
+			throw ContextException("Cannot adopt a reset or lost Context");
+		if (wglMakeCurrent(this->State->DeviceContext, this->State->RenderingContext) == FALSE)
+			throw ContextException("Failed to make the transferred Context current");
+		this->State->ThreadTransferPending = false;
+	}
+	catch (...)
+	{
+		this->State->RenderThread = {};
+		throw;
+	}
+}
+
 void Context::RequireCurrentThread() const
 {
-	if (this->State->Status != ContextStatus::Ready)
+	std::scoped_lock Lock(this->State->OwnershipMutex);
+	if (this->State->Status.load(std::memory_order_acquire) != ContextStatus::Ready)
 		throw ContextException("Context is reset or lost");
 	if (this->State->RenderThread != std::thread::id{} && this->State->RenderThread != std::this_thread::get_id())
 		throw ContextException("OpenGL operation executed outside the Context render thread");
-	if (!this->IsCurrent())
+	if (wglGetCurrentContext() != this->State->RenderingContext)
 		throw ContextException("OpenGL operation requires the owning Context to be current");
 }
 
@@ -146,13 +205,18 @@ bool Context::IsCurrent() const noexcept
 {
 	return wglGetCurrentContext() == this->State->RenderingContext;
 }
+bool Context::IsThreadTransferPending() const noexcept
+{
+	std::scoped_lock Lock(this->State->OwnershipMutex);
+	return this->State->ThreadTransferPending;
+}
 bool Context::IsOffscreen() const noexcept
 {
 	return this->State->Offscreen;
 }
 ContextStatus Context::GetStatus() const noexcept
 {
-	return this->State->Status;
+	return this->State->Status.load(std::memory_order_acquire);
 }
 const std::string &Context::GetShareGroupName() const noexcept
 {
@@ -164,7 +228,7 @@ WindowID Context::GetWindowID() const noexcept
 }
 void Context::MarkReset() noexcept
 {
-	this->State->Status = ContextStatus::Reset;
+	this->State->Status.store(ContextStatus::Reset, std::memory_order_release);
 }
 void *Context::GetNativeWindow() const noexcept
 {

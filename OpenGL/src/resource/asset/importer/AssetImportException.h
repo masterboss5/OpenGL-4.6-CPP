@@ -8,7 +8,7 @@
 
 namespace resource::importer
 {
-class AssetImportException : public std::runtime_error
+class ENGINE_API AssetImportException : public std::runtime_error
 {
   public:
 	AssetImportException(resource::AssetType Type, std::filesystem::path SourcePath, std::string Diagnostic);
@@ -23,51 +23,63 @@ class AssetImportException : public std::runtime_error
 	std::string Diagnostic;
 };
 
-class AssetNotFoundException final : public AssetImportException
+class ENGINE_API AssetNotFoundException final : public AssetImportException
 {
   public:
 	AssetNotFoundException(resource::AssetType Type, const std::filesystem::path &SourcePath);
 };
 
-class AssetUnsupportedFormatException final : public AssetImportException
+class ENGINE_API AssetUnsupportedFormatException final : public AssetImportException
 {
   public:
 	AssetUnsupportedFormatException(resource::AssetType Type, const std::filesystem::path &SourcePath);
 };
 
-class AssetFileReadException final : public AssetImportException
+class ENGINE_API AssetFileReadException final : public AssetImportException
 {
   public:
 	AssetFileReadException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic);
 };
 
-class AssetImageDecodeException final : public AssetImportException
+class ENGINE_API AssetImageDecodeException final : public AssetImportException
 {
   public:
 	AssetImageDecodeException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic);
 };
 
-class AssetModelParseException final : public AssetImportException
+class ENGINE_API AssetModelParseException final : public AssetImportException
 {
   public:
 	AssetModelParseException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic);
 };
 
-class AssetContentValidationException final : public AssetImportException
+class ENGINE_API AssetMaterialParseException final : public AssetImportException
+{
+  public:
+	AssetMaterialParseException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic);
+};
+
+class ENGINE_API AssetContentValidationException final : public AssetImportException
 {
   public:
 	AssetContentValidationException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic);
 };
 
-class AssetImporterNotRegisteredException final : public AssetImportException
+class ENGINE_API AssetImporterNotRegisteredException final : public AssetImportException
 {
   public:
 	AssetImporterNotRegisteredException(resource::AssetType Type, const std::filesystem::path &SourcePath);
 };
 
-class AssetUnexpectedImportException final : public AssetImportException
+class ENGINE_API AssetUnexpectedImportException final : public AssetImportException
 {
   public:
 	AssetUnexpectedImportException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic);
+};
+
+class ENGINE_API AssetDependencyCycleException final : public AssetImportException
+{
+  public:
+	AssetDependencyCycleException(resource::AssetType Type, const std::filesystem::path &SourcePath, std::string Diagnostic);
 };
 } // namespace resource::importer

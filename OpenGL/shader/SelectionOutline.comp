@@ -1,0 +1,55 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D sourceHDR;
+layout(binding = 1) uniform usampler2D objectIDs;
+layout(rgba16f, binding = 0) writeonly uniform image2D outlinedHDR;
+
+layout(std430, binding = 12) readonly buffer SelectionMask
+{
+	uint selectionWords[];
+};
+
+uniform uint selectionWordCount;
+uniform uint outlineRadius;
+uniform vec4 outlineColor;
+
+bool IsSelected(const uint identifier)
+{
+	const uint word = identifier >> 5U;
+	const uint bit = identifier & 31U;
+	return word < selectionWordCount && (selectionWords[word] & (1U << bit)) != 0U;
+}
+
+void main()
+{
+	const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	const ivec2 extent = textureSize(sourceHDR, 0);
+	if (any(greaterThanEqual(pixel, extent)))
+		return;
+
+	const vec4 source = texelFetch(sourceHDR, pixel, 0);
+	const bool centerSelected = IsSelected(texelFetch(objectIDs, pixel, 0).r);
+	bool edge = false;
+	const int radius = int(clamp(outlineRadius, 1U, 8U));
+	for (int y = -radius; y <= radius && !edge; ++y)
+	{
+		for (int x = -radius; x <= radius; ++x)
+		{
+			if (x == 0 && y == 0)
+				continue;
+			const ivec2 neighbor = pixel + ivec2(x, y);
+			if (any(lessThan(neighbor, ivec2(0))) || any(greaterThanEqual(neighbor, extent)))
+				continue;
+			if (IsSelected(texelFetch(objectIDs, neighbor, 0).r) != centerSelected)
+			{
+				edge = true;
+				break;
+			}
+		}
+	}
+
+	const float blend = edge ? clamp(outlineColor.a, 0.0, 1.0) : 0.0;
+	imageStore(outlinedHDR, pixel, vec4(mix(source.rgb, outlineColor.rgb, blend), source.a));
+}

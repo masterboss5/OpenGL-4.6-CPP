@@ -16,7 +16,7 @@ class Context;
 class WindowManager;
 struct WindowCallbacks;
 
-class Window final
+class ENGINE_API Window final
 {
   public:
 	~Window();
@@ -40,6 +40,7 @@ class Window final
 	[[nodiscard]] bool IsSRGBPresentationCapable() const noexcept;
 	[[nodiscard]] bool ShouldClose() const;
 	[[nodiscard]] Context &GetContext() const;
+	[[nodiscard]] void *GetSystemHandle() const noexcept;
 
 	void SetTitle(std::string Title);
 	void SetExtent(WindowExtent Extent);

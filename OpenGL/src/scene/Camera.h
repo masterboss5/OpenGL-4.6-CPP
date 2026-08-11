@@ -7,7 +7,13 @@
 #include <glm.hpp>
 #include <gtc/matrix_transform.hpp>
 
-class Camera final
+enum class CameraProjectionMode : uint8
+{
+	Perspective,
+	Orthographic
+};
+
+class ENGINE_API Camera final
 {
   public:
 	glm::vec3 Position;
@@ -23,6 +29,10 @@ class Camera final
 	float32 FOV;
 	float32 NearPlane;
 	float32 FarPlane;
+	CameraProjectionMode Projection = CameraProjectionMode::Perspective;
+	float32 OrthographicHeight = 10.0f;
+	float32 ExposureCompensation = 0.0f;
+	bool TemporalJitterEnabled = true;
 
 	Camera(float32 Sensitivity, float32 FOV, float32 NearPlane, float32 FarPlane);
 

@@ -1,7 +1,8 @@
 #include "CObjectTransformComponent.h"
+#include "src/scene/TransformMath.h"
 
-static constexpr float32 MinNormalizeLength = 1e-6f;
-static constexpr float32 MinNormalizeLengthSquared = MinNormalizeLength * MinNormalizeLength;
+#include <limits>
+
 static constexpr float32 MaxLookAtUpDot = 0.999f;
 static constexpr float32 FloatInfinity = std::numeric_limits<float32>::infinity();
 static constexpr glm::vec3 DefaultPosition = glm::vec3{0.0f, 0.0f, 0.0f};
@@ -11,26 +12,6 @@ static constexpr glm::vec3 LocalForward = glm::vec3{0.0f, 0.0f, -1.0f};
 static constexpr glm::vec3 LocalUp = glm::vec3{0.0f, 1.0f, 0.0f};
 static constexpr glm::vec3 LocalRight = glm::vec3{1.0f, 0.0f, 0.0f};
 
-[[nodiscard]] static __forceinline bool IsFinite(float32 Value)
-{
-	return std::isfinite(Value);
-}
-
-[[nodiscard]] static __forceinline bool IsFinite(const glm::vec3 &Value)
-{
-	return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
-}
-
-[[nodiscard]] static __forceinline bool IsFinite(const glm::quat &Value)
-{
-	return std::isfinite(Value.w) && std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
-}
-
-[[nodiscard]] static __forceinline bool IsValidScale(const glm::vec3 &Value)
-{
-	return IsFinite(Value) && Value.x > 0.0f && Value.y > 0.0f && Value.z > 0.0f;
-}
-
 glm::vec3 components::CObjectTransformComponent::GetScale() const
 {
 	return this->Scale;
@@ -38,7 +19,7 @@ glm::vec3 components::CObjectTransformComponent::GetScale() const
 
 void components::CObjectTransformComponent::LerpScale(const glm::vec3 &Target, float32 Alpha)
 {
-	if (!IsValidScale(Target) || !IsFinite(Alpha))
+	if (!world::IsValidTransformScale(Target) || !world::IsFiniteTransformValue(Alpha))
 	{
 		return;
 	}
@@ -50,64 +31,65 @@ void components::CObjectTransformComponent::LerpScale(const glm::vec3 &Target, f
 		return;
 	}
 
-	this->Scale = glm::mix(this->Scale, Target, Clamped);
-	this->NeedsRecalculation = true;
+	const glm::vec3 Result = glm::mix(this->Scale, Target, Clamped);
+	if (world::IsValidTransformScale(Result))
+	{
+		this->Scale = Result;
+		this->PublishTransformMutation();
+	}
 }
 
 void components::CObjectTransformComponent::SetScaleX(float32 X)
 {
-	if (!IsFinite(X) || X <= 0.0f)
+	if (!world::IsValidTransformScale({X, this->Scale.y, this->Scale.z}))
 	{
 		return;
 	}
 
 	this->Scale.x = X;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetScaleY(float32 Y)
 {
-	if (!IsFinite(Y) || Y <= 0.0f)
+	if (!world::IsValidTransformScale({this->Scale.x, Y, this->Scale.z}))
 	{
 		return;
 	}
 
 	this->Scale.y = Y;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetScaleZ(float32 Z)
 {
-	if (!IsFinite(Z) || Z <= 0.0f)
+	if (!world::IsValidTransformScale({this->Scale.x, this->Scale.y, Z}))
 	{
 		return;
 	}
 
 	this->Scale.z = Z;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::LookAt(const glm::vec3 &Target, const glm::vec3 &Up)
 {
-	if (!IsFinite(Target) || !IsFinite(Up) || !IsFinite(this->Position))
+	if (!world::IsFiniteTransformValue(Target) || !world::IsFiniteTransformValue(Up) || !world::IsFiniteTransformValue(this->Position))
 	{
 		return;
 	}
 
 	const glm::vec3 Delta = Target - this->Position;
-
-	if (glm::dot(Delta, Delta) <= MinNormalizeLengthSquared)
+	glm::vec3 Direction;
+	if (!world::TryNormalizeTransformVector(Delta, Direction))
 	{
 		return;
 	}
-
-	if (glm::dot(Up, Up) <= MinNormalizeLengthSquared)
+	glm::vec3 UpNormal;
+	if (!world::TryNormalizeTransformVector(Up, UpNormal))
 	{
 		return;
 	}
-
-	const glm::vec3 Direction = glm::normalize(Delta);
-	glm::vec3 UpNormal = glm::normalize(Up);
 
 	if (std::abs(glm::dot(Direction, UpNormal)) > MaxLookAtUpDot)
 	{
@@ -121,52 +103,50 @@ void components::CObjectTransformComponent::LookAt(const glm::vec3 &Target, cons
 		}
 	}
 
-	this->Rotation = glm::normalize(glm::quatLookAt(Direction, UpNormal));
-	this->NeedsRecalculation = true;
+	glm::quat Result;
+	if (!world::TryNormalizeTransformQuaternion(glm::quatLookAt(Direction, UpNormal), Result))
+	{
+		return;
+	}
+	this->Rotation = Result;
+	this->PublishTransformMutation();
 }
 
 float32 components::CObjectTransformComponent::DistanceTo(const glm::vec3 &Point) const
 {
-	if (!IsFinite(Point))
-	{
-		return FloatInfinity;
-	}
-
-	return glm::distance(this->Position, Point);
-}
-
-float32 components::CObjectTransformComponent::DistanceToSquared(const glm::vec3 &Point) const
-{
-	if (!IsFinite(Point))
+	if (!world::IsFiniteTransformValue(Point))
 	{
 		return FloatInfinity;
 	}
 
 	const glm::vec3 Delta = this->Position - Point;
-	return glm::dot(Delta, Delta);
+	return world::IsFiniteTransformValue(Delta) ? world::StableVectorLength(Delta) : FloatInfinity;
+}
+
+float32 components::CObjectTransformComponent::DistanceToSquared(const glm::vec3 &Point) const
+{
+	if (!world::IsFiniteTransformValue(Point))
+	{
+		return FloatInfinity;
+	}
+
+	const glm::vec3 Delta = this->Position - Point;
+	if (!world::IsFiniteTransformValue(Delta))
+	{
+		return FloatInfinity;
+	}
+	const float32 Length = world::StableVectorLength(Delta);
+	return Length <= std::sqrt(std::numeric_limits<float32>::max()) ? Length * Length : FloatInfinity;
 }
 
 bool components::CObjectTransformComponent::IsWithinDistance(const glm::vec3 &Point, float32 Distance) const
 {
-	if (!IsFinite(Distance) || Distance < 0.0f)
+	if (!world::IsFiniteTransformValue(Distance) || Distance < 0.0f)
 	{
 		return false;
 	}
 
-	const float32 DistanceSq = this->DistanceToSquared(Point);
-	const float32 MaxDistanceSq = Distance * Distance;
-
-	if (!IsFinite(DistanceSq) || !IsFinite(MaxDistanceSq))
-	{
-		return false;
-	}
-
-	if (DistanceSq > MaxDistanceSq)
-	{
-		return false;
-	}
-
-	return true;
+	return this->DistanceTo(Point) <= Distance;
 }
 
 glm::vec3 components::CObjectTransformComponent::GetForward() const
@@ -184,31 +164,33 @@ glm::vec3 components::CObjectTransformComponent::GetRight() const
 	return this->Rotation * LocalRight;
 }
 
-const glm::mat4 &components::CObjectTransformComponent::GetMatrix() const
+glm::mat4 components::CObjectTransformComponent::GetMatrix() const noexcept
 {
-	this->UpdateMatrix();
 	return this->Matrix;
+}
+
+uint64 components::CObjectTransformComponent::GetRevision() const noexcept
+{
+	return this->Revision;
 }
 
 void components::CObjectTransformComponent::OnAttachment()
 {
-	this->NeedsRecalculation = true;
 }
 
 void components::CObjectTransformComponent::OnDetachment()
 {
 }
 
-void components::CObjectTransformComponent::UpdateMatrix() const
+void components::CObjectTransformComponent::PublishTransformMutation()
 {
-	if (this->NeedsRecalculation)
-	{
-		this->RecalculateMatrix();
-		this->NeedsRecalculation = false;
-	}
+	this->RecalculateMatrix();
+	++this->Revision;
+	if (this->Revision == 0U)
+		this->Revision = 1U;
 }
 
-void components::CObjectTransformComponent::RecalculateMatrix() const
+void components::CObjectTransformComponent::RecalculateMatrix()
 {
 	const float32 Qx = this->Rotation.x, Qy = this->Rotation.y;
 	const float32 Qz = this->Rotation.z, Qw = this->Rotation.w;
@@ -228,7 +210,7 @@ components::CObjectTransformComponent::CObjectTransformComponent(world::ObjectHa
 																 const glm::quat &Rotation, const glm::vec3 &Scale)
 	: CObjectComponent(Owner)
 {
-	if (IsFinite(Position))
+	if (world::IsFiniteTransformValue(Position))
 	{
 		this->Position = Position;
 	}
@@ -237,16 +219,17 @@ components::CObjectTransformComponent::CObjectTransformComponent(world::ObjectHa
 		this->Position = DefaultPosition;
 	}
 
-	if (IsFinite(Rotation) && glm::dot(Rotation, Rotation) > MinNormalizeLengthSquared)
+	glm::quat NormalizedRotation;
+	if (world::TryNormalizeTransformQuaternion(Rotation, NormalizedRotation))
 	{
-		this->Rotation = glm::normalize(Rotation);
+		this->Rotation = NormalizedRotation;
 	}
 	else
 	{
 		this->Rotation = DefaultRotation;
 	}
 
-	if (IsValidScale(Scale))
+	if (world::IsValidTransformScale(Scale))
 	{
 		this->Scale = Scale;
 	}
@@ -255,7 +238,7 @@ components::CObjectTransformComponent::CObjectTransformComponent(world::ObjectHa
 		this->Scale = DefaultScale;
 	}
 
-	this->NeedsRecalculation = true;
+	this->RecalculateMatrix();
 }
 
 void components::CObjectTransformComponent::ResetTransform()
@@ -263,57 +246,58 @@ void components::CObjectTransformComponent::ResetTransform()
 	this->Position = DefaultPosition;
 	this->Rotation = DefaultRotation;
 	this->Scale = DefaultScale;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::ResetPosition()
 {
 	this->Position = DefaultPosition;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::ResetRotation()
 {
 	this->Rotation = DefaultRotation;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::ResetScale()
 {
 	this->Scale = DefaultScale;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetTransform(const glm::vec3 &Position, const glm::quat &Rotation, const glm::vec3 &Scale)
 {
-	if (!IsFinite(Position))
+	if (!world::IsFiniteTransformValue(Position))
 	{
 		return;
 	}
-	if (!IsFinite(Rotation) || glm::dot(Rotation, Rotation) <= MinNormalizeLengthSquared)
+	glm::quat NormalizedRotation;
+	if (!world::TryNormalizeTransformQuaternion(Rotation, NormalizedRotation))
 	{
 		return;
 	}
-	if (!IsValidScale(Scale))
+	if (!world::IsValidTransformScale(Scale))
 	{
 		return;
 	}
 
 	this->Position = Position;
-	this->Rotation = glm::normalize(Rotation);
+	this->Rotation = NormalizedRotation;
 	this->Scale = Scale;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetPosition(const glm::vec3 &Position)
 {
-	if (!IsFinite(Position))
+	if (!world::IsFiniteTransformValue(Position))
 	{
 		return;
 	}
 
 	this->Position = Position;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 glm::vec3 components::CObjectTransformComponent::GetPosition() const
@@ -323,51 +307,54 @@ glm::vec3 components::CObjectTransformComponent::GetPosition() const
 
 void components::CObjectTransformComponent::Translate(const glm::vec3 &Translation)
 {
-	if (!IsFinite(Translation))
+	if (!world::IsFiniteTransformValue(Translation))
 	{
 		return;
 	}
 
-	this->Position += Translation;
-	this->NeedsRecalculation = true;
+	const glm::vec3 Result = this->Position + Translation;
+	if (!world::IsFiniteTransformValue(Result))
+		return;
+	this->Position = Result;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::TranslateX(float32 X)
 {
-	if (!IsFinite(X))
+	if (!world::IsFiniteTransformValue(X) || !world::IsFiniteTransformValue(this->Position.x + X))
 	{
 		return;
 	}
 
 	this->Position.x += X;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::TranslateY(float32 Y)
 {
-	if (!IsFinite(Y))
+	if (!world::IsFiniteTransformValue(Y) || !world::IsFiniteTransformValue(this->Position.y + Y))
 	{
 		return;
 	}
 
 	this->Position.y += Y;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::TranslateZ(float32 Z)
 {
-	if (!IsFinite(Z))
+	if (!world::IsFiniteTransformValue(Z) || !world::IsFiniteTransformValue(this->Position.z + Z))
 	{
 		return;
 	}
 
 	this->Position.z += Z;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::LerpPosition(const glm::vec3 &Target, float32 Alpha)
 {
-	if (!IsFinite(Target) || !IsFinite(Alpha))
+	if (!world::IsFiniteTransformValue(Target) || !world::IsFiniteTransformValue(Alpha))
 	{
 		return;
 	}
@@ -379,76 +366,88 @@ void components::CObjectTransformComponent::LerpPosition(const glm::vec3 &Target
 		return;
 	}
 
-	this->Position = glm::mix(this->Position, Target, Clamped);
-	this->NeedsRecalculation = true;
+	const glm::vec3 Result = glm::mix(this->Position, Target, Clamped);
+	if (!world::IsFiniteTransformValue(Result))
+		return;
+	this->Position = Result;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetPositionX(float32 X)
 {
-	if (!IsFinite(X))
+	if (!world::IsFiniteTransformValue(X))
 	{
 		return;
 	}
 
 	this->Position.x = X;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetPositionY(float32 Y)
 {
-	if (!IsFinite(Y))
+	if (!world::IsFiniteTransformValue(Y))
 	{
 		return;
 	}
 
 	this->Position.y = Y;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetPositionZ(float32 Z)
 {
-	if (!IsFinite(Z))
+	if (!world::IsFiniteTransformValue(Z))
 	{
 		return;
 	}
 
 	this->Position.z = Z;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetRotation(const glm::quat &Quat)
 {
-	if (!IsFinite(Quat) || glm::dot(Quat, Quat) <= MinNormalizeLengthSquared)
+	glm::quat Result;
+	if (!world::TryNormalizeTransformQuaternion(Quat, Result))
 	{
 		return;
 	}
 
-	this->Rotation = glm::normalize(Quat);
-	this->NeedsRecalculation = true;
+	this->Rotation = Result;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetRotationEuler(const glm::vec3 &EulerAngles)
 {
-	if (!IsFinite(EulerAngles))
+	if (!world::IsFiniteTransformValue(EulerAngles))
 	{
 		return;
 	}
 
-	this->Rotation = glm::quat(glm::radians(EulerAngles));
-	this->NeedsRecalculation = true;
+	glm::quat Result;
+	if (!world::TryNormalizeTransformQuaternion(glm::quat(glm::radians(EulerAngles)), Result))
+		return;
+	this->Rotation = Result;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::Rotate(float32 AngleDegrees, const glm::vec3 &Axis)
 {
-	if (!IsFinite(AngleDegrees) || !IsFinite(Axis) || glm::dot(Axis, Axis) <= MinNormalizeLengthSquared)
+	if (!world::IsFiniteTransformValue(AngleDegrees))
 	{
 		return;
 	}
 
-	const glm::vec3 NormalAxis = glm::normalize(Axis);
+	glm::vec3 NormalAxis;
+	if (!world::TryNormalizeTransformVector(Axis, NormalAxis))
+		return;
 	const glm::quat Delta = glm::angleAxis(glm::radians(AngleDegrees), NormalAxis);
-	this->Rotation = glm::normalize(Delta * this->Rotation);
-	this->NeedsRecalculation = true;
+	glm::quat Result;
+	if (!world::TryNormalizeTransformQuaternion(Delta * this->Rotation, Result))
+		return;
+	this->Rotation = Result;
+	this->PublishTransformMutation();
 }
 
 glm::quat components::CObjectTransformComponent::GetRotation() const
@@ -463,10 +462,13 @@ glm::vec3 components::CObjectTransformComponent::GetRotationEuler() const
 
 void components::CObjectTransformComponent::SlerpRotation(const glm::quat &Target, float32 Alpha)
 {
-	if (!IsFinite(Alpha) || !IsFinite(Target) || glm::dot(Target, Target) <= MinNormalizeLengthSquared)
+	if (!world::IsFiniteTransformValue(Alpha))
 	{
 		return;
 	}
+	glm::quat SafeTarget;
+	if (!world::TryNormalizeTransformQuaternion(Target, SafeTarget))
+		return;
 
 	const float32 Clamped = glm::clamp(Alpha, 0.0f, 1.0f);
 
@@ -475,29 +477,31 @@ void components::CObjectTransformComponent::SlerpRotation(const glm::quat &Targe
 		return;
 	}
 
-	const glm::quat SafeTarget = glm::normalize(Target);
-	this->Rotation = glm::normalize(glm::slerp(this->Rotation, SafeTarget, Clamped));
-	this->NeedsRecalculation = true;
+	glm::quat Result;
+	if (!world::TryNormalizeTransformQuaternion(glm::slerp(this->Rotation, SafeTarget, Clamped), Result))
+		return;
+	this->Rotation = Result;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetScale(const glm::vec3 &Scale)
 {
-	if (!IsValidScale(Scale))
+	if (!world::IsValidTransformScale(Scale))
 	{
 		return;
 	}
 
 	this->Scale = Scale;
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }
 
 void components::CObjectTransformComponent::SetScale(float32 Scale)
 {
-	if (!IsFinite(Scale) || Scale <= 0.0f)
+	if (!world::IsValidTransformScale(glm::vec3(Scale)))
 	{
 		return;
 	}
 
 	this->Scale = glm::vec3(Scale);
-	this->NeedsRecalculation = true;
+	this->PublishTransformMutation();
 }

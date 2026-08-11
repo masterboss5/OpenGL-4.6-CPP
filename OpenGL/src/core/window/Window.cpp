@@ -910,6 +910,9 @@ Window::Window(WindowManager &Manager, const WindowID ID, const WindowSpecificat
 	glfwGetWindowPos(this->StateData->NativeWindow, &X, &Y);
 	this->StateData->Position = {X, Y};
 	this->StateData->WindowedPosition = this->StateData->Position;
+	glfwGetWindowSize(this->StateData->NativeWindow, &Width, &Height);
+	this->StateData->Extent = {static_cast<uint32>(std::max(Width, 0)), static_cast<uint32>(std::max(Height, 0))};
+	this->StateData->WindowedExtent = this->StateData->Extent;
 	glfwGetFramebufferSize(this->StateData->NativeWindow, &Width, &Height);
 	this->StateData->FramebufferExtent = {static_cast<uint32>(std::max(Width, 0)), static_cast<uint32>(std::max(Height, 0))};
 	float32 XScale = 1.0f;
@@ -918,6 +921,13 @@ Window::Window(WindowManager &Manager, const WindowID ID, const WindowSpecificat
 	this->StateData->ContentScale = std::max(XScale, YScale);
 	this->StateData->Visible = glfwGetWindowAttrib(this->StateData->NativeWindow, GLFW_VISIBLE) == GLFW_TRUE;
 	this->StateData->Focused = glfwGetWindowAttrib(this->StateData->NativeWindow, GLFW_FOCUSED) == GLFW_TRUE;
+	this->StateData->Minimized = glfwGetWindowAttrib(this->StateData->NativeWindow, GLFW_ICONIFIED) == GLFW_TRUE;
+	this->StateData->Maximized = glfwGetWindowAttrib(this->StateData->NativeWindow, GLFW_MAXIMIZED) == GLFW_TRUE;
+	if (this->StateData->Maximized)
+	{
+		this->StateData->WindowedPosition = Specification.Position.value_or(this->StateData->Position);
+		this->StateData->WindowedExtent = Specification.Extent;
+	}
 	this->SetSizeConstraints(Specification.Constraints);
 }
 
@@ -1016,6 +1026,10 @@ Context &Window::GetContext() const
 	if (this->StateData->Context == nullptr)
 		throw WindowException("Window has no Context");
 	return *this->StateData->Context;
+}
+void *Window::GetSystemHandle() const noexcept
+{
+	return glfwGetWin32Window(this->StateData->NativeWindow);
 }
 void Window::SetDataDropTarget(void *Target) noexcept
 {

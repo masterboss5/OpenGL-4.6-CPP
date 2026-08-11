@@ -3,7 +3,7 @@
 
 #include <glm.hpp>
 
-struct alignas(16) PointLightSource
+struct alignas(16) ENGINE_API PointLightSource
 {
   public:
 	glm::vec3 Position;
@@ -29,12 +29,12 @@ struct alignas(16) PointLightSource
 	float32 Constant;
 	float32 Linear;
 	float32 Quadratic;
-	float32 Pad13;
+	float32 CastShadows;
 
 	//------------80-------
 
 	PointLightSource(const glm::vec3 &Position, const glm::vec3 &Ambient, const glm::vec3 &Diffuse, const glm::vec3 &Specular,
-					 float32 Constant, float32 Linear, float32 Quadratic);
+					 float32 Constant, float32 Linear, float32 Quadratic, bool CastShadows = true);
 };
 
 static_assert(std::is_trivially_copyable_v<PointLightSource>, "SSBO element type must be trivially opyable");

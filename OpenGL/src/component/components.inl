@@ -1,7 +1,14 @@
-//CObjectComponents
+// CObjectComponents
 
+REGISTER_COMPONENT(CObjectIdentityComponent)
 REGISTER_COMPONENT(CObjectTransformComponent)
+REGISTER_COMPONENT(CObjectHierarchyComponent)
+REGISTER_COMPONENT(CObjectCameraComponent)
+REGISTER_COMPONENT(CObjectPointLightComponent)
+REGISTER_COMPONENT(CObjectSpotLightComponent)
+REGISTER_COMPONENT(CObjectDirectionalLightComponent)
 REGISTER_COMPONENT(CObjectMeshComponent)
 REGISTER_COMPONENT(CObjectAnimationComponent)
+REGISTER_COMPONENT(CObjectBehaviorComponent)
 
-//UIWidgetComponents
+// UIWidgetComponents

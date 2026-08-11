@@ -1,0 +1,102 @@
+#version 460 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D litHDR;
+layout(binding = 1) uniform sampler2D baseColor;
+layout(binding = 2) uniform sampler2D normalRoughness;
+layout(binding = 3) uniform sampler2D materialData;
+layout(binding = 4) uniform sampler2D sceneDepth;
+layout(binding = 5) uniform usampler2D objectIDs;
+layout(binding = 6) uniform usampler2D overdrawCounts;
+layout(rgba16f, binding = 0) writeonly uniform image2D visualizedHDR;
+
+layout(std140, binding = 0) uniform FrameConstants
+{
+	mat4 projection;
+	mat4 view;
+	mat4 viewProjection;
+	mat4 previousViewProjection;
+	mat4 inverseViewProjection;
+	vec4 cameraPositionAndNear;
+	vec4 renderExtentAndFar;
+	uvec4 countsAndFrame;
+	vec4 backgroundColor;
+};
+
+uniform uint viewMode;
+
+vec3 HashIdentifier(uint value)
+{
+	value ^= value >> 16U;
+	value *= 0x7feb352dU;
+	value ^= value >> 15U;
+	value *= 0x846ca68bU;
+	value ^= value >> 16U;
+	return vec3(float(value & 255U), float((value >> 8U) & 255U), float((value >> 16U) & 255U)) / 255.0;
+}
+
+vec3 OverdrawHeat(uint count)
+{
+	const vec3 ramp[7] = vec3[7](
+		vec3(0.02, 0.02, 0.03),
+		vec3(0.08, 0.20, 0.70),
+		vec3(0.00, 0.75, 0.95),
+		vec3(0.05, 0.90, 0.25),
+		vec3(1.00, 0.90, 0.05),
+		vec3(1.00, 0.25, 0.02),
+		vec3(1.00, 1.00, 1.00));
+	const float level = clamp(log2(float(max(count, 1U))), 0.0, 5.999);
+	const uint low = uint(floor(level));
+	return mix(ramp[low], ramp[min(low + 1U, 6U)], fract(level));
+}
+
+void main()
+{
+	const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	const ivec2 extent = textureSize(litHDR, 0);
+	if (any(greaterThanEqual(pixel, extent)))
+		return;
+
+	const float depth = texelFetch(sceneDepth, pixel, 0).r;
+	const uint objectID = texelFetch(objectIDs, pixel, 0).r;
+	vec3 outputColor = texelFetch(litHDR, pixel, 0).rgb;
+	if (viewMode == 1U)
+	{
+		const vec3 albedo = texelFetch(baseColor, pixel, 0).rgb;
+		const vec3 emissive = texelFetch(materialData, pixel, 0).rgb;
+		outputColor = objectID == 0U ? backgroundColor.rgb : albedo + emissive;
+	}
+	else if (viewMode == 2U)
+	{
+		outputColor = backgroundColor.rgb;
+	}
+	else if (viewMode == 3U)
+	{
+		outputColor = objectID == 0U ? backgroundColor.rgb : texelFetch(normalRoughness, pixel, 0).rgb;
+	}
+	else if (viewMode == 4U)
+	{
+		if (depth <= 0.0)
+		{
+			outputColor = vec3(0.0);
+		}
+		else
+		{
+			const vec2 uv = (vec2(pixel) + 0.5) / vec2(extent);
+			const vec4 world = inverseViewProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+			const float distanceToCamera = length(world.xyz / world.w - cameraPositionAndNear.xyz);
+			const float normalizedDepth = log2(1.0 + distanceToCamera) / log2(1.0 + renderExtentAndFar.z);
+			outputColor = vec3(clamp(normalizedDepth, 0.0, 1.0));
+		}
+	}
+	else if (viewMode == 5U)
+	{
+		outputColor = objectID == 0U ? vec3(0.0) : HashIdentifier(objectID);
+	}
+	else if (viewMode == 6U)
+	{
+		outputColor = OverdrawHeat(texelFetch(overdrawCounts, pixel, 0).r);
+	}
+	imageStore(visualizedHDR, pixel, vec4(outputColor, 1.0));
+}

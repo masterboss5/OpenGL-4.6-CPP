@@ -2,6 +2,7 @@
 
 #include "src/concepts.h"
 #include "src/resource/asset/AnimationAsset.h"
+#include "src/resource/asset/AssetManager.h"
 #include "src/resource/asset/MaterialAsset.h"
 #include "src/resource/asset/MeshAsset.h"
 #include "src/resource/asset/ModelAsset.h"
@@ -20,9 +21,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <map>
 #include <memory>
-#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -30,6 +29,167 @@ namespace resource::importer
 {
 namespace
 {
+struct ModelImportLimits final
+{
+	static constexpr uint64 SourceBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
+	static constexpr uint32 Meshes = 65'536;
+	static constexpr uint32 Materials = 65'536;
+	static constexpr uint32 Textures = 16'384;
+	static constexpr uint32 Nodes = 1'048'576;
+	static constexpr uint32 NodeDepth = 512;
+	static constexpr uint64 Vertices = 268'435'456ULL;
+	static constexpr uint64 Faces = 268'435'456ULL;
+	static constexpr uint64 Bones = 1'048'576ULL;
+	static constexpr uint64 BoneWeights = 1'073'741'824ULL;
+	static constexpr uint64 MorphTargets = 1'048'576ULL;
+	static constexpr uint32 Animations = 65'536;
+	static constexpr uint64 AnimationChannels = 1'048'576ULL;
+	static constexpr uint64 AnimationKeys = 16'777'216ULL;
+	static constexpr uint64 EmbeddedPixels = 268'435'456ULL;
+};
+
+template <typename T> void RequireArray(const T *Pointer, const uint64 Count, const std::filesystem::path &Path, string_view Name)
+{
+	if (Count != 0 && Pointer == nullptr)
+		throw AssetContentValidationException(AssetType::Model, Path, string(Name) + " has a non-zero count and a null array");
+}
+
+void AddBudget(uint64 &Total, const uint64 Value, const uint64 Limit, const std::filesystem::path &Path, string_view Name)
+{
+	if (Value > Limit - Total)
+		throw AssetContentValidationException(AssetType::Model, Path, string(Name) + " exceeds the engine import budget");
+	Total += Value;
+}
+
+[[nodiscard]] bool IsFinite(const aiVector3D &Value) noexcept
+{
+	return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
+}
+
+[[nodiscard]] bool IsFinite(const aiQuaternion &Value) noexcept
+{
+	return std::isfinite(Value.w) && std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
+}
+
+[[nodiscard]] bool IsFinite(const aiMatrix4x4 &Value) noexcept
+{
+	return std::isfinite(Value.a1) && std::isfinite(Value.a2) && std::isfinite(Value.a3) && std::isfinite(Value.a4) &&
+		   std::isfinite(Value.b1) && std::isfinite(Value.b2) && std::isfinite(Value.b3) && std::isfinite(Value.b4) &&
+		   std::isfinite(Value.c1) && std::isfinite(Value.c2) && std::isfinite(Value.c3) && std::isfinite(Value.c4) &&
+		   std::isfinite(Value.d1) && std::isfinite(Value.d2) && std::isfinite(Value.d3) && std::isfinite(Value.d4);
+}
+
+void ValidateSceneStructure(const aiScene &Scene, const std::filesystem::path &Path)
+{
+	if (Scene.mNumMeshes == 0 || Scene.mNumMeshes > ModelImportLimits::Meshes)
+		throw AssetContentValidationException(AssetType::Model, Path, "Model mesh count is empty or exceeds the engine budget");
+	if (Scene.mNumMaterials > ModelImportLimits::Materials || Scene.mNumTextures > ModelImportLimits::Textures ||
+		Scene.mNumAnimations > ModelImportLimits::Animations)
+		throw AssetContentValidationException(AssetType::Model, Path,
+											  "Model material, texture, or animation count exceeds the engine budget");
+	RequireArray(Scene.mMeshes, Scene.mNumMeshes, Path, "Model mesh array");
+	RequireArray(Scene.mMaterials, Scene.mNumMaterials, Path, "Model material array");
+	RequireArray(Scene.mTextures, Scene.mNumTextures, Path, "Model embedded texture array");
+	RequireArray(Scene.mAnimations, Scene.mNumAnimations, Path, "Model animation array");
+
+	uint64 TotalVertices = 0;
+	uint64 TotalFaces = 0;
+	uint64 TotalBones = 0;
+	uint64 TotalWeights = 0;
+	uint64 TotalMorphs = 0;
+	for (uint32 MeshIndex = 0; MeshIndex < Scene.mNumMeshes; ++MeshIndex)
+	{
+		const aiMesh *Mesh = Scene.mMeshes[MeshIndex];
+		if (Mesh == nullptr)
+			throw AssetContentValidationException(AssetType::Model, Path, "Model contains a null mesh");
+		AddBudget(TotalVertices, Mesh->mNumVertices, ModelImportLimits::Vertices, Path, "Model vertex count");
+		AddBudget(TotalFaces, Mesh->mNumFaces, ModelImportLimits::Faces, Path, "Model face count");
+		AddBudget(TotalBones, Mesh->mNumBones, ModelImportLimits::Bones, Path, "Model bone count");
+		AddBudget(TotalMorphs, Mesh->mNumAnimMeshes, ModelImportLimits::MorphTargets, Path, "Model morph-target count");
+		RequireArray(Mesh->mVertices, Mesh->mNumVertices, Path, "Mesh position array");
+		RequireArray(Mesh->mFaces, Mesh->mNumFaces, Path, "Mesh face array");
+		RequireArray(Mesh->mBones, Mesh->mNumBones, Path, "Mesh bone array");
+		RequireArray(Mesh->mAnimMeshes, Mesh->mNumAnimMeshes, Path, "Mesh morph-target array");
+		for (uint32 BoneIndex = 0; BoneIndex < Mesh->mNumBones; ++BoneIndex)
+		{
+			const aiBone *Bone = Mesh->mBones[BoneIndex];
+			if (Bone == nullptr)
+				throw AssetContentValidationException(AssetType::Model, Path, "Mesh contains a null bone");
+			RequireArray(Bone->mWeights, Bone->mNumWeights, Path, "Bone weight array");
+			AddBudget(TotalWeights, Bone->mNumWeights, ModelImportLimits::BoneWeights, Path, "Model bone-weight count");
+			if (!IsFinite(Bone->mOffsetMatrix))
+				throw AssetContentValidationException(AssetType::Model, Path, "Bone contains a non-finite inverse-bind matrix");
+		}
+		for (uint32 MorphIndex = 0; MorphIndex < Mesh->mNumAnimMeshes; ++MorphIndex)
+		{
+			const aiAnimMesh *Morph = Mesh->mAnimMeshes[MorphIndex];
+			if (Morph == nullptr || Morph->mNumVertices != Mesh->mNumVertices)
+				throw AssetContentValidationException(AssetType::Model, Path,
+													  "Morph target is null or does not match its base mesh vertex count");
+		}
+	}
+
+	struct PendingNode final
+	{
+		const aiNode *Node = nullptr;
+		uint32 Depth = 0;
+	};
+	std::vector<PendingNode> Pending{{Scene.mRootNode, 0}};
+	uint64 NodeCount = 0;
+	while (!Pending.empty())
+	{
+		const PendingNode Current = Pending.back();
+		Pending.pop_back();
+		if (Current.Node == nullptr || Current.Depth > ModelImportLimits::NodeDepth)
+			throw AssetContentValidationException(AssetType::Model, Path, "Model hierarchy is null or exceeds the depth budget");
+		AddBudget(NodeCount, 1, ModelImportLimits::Nodes, Path, "Model node count");
+		if (!IsFinite(Current.Node->mTransformation))
+			throw AssetContentValidationException(AssetType::Model, Path, "Model hierarchy contains a non-finite transform");
+		RequireArray(Current.Node->mChildren, Current.Node->mNumChildren, Path, "Node child array");
+		RequireArray(Current.Node->mMeshes, Current.Node->mNumMeshes, Path, "Node mesh-index array");
+		for (uint32 Child = 0; Child < Current.Node->mNumChildren; ++Child)
+			Pending.push_back({Current.Node->mChildren[Child], Current.Depth + 1U});
+	}
+
+	uint64 ChannelCount = 0;
+	uint64 KeyCount = 0;
+	for (uint32 AnimationIndex = 0; AnimationIndex < Scene.mNumAnimations; ++AnimationIndex)
+	{
+		const aiAnimation *Animation = Scene.mAnimations[AnimationIndex];
+		if (Animation == nullptr || !std::isfinite(Animation->mDuration) || !std::isfinite(Animation->mTicksPerSecond))
+			throw AssetContentValidationException(AssetType::Model, Path, "Animation is null or has non-finite timing metadata");
+		RequireArray(Animation->mChannels, Animation->mNumChannels, Path, "Animation joint-channel array");
+		RequireArray(Animation->mMorphMeshChannels, Animation->mNumMorphMeshChannels, Path, "Animation morph-channel array");
+		AddBudget(ChannelCount, static_cast<uint64>(Animation->mNumChannels) + Animation->mNumMorphMeshChannels,
+				  ModelImportLimits::AnimationChannels, Path, "Animation channel count");
+		for (uint32 ChannelIndex = 0; ChannelIndex < Animation->mNumChannels; ++ChannelIndex)
+		{
+			const aiNodeAnim *Channel = Animation->mChannels[ChannelIndex];
+			if (Channel == nullptr)
+				throw AssetContentValidationException(AssetType::Model, Path, "Animation contains a null joint channel");
+			RequireArray(Channel->mPositionKeys, Channel->mNumPositionKeys, Path, "Animation position-key array");
+			RequireArray(Channel->mRotationKeys, Channel->mNumRotationKeys, Path, "Animation rotation-key array");
+			RequireArray(Channel->mScalingKeys, Channel->mNumScalingKeys, Path, "Animation scale-key array");
+			AddBudget(KeyCount, static_cast<uint64>(Channel->mNumPositionKeys) + Channel->mNumRotationKeys + Channel->mNumScalingKeys,
+					  ModelImportLimits::AnimationKeys, Path, "Animation key count");
+		}
+		for (uint32 ChannelIndex = 0; ChannelIndex < Animation->mNumMorphMeshChannels; ++ChannelIndex)
+		{
+			const aiMeshMorphAnim *Channel = Animation->mMorphMeshChannels[ChannelIndex];
+			if (Channel == nullptr)
+				throw AssetContentValidationException(AssetType::Model, Path, "Animation contains a null morph channel");
+			RequireArray(Channel->mKeys, Channel->mNumKeys, Path, "Animation morph-key array");
+			AddBudget(KeyCount, Channel->mNumKeys, ModelImportLimits::AnimationKeys, Path, "Animation key count");
+			for (uint32 KeyIndex = 0; KeyIndex < Channel->mNumKeys; ++KeyIndex)
+			{
+				const aiMeshMorphKey &Key = Channel->mKeys[KeyIndex];
+				RequireArray(Key.mValues, Key.mNumValuesAndWeights, Path, "Morph-key value array");
+				RequireArray(Key.mWeights, Key.mNumValuesAndWeights, Path, "Morph-key weight array");
+			}
+		}
+	}
+}
+
 [[nodiscard]] uint64 StableHash(string_view Text)
 {
 	uint64 Hash = 1469598103934665603ULL;
@@ -122,10 +282,21 @@ template <TriviallyCopyable T> [[nodiscard]] std::vector<uint8> ToBytes(const st
 		Bounds.Minimum = glm::min(Bounds.Minimum, Position);
 		Bounds.Maximum = glm::max(Bounds.Maximum, Position);
 	}
-	const glm::vec3 Center = (Bounds.Minimum + Bounds.Maximum) * 0.5f;
+	const glm::dvec3 Minimum(Bounds.Minimum);
+	const glm::dvec3 Maximum(Bounds.Maximum);
+	const glm::dvec3 Center64 = Minimum + (Maximum - Minimum) * 0.5;
+	if (!std::isfinite(Center64.x) || !std::isfinite(Center64.y) || !std::isfinite(Center64.z))
+		throw std::invalid_argument("Imported mesh bounds produced a non-finite center");
+	const glm::vec3 Center(Center64);
 	float32 Radius = 0.0f;
 	for (const glm::vec3 &Position : Positions)
-		Radius = std::max(Radius, glm::length(Position - Center));
+	{
+		const glm::dvec3 Delta = glm::dvec3(Position) - Center64;
+		const float64 Distance = glm::length(Delta);
+		if (!std::isfinite(Distance) || Distance > std::numeric_limits<float32>::max())
+			throw std::invalid_argument("Imported mesh bounds exceed the supported finite range");
+		Radius = std::max(Radius, static_cast<float32>(Distance));
+	}
 	Bounds.Sphere = glm::vec4(Center, Radius);
 	return Bounds;
 }
@@ -133,8 +304,12 @@ template <TriviallyCopyable T> [[nodiscard]] std::vector<uint8> ToBytes(const st
 [[nodiscard]] Bounds CalculateBoundsFromExtents(const glm::vec3 &Minimum, const glm::vec3 &Maximum)
 {
 	Bounds Result{.Minimum = Minimum, .Maximum = Maximum};
-	const glm::vec3 Center = (Minimum + Maximum) * 0.5f;
-	Result.Sphere = glm::vec4(Center, glm::length(Maximum - Center));
+	const glm::dvec3 Center64 = glm::dvec3(Minimum) + (glm::dvec3(Maximum) - glm::dvec3(Minimum)) * 0.5;
+	const float64 Radius = glm::length(glm::dvec3(Maximum) - Center64);
+	if (!std::isfinite(Center64.x) || !std::isfinite(Center64.y) || !std::isfinite(Center64.z) || !std::isfinite(Radius) ||
+		Radius > std::numeric_limits<float32>::max())
+		throw std::invalid_argument("Cannot calculate finite bounds from deformation extents");
+	Result.Sphere = glm::vec4(glm::vec3(Center64), static_cast<float32>(Radius));
 	if (!Result.IsValid())
 		throw std::invalid_argument("Cannot calculate bounds from invalid deformation extents");
 	return Result;
@@ -148,6 +323,8 @@ void IncludeTransformedBounds(Bounds &Destination, bool &Initialized, const Boun
 							  (Corner & 2U) != 0 ? Source.Maximum.y : Source.Minimum.y,
 							  (Corner & 4U) != 0 ? Source.Maximum.z : Source.Minimum.z};
 		const glm::vec3 Position = glm::vec3(Transform * glm::vec4(Local, 1.0f));
+		if (!std::isfinite(Position.x) || !std::isfinite(Position.y) || !std::isfinite(Position.z))
+			throw std::invalid_argument("Model bounds transformation produced a non-finite position");
 		if (!Initialized)
 		{
 			Destination.Minimum = Position;
@@ -160,8 +337,12 @@ void IncludeTransformedBounds(Bounds &Destination, bool &Initialized, const Boun
 			Destination.Maximum = glm::max(Destination.Maximum, Position);
 		}
 	}
-	const glm::vec3 Center = (Destination.Minimum + Destination.Maximum) * 0.5f;
-	Destination.Sphere = glm::vec4(Center, glm::length(Destination.Maximum - Center));
+	const glm::dvec3 Center64 = glm::dvec3(Destination.Minimum) + (glm::dvec3(Destination.Maximum) - glm::dvec3(Destination.Minimum)) * 0.5;
+	const float64 Radius = glm::length(glm::dvec3(Destination.Maximum) - Center64);
+	if (!std::isfinite(Center64.x) || !std::isfinite(Center64.y) || !std::isfinite(Center64.z) || !std::isfinite(Radius) ||
+		Radius > std::numeric_limits<float32>::max())
+		throw std::invalid_argument("Transformed model bounds exceed the supported finite range");
+	Destination.Sphere = glm::vec4(glm::vec3(Center64), static_cast<float32>(Radius));
 }
 
 [[nodiscard]] AssetHandle<Texture2DAsset> ImportEmbeddedTexture(uint32 TextureIndex, const aiScene &Scene,
@@ -198,7 +379,8 @@ void IncludeTransformedBounds(Bounds &Destination, bool &Initialized, const Boun
 		std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> Owned(Decoded, stbi_image_free);
 		if (Width <= 0 || Height <= 0 ||
 			static_cast<uint64>(Width) * static_cast<uint64>(Height) >
-				std::numeric_limits<usize>::max() / static_cast<uint64>(ChannelCount))
+				std::numeric_limits<usize>::max() / static_cast<uint64>(ChannelCount) ||
+			static_cast<uint64>(Width) * static_cast<uint64>(Height) > ModelImportLimits::EmbeddedPixels)
 		{
 			throw AssetContentValidationException(AssetType::Model, ModelPath,
 												  "Embedded texture dimensions are invalid or overflow memory");
@@ -217,6 +399,8 @@ void IncludeTransformedBounds(Bounds &Destination, bool &Initialized, const Boun
 		}
 		Width = static_cast<int32>(Source.mWidth);
 		Height = static_cast<int32>(Source.mHeight);
+		if (static_cast<uint64>(Width) * static_cast<uint64>(Height) > ModelImportLimits::EmbeddedPixels)
+			throw AssetContentValidationException(AssetType::Model, ModelPath, "Embedded texture exceeds the engine pixel budget");
 		Pixels.resize(static_cast<usize>(Width) * static_cast<usize>(Height) * static_cast<usize>(ChannelCount));
 		for (usize PixelIndex = 0; PixelIndex < static_cast<usize>(Width) * static_cast<usize>(Height); ++PixelIndex)
 		{
@@ -242,6 +426,8 @@ void AppendTexture(const aiMaterial &Material, aiTextureType SourceSemantic, Mat
 				   std::unordered_map<uint32, AssetHandle<Texture2DAsset>> &EmbeddedTextures, std::vector<MaterialTextureBinding> &Bindings,
 				   std::vector<AssetDependency> &Dependencies)
 {
+	if (Material.GetTextureCount(SourceSemantic) > 1U)
+		throw AssetContentValidationException(AssetType::Model, ModelPath, "Material uses multiple textures for one unsupported semantic");
 	aiString ImportedPath;
 	uint32 TextureCoordinateChannel = 0;
 	if (Material.GetTexture(SourceSemantic, 0, &ImportedPath, nullptr, &TextureCoordinateChannel) != AI_SUCCESS)
@@ -268,7 +454,11 @@ void AppendTexture(const aiMaterial &Material, aiTextureType SourceSemantic, Mat
 		Dependencies.push_back({AssetType::Texture2D, TexturePath});
 		return;
 	}
-	const std::filesystem::path TexturePath = (ModelPath.parent_path() / PathText).lexically_normal();
+	const std::filesystem::path ImportedTexturePath(PathText);
+	if (PathText.empty() || ImportedTexturePath.is_absolute())
+		throw AssetContentValidationException(AssetType::Model, ModelPath, "External texture path is empty or absolute");
+	const std::filesystem::path TexturePath =
+		Context.ResolveDependencyPath(AssetType::Model, ModelPath, ImportedTexturePath, "Model external texture");
 	auto Texture = Context.Reserve<Texture2DAsset>(AssetType::Texture2D, TexturePath);
 	Bindings.push_back({DestinationSemantic, std::move(Texture), TextureCoordinateChannel});
 	Dependencies.push_back({AssetType::Texture2D, TexturePath});
@@ -306,6 +496,12 @@ void AppendTexture(const aiMaterial &Material, aiTextureType SourceSemantic, Mat
 		Factors.Emissive = {Emissive.r, Emissive.g, Emissive.b};
 	}
 	(void)Material.Get(AI_MATKEY_OPACITY, Factors.BaseColor.a);
+	const auto Finite4 = [](const glm::vec4 &Value)
+	{ return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z) && std::isfinite(Value.w); };
+	const auto Finite3 = [](const glm::vec3 &Value) { return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z); };
+	if (!Finite4(Factors.BaseColor) || !Finite3(Factors.Emissive) || !std::isfinite(Factors.Metallic) ||
+		!std::isfinite(Factors.Roughness) || !std::isfinite(Factors.Specular) || !std::isfinite(Factors.AlphaCutoff))
+		throw AssetContentValidationException(AssetType::Model, ModelPath, "Material contains non-finite PBR factors");
 	MaterialPipelineContract PipelineContract;
 	int32 TwoSided = 0;
 	if (Material.Get(AI_MATKEY_TWOSIDED, TwoSided) == AI_SUCCESS)
@@ -379,18 +575,24 @@ struct ImportedSkeleton final
 	std::unordered_map<string, uint32> JointIndices;
 };
 
-void IndexNodes(const aiNode &Node, std::unordered_map<string, const aiNode *> &Nodes)
+using NodeIndex = std::unordered_map<string, std::vector<const aiNode *>>;
+
+void IndexNodes(const aiNode &Root, NodeIndex &Nodes)
 {
-	const string Name = Node.mName.C_Str();
-	if (!Name.empty() && !Nodes.emplace(Name, &Node).second)
+	std::vector<const aiNode *> Pending{&Root};
+	while (!Pending.empty())
 	{
-		throw std::invalid_argument("Model hierarchy contains duplicate node names required for skeletal binding");
-	}
-	for (uint32 ChildIndex = 0; ChildIndex < Node.mNumChildren; ++ChildIndex)
-	{
-		if (Node.mChildren[ChildIndex] == nullptr)
-			throw std::invalid_argument("Model hierarchy contains a null child node");
-		IndexNodes(*Node.mChildren[ChildIndex], Nodes);
+		const aiNode *Node = Pending.back();
+		Pending.pop_back();
+		const string Name = Node->mName.C_Str();
+		if (!Name.empty())
+			Nodes[Name].push_back(Node);
+		for (uint32 ChildIndex = 0; ChildIndex < Node->mNumChildren; ++ChildIndex)
+		{
+			if (Node->mChildren[ChildIndex] == nullptr)
+				throw std::invalid_argument("Model hierarchy contains a null child node");
+			Pending.push_back(Node->mChildren[ChildIndex]);
+		}
 	}
 }
 
@@ -423,6 +625,8 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 	std::unordered_map<string, aiMatrix4x4> InverseBinds;
 	for (uint32 MeshIndex = 0; MeshIndex < Scene.mNumMeshes; ++MeshIndex)
 	{
+		if (Scene.mMeshes == nullptr || Scene.mMeshes[MeshIndex] == nullptr)
+			throw AssetContentValidationException(AssetType::Model, ModelPath, "Skeleton import encountered a null mesh");
 		const aiMesh &Mesh = *Scene.mMeshes[MeshIndex];
 		for (uint32 BoneIndex = 0; BoneIndex < Mesh.mNumBones; ++BoneIndex)
 		{
@@ -456,7 +660,7 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 	if (InverseBinds.empty())
 		return {};
 
-	std::unordered_map<string, const aiNode *> Nodes;
+	NodeIndex Nodes;
 	try
 	{
 		IndexNodes(*Scene.mRootNode, Nodes);
@@ -470,14 +674,24 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 	{
 		(void)inverseBind;
 		const auto Found = Nodes.find(boneName);
-		if (Found == Nodes.end())
+		if (Found == Nodes.end() || Found->second.empty())
 		{
 			throw AssetContentValidationException(AssetType::Model, ModelPath, "Bone has no matching hierarchy node: " + boneName);
 		}
-		for (const aiNode *Current = Found->second; Current != nullptr; Current = Current->mParent)
+		if (Found->second.size() != 1U)
+			throw AssetContentValidationException(AssetType::Model, ModelPath,
+												  "Bone name resolves ambiguously in the hierarchy: " + boneName);
+		for (const aiNode *Current = Found->second.front(); Current != nullptr; Current = Current->mParent)
 		{
 			RequiredNodes.insert(Current->mName.C_Str());
 		}
+	}
+	for (const string &RequiredName : RequiredNodes)
+	{
+		const auto Found = Nodes.find(RequiredName);
+		if (Found == Nodes.end() || Found->second.size() != 1U)
+			throw AssetContentValidationException(AssetType::Model, ModelPath,
+												  "Required skeleton hierarchy name resolves ambiguously: " + RequiredName);
 	}
 
 	ImportedSkeleton Result;
@@ -490,6 +704,8 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 	{
 		Signature ^= Joint.ID + 0x9e3779b97f4a7c15ULL + (Signature << 6U) + (Signature >> 2U);
 		Signature ^= static_cast<uint64>(Joint.ParentIndex);
+		ExtendHash(Signature, std::span<const uint8>(reinterpret_cast<const uint8 *>(&Joint.ReferenceLocalTransform), sizeof(glm::mat4)));
+		ExtendHash(Signature, std::span<const uint8>(reinterpret_cast<const uint8 *>(&Joint.InverseBindMatrix), sizeof(glm::mat4)));
 	}
 	Result.Handle = Context.Reserve<SkeletonAsset>(AssetType::Skeleton, Result.Path);
 	Context.Stage(AssetType::Skeleton, Result.Path,
@@ -508,6 +724,9 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 	}
 	if (Mesh.HasBones() && !Skeleton.Handle)
 		throw AssetContentValidationException(AssetType::Model, ModelPath, "Skeletal mesh has no validated skeleton binding");
+	if (Mesh.mNumFaces > std::numeric_limits<usize>::max() / 3U ||
+		static_cast<uint64>(Mesh.mNumFaces) * 3ULL > std::numeric_limits<uint32>::max())
+		throw AssetContentValidationException(AssetType::Model, ModelPath, "Mesh index count exceeds the supported address space");
 
 	std::vector<glm::vec3> Positions(Mesh.mNumVertices);
 	std::vector<glm::vec3> Normals(Mesh.mNumVertices);
@@ -552,6 +771,10 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 				? -1.0f
 				: 1.0f;
 		Tangents[Vertex] = glm::vec4(Tangent, Handedness);
+		if (!std::isfinite(Positions[Vertex].x) || !std::isfinite(Positions[Vertex].y) || !std::isfinite(Positions[Vertex].z) ||
+			!std::isfinite(Normals[Vertex].x) || !std::isfinite(Normals[Vertex].y) || !std::isfinite(Normals[Vertex].z) ||
+			!std::isfinite(Tangents[Vertex].x) || !std::isfinite(Tangents[Vertex].y) || !std::isfinite(Tangents[Vertex].z))
+			throw AssetContentValidationException(AssetType::Model, ModelPath, "Mesh contains non-finite vertex attributes");
 	}
 
 	std::vector<glm::u16vec4> JointIndices;
@@ -702,6 +925,8 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 			throw AssetContentValidationException(AssetType::Model, ModelPath, "Mesh contains a null morph target");
 		}
 		const aiAnimMesh &Morph = *Mesh.mAnimMeshes[MorphIndex];
+		if (Morph.mNumVertices != Mesh.mNumVertices)
+			throw AssetContentValidationException(AssetType::Model, ModelPath, "Morph target vertex count does not match the base mesh");
 		const string MorphName = Morph.mName.length == 0 ? "Morph_" + std::to_string(MorphIndex) : Morph.mName.C_Str();
 		const MorphTargetID MorphID = StableHash(ModelPath.generic_string() + ":mesh:" + std::to_string(MeshIndex) + ":morph:" + MorphName);
 		std::vector<glm::vec3> PositionDeltas(Mesh.mNumVertices, glm::vec3(0.0f));
@@ -716,6 +941,10 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 			if (Morph.mNormals != nullptr)
 				NormalDeltas[Vertex] =
 					glm::vec3(Morph.mNormals[Vertex].x, Morph.mNormals[Vertex].y, Morph.mNormals[Vertex].z) - Normals[Vertex];
+			if (!std::isfinite(PositionDeltas[Vertex].x) || !std::isfinite(PositionDeltas[Vertex].y) ||
+				!std::isfinite(PositionDeltas[Vertex].z) || !std::isfinite(NormalDeltas[Vertex].x) ||
+				!std::isfinite(NormalDeltas[Vertex].y) || !std::isfinite(NormalDeltas[Vertex].z))
+				throw AssetContentValidationException(AssetType::Model, ModelPath, "Morph target contains non-finite vertex deltas");
 		}
 		Data.MorphTargets.push_back({MorphID, MorphName});
 		LOD.MorphTargets.push_back({.Target = MorphID,
@@ -802,9 +1031,9 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 		return Keys[0].mValue;
 	if (Time >= Keys[Count - 1U].mTime)
 		return Keys[Count - 1U].mValue;
-	uint32 Upper = 1;
-	while (Upper < Count && Keys[Upper].mTime < Time)
-		++Upper;
+	const aiVectorKey *UpperIterator =
+		std::upper_bound(Keys + 1, Keys + Count, Time, [](const float64 Value, const aiVectorKey &Key) { return Value < Key.mTime; });
+	const uint32 Upper = static_cast<uint32>(UpperIterator - Keys);
 	const uint32 Lower = Upper - 1U;
 	const float64 Interval = Keys[Upper].mTime - Keys[Lower].mTime;
 	const float32 Alpha = Interval <= 0.0 ? 0.0f : static_cast<float32>((Time - Keys[Lower].mTime) / Interval);
@@ -819,9 +1048,9 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 		return Keys[0].mValue;
 	if (Time >= Keys[Count - 1U].mTime)
 		return Keys[Count - 1U].mValue;
-	uint32 Upper = 1;
-	while (Upper < Count && Keys[Upper].mTime < Time)
-		++Upper;
+	const aiQuatKey *UpperIterator =
+		std::upper_bound(Keys + 1, Keys + Count, Time, [](const float64 Value, const aiQuatKey &Key) { return Value < Key.mTime; });
+	const uint32 Upper = static_cast<uint32>(UpperIterator - Keys);
 	const uint32 Lower = Upper - 1U;
 	const float64 Interval = Keys[Upper].mTime - Keys[Lower].mTime;
 	const float32 Alpha = Interval <= 0.0 ? 0.0f : static_cast<float32>((Time - Keys[Lower].mTime) / Interval);
@@ -838,7 +1067,7 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 	std::vector<AssetHandle<AnimationClipAsset>> Clips;
 	if (Scene.mNumAnimations == 0)
 		return Clips;
-	std::unordered_map<string, const aiNode *> HierarchyNodes;
+	NodeIndex HierarchyNodes;
 	IndexNodes(*Scene.mRootNode, HierarchyNodes);
 	Clips.reserve(Scene.mNumAnimations);
 	for (uint32 AnimationIndex = 0; AnimationIndex < Scene.mNumAnimations; ++AnimationIndex)
@@ -852,7 +1081,7 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 		const float64 DurationTicks = Animation.mDuration > 0.0 ? Animation.mDuration : 1.0;
 		const float32 DurationSeconds = static_cast<float32>(DurationTicks / TicksPerSecond);
 		std::vector<AnimationJointTrack> JointTracks;
-		bool ContainsRootMotion = false;
+		JointID RootMotionJoint = 0;
 		for (uint32 ChannelIndex = 0; ChannelIndex < Animation.mNumChannels; ++ChannelIndex)
 		{
 			if (Animation.mChannels == nullptr || Animation.mChannels[ChannelIndex] == nullptr)
@@ -867,12 +1096,26 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 			if (JointIndex == Skeleton.JointIndices.end())
 				continue;
 			const auto HierarchyNode = HierarchyNodes.find(JointName);
-			if (HierarchyNode == HierarchyNodes.end())
+			if (HierarchyNode == HierarchyNodes.end() || HierarchyNode->second.empty())
 				throw AssetContentValidationException(AssetType::Model, ModelPath, "Animation joint is missing from the hierarchy");
+			if (HierarchyNode->second.size() != 1U)
+				throw AssetContentValidationException(AssetType::Model, ModelPath,
+													  "Animation joint name resolves ambiguously in the hierarchy: " + JointName);
 			aiVector3D DefaultScale;
 			aiVector3D DefaultTranslation;
 			aiQuaternion DefaultRotation;
-			HierarchyNode->second->mTransformation.Decompose(DefaultScale, DefaultRotation, DefaultTranslation);
+			HierarchyNode->second.front()->mTransformation.Decompose(DefaultScale, DefaultRotation, DefaultTranslation);
+			if (!IsFinite(DefaultScale) || !IsFinite(DefaultTranslation) || !IsFinite(DefaultRotation))
+				throw AssetContentValidationException(AssetType::Model, ModelPath, "Animation joint has a non-finite reference transform");
+			for (uint32 Key = 0; Key < Channel.mNumPositionKeys; ++Key)
+				if (!std::isfinite(Channel.mPositionKeys[Key].mTime) || !IsFinite(Channel.mPositionKeys[Key].mValue))
+					throw AssetContentValidationException(AssetType::Model, ModelPath, "Animation contains an invalid position key");
+			for (uint32 Key = 0; Key < Channel.mNumRotationKeys; ++Key)
+				if (!std::isfinite(Channel.mRotationKeys[Key].mTime) || !IsFinite(Channel.mRotationKeys[Key].mValue))
+					throw AssetContentValidationException(AssetType::Model, ModelPath, "Animation contains an invalid rotation key");
+			for (uint32 Key = 0; Key < Channel.mNumScalingKeys; ++Key)
+				if (!std::isfinite(Channel.mScalingKeys[Key].mTime) || !IsFinite(Channel.mScalingKeys[Key].mValue))
+					throw AssetContentValidationException(AssetType::Model, ModelPath, "Animation contains an invalid scale key");
 			std::vector<float64> SampleTimes{0.0, DurationTicks};
 			for (uint32 Key = 0; Key < Channel.mNumPositionKeys; ++Key)
 				SampleTimes.push_back(Channel.mPositionKeys[Key].mTime);
@@ -898,7 +1141,8 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 									  .Rotation = {Rotation.w, Rotation.x, Rotation.y, Rotation.z},
 									  .Scale = {Scale.x, Scale.y, Scale.z}});
 			}
-			ContainsRootMotion = ContainsRootMotion || Skeleton.Joints[JointIndex->second].ParentIndex == InvalidJointIndex;
+			if (Skeleton.Joints[JointIndex->second].ParentIndex == InvalidJointIndex)
+				RootMotionJoint = Track.Joint;
 			JointTracks.push_back(std::move(Track));
 		}
 
@@ -929,13 +1173,21 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 				const string TargetName = Mesh.mAnimMeshes[TargetIndex]->mName.length == 0 ? "Morph_" + std::to_string(TargetIndex)
 																						   : Mesh.mAnimMeshes[TargetIndex]->mName.C_Str();
 				AnimationMorphTrack Track;
+				const std::filesystem::path MorphSetPath = SubassetPath(ModelPath, "mesh", MeshIndex);
+				Track.MorphSet = AssetManager::MakeAssetID(Mesh.HasBones() ? AssetType::SkeletalMesh : AssetType::StaticMesh, MorphSetPath);
 				Track.MorphTarget = StableHash(ModelPath.generic_string() + ":mesh:" + std::to_string(MeshIndex) + ":morph:" + TargetName);
 				for (uint32 KeyIndex = 0; KeyIndex < Channel.mNumKeys; ++KeyIndex)
 				{
 					const aiMeshMorphKey &Key = Channel.mKeys[KeyIndex];
+					if (!std::isfinite(Key.mTime))
+						throw AssetContentValidationException(AssetType::Model, ModelPath,
+															  "Morph animation contains a non-finite key time");
 					float32 Weight = 0.0f;
 					for (uint32 ValueIndex = 0; ValueIndex < Key.mNumValuesAndWeights; ++ValueIndex)
 					{
+						if (!std::isfinite(Key.mWeights[ValueIndex]))
+							throw AssetContentValidationException(AssetType::Model, ModelPath,
+																  "Morph animation contains a non-finite weight");
 						if (Key.mValues[ValueIndex] == TargetIndex)
 							Weight = static_cast<float32>(Key.mWeights[ValueIndex]);
 					}
@@ -960,7 +1212,10 @@ void AppendSkeletonJoints(const aiNode &Node, uint32 ParentJoint, const std::uno
 		Context.Stage(AssetType::AnimationClip, AnimationPath,
 					  AssetPtr<AnimationClipAsset>::Make(AnimationName, Skeleton.Handle, DurationSeconds,
 														 static_cast<float32>(TicksPerSecond), std::move(JointTracks),
-														 std::move(MorphTracks), std::vector<AnimationEvent>{}, ContainsRootMotion),
+														 std::move(MorphTracks), std::vector<AnimationEvent>{},
+														 RootMotionJoint == 0 ? RootMotionExtractionPolicy::Disabled
+																			  : RootMotionExtractionPolicy::ExtractTranslationAndRotation,
+														 RootMotionJoint),
 					  std::move(Dependencies));
 		RootDependencies.push_back({AssetType::AnimationClip, AnimationPath});
 		Clips.push_back(std::move(Handle));
@@ -1014,6 +1269,12 @@ AssetType ModelAssetImporter::GetAssetType() const noexcept
 AssetImportResult ModelAssetImporter::ImportCPU(const std::filesystem::path &Path, AssetImportContext &Context) const
 {
 	this->ValidateImportRequest(Path);
+	std::error_code SizeError;
+	const auto SourceBytes = std::filesystem::file_size(Path, SizeError);
+	if (SizeError)
+		throw AssetFileReadException(AssetType::Model, Path, "Unable to read model source size: " + SizeError.message());
+	if (SourceBytes > ModelImportLimits::SourceBytes)
+		throw AssetContentValidationException(AssetType::Model, Path, "Model source exceeds the engine import byte budget");
 	Assimp::Importer Importer;
 	const aiScene *Scene = Importer.ReadFile(Path.string(), aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace |
 																aiProcess_GenSmoothNormals | aiProcess_JoinIdenticalVertices |
@@ -1022,10 +1283,7 @@ AssetImportResult ModelAssetImporter::ImportCPU(const std::filesystem::path &Pat
 	{
 		throw AssetModelParseException(AssetType::Model, Path, Importer.GetErrorString());
 	}
-	if (Scene->mNumMeshes == 0 || Scene->mMeshes == nullptr)
-	{
-		throw AssetContentValidationException(AssetType::Model, Path, "Model contains no renderable meshes");
-	}
+	ValidateSceneStructure(*Scene, Path);
 
 	std::vector<AssetDependency> RootDependencies;
 	std::unordered_map<uint32, AssetHandle<Texture2DAsset>> EmbeddedTextures;

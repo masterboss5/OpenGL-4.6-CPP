@@ -1,4 +1,6 @@
 #pragma once
+
+#include "src/core/EngineAPI.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>

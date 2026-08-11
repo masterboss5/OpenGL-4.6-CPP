@@ -22,6 +22,17 @@ bool SceneCommandBuffer::Empty() const noexcept
 	return this->Size() == 0;
 }
 
+void SceneCommandBuffer::Absorb(SceneCommandBuffer &Source)
+{
+	if (&Source == this)
+		return;
+	std::scoped_lock Lock(this->Mutex, Source.Mutex);
+	this->Commands.reserve(this->Commands.size() + Source.Commands.size());
+	for (auto &Command : Source.Commands)
+		this->Commands.push_back(std::move(Command));
+	Source.Commands.clear();
+}
+
 void SceneCommandBuffer::Execute(Scene &Scene)
 {
 	std::vector<std::unique_ptr<Command>> Pending;

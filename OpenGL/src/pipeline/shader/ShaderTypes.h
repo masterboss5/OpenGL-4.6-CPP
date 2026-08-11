@@ -11,7 +11,8 @@ enum class ShaderStage : uint8
 {
 	Vertex,
 	Fragment,
-	Compute
+	Compute,
+	Include
 };
 enum class ShaderFeature : uint8
 {
@@ -21,7 +22,7 @@ enum class ShaderFeature : uint8
 	ManualSRGBEncode
 };
 
-class ShaderPermutationKey final
+class ENGINE_API ShaderPermutationKey final
 {
   public:
 	void Set(ShaderFeature Feature, bool Enabled) noexcept;

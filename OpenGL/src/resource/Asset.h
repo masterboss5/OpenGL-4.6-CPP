@@ -1,4 +1,6 @@
 #pragma once
+
+#include "src/core/EngineAPI.h"
 #include "src/concepts.h"
 #include "src/util/UUID.h"
 
@@ -23,7 +25,7 @@ struct AssetGPURealizationResult final
 	std::string Error;
 };
 
-class Asset
+class ENGINE_API Asset
 {
   private:
 	util::UUID UUID;

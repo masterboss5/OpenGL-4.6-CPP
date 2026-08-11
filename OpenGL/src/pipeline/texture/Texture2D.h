@@ -1,5 +1,6 @@
 #pragma once
 
+#include "src/pipeline/device/Device.h"
 #include "src/types.h"
 
 #include <GL/glew.h>
@@ -7,12 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace pipeline::device
-{
-class Device;
-}
-
-namespace renderer::texture
+namespace pipeline::texture
 {
 enum class TextureColorSpace : uint8
 {
@@ -20,7 +16,7 @@ enum class TextureColorSpace : uint8
 	SRGB
 };
 
-struct Texture2DSpecification final
+struct ENGINE_API Texture2DSpecification final
 {
 	static const Texture2DSpecification DefaultInstance;
 	GLenum InternalFormat = GL_RGBA8;
@@ -36,13 +32,15 @@ struct Texture2DSpecification final
 struct Texture2DCreationInfo final
 {
 	const uint8 *Pixels = nullptr;
+	usize PixelBytes = 0;
+	usize RowStrideBytes = 0;
 	int32 Width = 0;
 	int32 Height = 0;
 	int32 Channels = 0;
 	Texture2DSpecification Specification;
 };
 
-class Texture2DError final : public std::runtime_error
+class ENGINE_API Texture2DError final : public std::runtime_error
 {
   public:
 	explicit Texture2DError(const std::string &Diagnostic) : std::runtime_error(Diagnostic)
@@ -50,7 +48,7 @@ class Texture2DError final : public std::runtime_error
 	}
 };
 
-class Texture2D final
+class ENGINE_API Texture2D final
 {
   public:
 	Texture2D(pipeline::device::Device &Device, std::string Name, const Texture2DCreationInfo &Info);
@@ -80,7 +78,7 @@ class Texture2D final
 	void Unlock() noexcept;
 
   private:
-	pipeline::device::Device *Device = nullptr;
+	pipeline::device::DeviceHandle Device;
 	std::string Name;
 	int32 Width = 0;
 	int32 Height = 0;
@@ -97,4 +95,4 @@ class Texture2D final
 	void ApplySpecificationTo(GLuint Texture, const Texture2DSpecification &Info);
 	void Release() noexcept;
 };
-} // namespace renderer::texture
+} // namespace pipeline::texture

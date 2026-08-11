@@ -76,7 +76,7 @@ struct MaterialTextureBinding final
 	uint32 TextureCoordinateChannel = 0;
 };
 
-class MaterialInterfaceAsset : public Asset
+class ENGINE_API MaterialInterfaceAsset : public Asset
 {
   public:
 	[[nodiscard]] string_view GetName() const noexcept
@@ -99,7 +99,7 @@ class MaterialInterfaceAsset : public Asset
 	MaterialPipelineContract PipelineContract;
 };
 
-class MaterialAsset final : public MaterialInterfaceAsset
+class ENGINE_API MaterialAsset final : public MaterialInterfaceAsset
 {
   public:
 	inline static constexpr resource::AssetType AssetType = resource::AssetType::Material;
@@ -126,7 +126,7 @@ struct MaterialFactorOverride final
 	PBRMaterialFactors Factors;
 };
 
-class MaterialInstanceAsset final : public MaterialInterfaceAsset
+class ENGINE_API MaterialInstanceAsset final : public MaterialInterfaceAsset
 {
   public:
 	inline static constexpr AssetType AssetType = AssetType::MaterialInstance;

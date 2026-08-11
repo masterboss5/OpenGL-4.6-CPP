@@ -27,13 +27,14 @@ resource::AssetGPURealizationResult resource::Texture2DAsset::RealizeGPU(pipelin
 	try
 	{
 		(void)Device.RequireCurrentContext();
-		renderer::texture::Texture2DSpecification Specification = renderer::texture::Texture2DSpecification::DefaultInstance;
-		renderer::texture::Texture2DCreationInfo CreationInfo{.Pixels = this->Pixels.data(),
+		pipeline::texture::Texture2DSpecification Specification = pipeline::texture::Texture2DSpecification::DefaultInstance;
+		pipeline::texture::Texture2DCreationInfo CreationInfo{.Pixels = this->Pixels.data(),
+															  .PixelBytes = this->Pixels.size(),
 															  .Width = this->Width,
 															  .Height = this->Height,
 															  .Channels = this->Channels,
 															  .Specification = Specification};
-		this->GPUTexture = std::make_unique<renderer::texture::Texture2D>(Device, this->Name, CreationInfo);
+		this->GPUTexture = std::make_unique<pipeline::texture::Texture2D>(Device, this->Name, CreationInfo);
 		return {};
 	}
 	catch (const std::exception &Exception)
@@ -58,7 +59,7 @@ std::span<const uint8> resource::Texture2DAsset::GetPixels() const noexcept
 {
 	return this->Pixels;
 }
-const renderer::texture::Texture2D *resource::Texture2DAsset::GetGPUTexture() const noexcept
+const pipeline::texture::Texture2D *resource::Texture2DAsset::GetGPUTexture() const noexcept
 {
 	return this->GPUTexture.get();
 }

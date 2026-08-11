@@ -10,13 +10,16 @@ CObjectMeshComponent::CObjectMeshComponent(world::ObjectHandle Owner, resource::
 {
 	if (!this->Model)
 		throw std::invalid_argument("Mesh component requires a ModelAsset handle");
+	if (this->Model.Pin() == nullptr)
+		throw std::invalid_argument("Mesh component model asset is unavailable");
 }
 
 void CObjectMeshComponent::SetModel(resource::AssetHandle<resource::ModelAsset> Replacement)
 {
 	if (!Replacement)
 		throw std::invalid_argument("Mesh component requires a ModelAsset handle");
-	(void)Replacement.Pin();
+	if (Replacement.Pin() == nullptr)
+		throw std::invalid_argument("Mesh component model asset is unavailable");
 	this->Model = std::move(Replacement);
 	this->MaterialOverrides.clear();
 }
@@ -62,7 +65,8 @@ void CObjectMeshComponent::SetLODPolicy(MeshLODPolicy Value)
 
 void CObjectMeshComponent::OnAttachment()
 {
-	(void)this->Model.Pin();
+	if (this->Model.Pin() == nullptr)
+		throw std::runtime_error("Mesh component model asset is unavailable during attachment");
 }
 
 void CObjectMeshComponent::ValidateOverride(resource::ModelMeshInstanceID MeshInstanceID, resource::MaterialSlotID MaterialSlot,
@@ -70,12 +74,17 @@ void CObjectMeshComponent::ValidateOverride(resource::ModelMeshInstanceID MeshIn
 {
 	if (!Material)
 		throw std::invalid_argument("Mesh material override requires a material handle");
-	(void)Material.Pin();
+	if (Material.Pin() == nullptr)
+		throw std::invalid_argument("Mesh material override references an unavailable material asset");
 	auto PinnedModel = this->Model.Pin();
+	if (PinnedModel == nullptr)
+		throw std::runtime_error("Mesh component model asset became unavailable while validating an override");
 	const resource::ModelMeshInstance *Instance = PinnedModel->FindMeshInstance(MeshInstanceID);
 	if (Instance == nullptr)
 		throw std::invalid_argument("Mesh material override references a missing model mesh instance");
 	auto PinnedMesh = Instance->Mesh.Pin();
+	if (PinnedMesh == nullptr)
+		throw std::runtime_error("Mesh component model references an unavailable mesh asset");
 	if (PinnedMesh->FindMaterialSlot(MaterialSlot) == nullptr)
 	{
 		throw std::invalid_argument("Mesh material override references a missing mesh material slot");
