@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{4EAFD575-E0BC-49B9-A6DB-A843B57B57DA}</ProjectGuid>
+    <RootNamespace>OpenFrameEngine</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <PropertyGroup><TargetName>OpenFrameEngine</TargetName></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="EngineProject.props" />
+  </ImportGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>ENGINE_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;Ole32.lib;Propsys.lib;Dwmapi.lib;Comctl32.lib;Comdlg32.lib;Credui.lib;Uxtheme.lib;Imm32.lib;Wtsapi32.lib;Xinput.lib;Advapi32.lib;glew32.lib;assimp-vc145-mt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+	<ItemGroup>
+		<RuntimeDependency Include="$(ProjectDir)..\..\..\ThirdParty\ASSIMP\lib\assimp-vc145-mt.dll" />
+		<RuntimeDependency Include="$(ProjectDir)..\..\..\ThirdParty\GLEW\bin\Release\x64\glew32.dll" />
+	</ItemGroup>
+	<Target Name="DeployRuntimeDependencies" AfterTargets="Build">
+		<Copy SourceFiles="@(RuntimeDependency)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+	</Target>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\ThirdParty\ZSTD\lib\common\*.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="..\..\..\ThirdParty\ZSTD\lib\compress\*.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="..\..\..\ThirdParty\ZSTD\lib\decompress\*.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="..\..\Source\animation\**\*.cpp" />
+    <ClCompile Include="..\..\Source\component\**\*.cpp" />
+    <ClCompile Include="..\..\Source\core\EngineVersion.cpp" />
+    <ClCompile Include="..\..\Source\core\app\**\*.cpp" />
+    <ClCompile Include="..\..\Source\core\diagnostics\**\*.cpp" />
+    <ClCompile Include="..\..\Source\core\input\**\*.cpp" />
+    <ClCompile Include="..\..\Source\core\io\**\*.cpp" />
+    <ClCompile Include="..\..\Source\core\threading\**\*.cpp" />
+    <ClCompile Include="..\..\Source\core\time\**\*.cpp" />
+    <ClCompile Include="..\..\Source\core\window\**\*.cpp" />
+    <ClCompile Include="..\..\Source\pipeline\**\*.cpp" Exclude="..\..\Source\pipeline\validation\**\*.cpp" />
+    <ClCompile Include="..\..\Source\resource\**\*.cpp" />
+    <ClCompile Include="..\..\Source\runtime\**\*.cpp" />
+    <ClCompile Include="..\..\Source\scene\**\*.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\Source\animation\**\*.h" />
+    <ClInclude Include="..\..\Source\component\**\*.h" />
+    <ClInclude Include="..\..\Source\core\**\*.h" Exclude="..\..\Source\core\layers\EditorLayer.h;..\..\Source\core\layers\GameLayer.h" />
+    <ClInclude Include="..\..\Source\pipeline\**\*.h" Exclude="..\..\Source\pipeline\validation\**\*.h" />
+    <ClInclude Include="..\..\Source\resource\**\*.h" />
+    <ClInclude Include="..\..\Source\runtime\**\*.h" />
+    <ClInclude Include="..\..\Source\scene\**\*.h" />
+    <ClInclude Include="..\..\Source\concepts.h" />
+    <ClInclude Include="..\..\Source\meta.h" />
+    <ClInclude Include="..\..\Source\types.h" />
+    <ClInclude Include="..\..\Source\util\**\*.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

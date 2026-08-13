@@ -2,27 +2,27 @@
 
 ## Project Structure & Module Organization
 
-`OpenGL/` is the application project. Its C++ sources live in `OpenGL/src/`, organized by responsibility: `core/` contains application, window, input, and layers; `pipeline/` owns GPU buffers, shaders, and textures; `renderer/` implements rendering; `scene/` defines cameras, objects, and lights; `resource/` imports and manages assets; and `component/` contains object components. Keep declarations in `.h` files beside their `.cpp` implementations.
+`OpenFrame/` is the application tree. Its C++ sources live in `OpenFrame/Source/`, organized by responsibility: `core/` contains application, window, input, and layers; `pipeline/` owns GPU buffers, shaders, textures, render graphs, and rendering; `scene/` defines cameras, objects, and lights; `resource/` imports and manages assets; `runtime/` owns packaged-project execution; `editor/` owns project authoring; and `component/` contains object components. Keep declarations in `.h` files beside their `.cpp` implementations.
 
-Runtime assets are in `OpenGL/shader/`, `OpenGL/objects/`, and `OpenGL/image/`. `Dependencies/` contains vendored GLFW, GLEW, GLM, STB, TinyObjLoader, and Assimp files; do not edit or replace these as part of normal feature work. The root `OpenGL.sln` and `OpenGL.vcxproj` are the Visual Studio build entry points. Some legacy duplicate asset folders exist at the repository root; use the copies under `OpenGL/` for new code.
+Runtime shaders and application assets are in `OpenFrame/Shaders/` and `OpenFrame/Assets/`. Visual Studio project definitions live in `OpenFrame/Build/VisualStudio/`. `ThirdParty/` contains the build-used portions of vendored GLFW, GLEW, GLM, STB, Assimp, Dear ImGui, nlohmann/json, and Zstandard distributions; retain each dependency's license notice. The root `OpenFrame.sln` contains the OpenFrameEngine, OpenFrameTools, OpenFrameEditor, OpenFrameGame, and OpenFrameValidation targets. `Projects/Baseplate/` is the bundled sample project. Build products belong only under `Artifacts/`.
 
 ## Build, Test, and Development Commands
 
-Use Visual Studio 2022 with the v143 toolset and Windows SDK 10.0. Select **Debug | x64** for local development, then build `OpenGL.sln` (`Ctrl+Shift+B`) and run with `F5`. From a Developer PowerShell, the equivalent is:
+Use Visual Studio 2022 with the v143 toolset and Windows SDK 10.0.26100.0. Select **Debug | x64** for local development, then build `OpenFrame.sln` (`Ctrl+Shift+B`) and run OpenFrameEditor with `F5`. The editor and packaged game accept no command-line project arguments; project creation and opening are GUI workflows. From a Developer PowerShell, the equivalent developer build is:
 
 ```powershell
-msbuild OpenGL.sln /p:Configuration=Debug /p:Platform=x64
+msbuild OpenFrame.sln /p:Configuration=Debug /p:Platform=x64
 ```
 
-Use `Release | x64` for an optimized build. The project targets C++20 and links GLFW, static GLEW, OpenGL, and Assimp. No automated test project is currently configured; validate changes by building the affected configuration and running the application.
+Use `Release | x64` for an optimized build. The project targets C++20 and links GLFW, GLEW, OpenGL, Assimp, Dear ImGui, nlohmann/json, and Zstandard. Run `OpenFrameValidation.exe --all` from `Artifacts/<Configuration>/` for deterministic validation, then perform relevant editor/game GUI smoke tests.
 
 ## Coding Style & Naming Conventions
 
-Format project-owned C++ with the root `.clang-format`: tabs at width 4, Allman braces, and a 140-column limit. Use `clang-format -i OpenGL/src/**/*.{h,cpp}` from a shell that expands recursive globs, or pass the files reported by `rg --files OpenGL/src -g "*.h" -g "*.cpp"`. Keep `#pragma once` include guards and order includes with the local header first.
+Format project-owned C++ with the root `.clang-format`: tabs at width 4, Allman braces, and a 140-column limit. Pass the files reported by `rg --files OpenFrame/Source -g "*.h" -g "*.cpp"` to `clang-format -i`. Keep `#pragma once` include guards and order includes with the local header first.
 
-Use PascalCase for classes, structs, unions, concepts, functions, methods, constants, enumerators, parameters, fields, and local variables. Keep namespaces lowercase and retain the lowercase fundamental aliases in `src/types.h`. Preserve established initialisms (`OpenGLRenderer`, `GPUBuffer`, `CPUData`, `ObjectID`). When a parameter and field have the same name, qualify the field explicitly, for example `this->BufferSize = BufferSize`.
+Use PascalCase for classes, structs, unions, concepts, functions, methods, constants, enumerators, parameters, fields, and local variables. Keep namespaces lowercase and retain the lowercase fundamental aliases in `OpenFrame/Source/types.h`. Preserve established initialisms (`OpenGLRenderer`, `GPUBuffer`, `CPUData`, `ObjectID`). When a parameter and field have the same name, qualify the field explicitly, for example `this->BufferSize = BufferSize`.
 
-Never introduce raw engine numeric types when an alias exists in `src/types.h`. Exact native, OpenGL, callback, entry-point, and textual boundary signatures may retain their required types. Put reusable semantic template constraints in `src/concepts.h` whenever doing so does not create a dependency cycle. Mark concrete leaf classes `final`, use `override` on every override, and apply standard attributes only where their semantics improve correctness.
+Never introduce raw engine numeric types when an alias exists in `OpenFrame/Source/types.h`. Exact native, OpenGL, callback, entry-point, and textual boundary signatures may retain their required types. Put reusable semantic template constraints in `OpenFrame/Source/concepts.h` whenever doing so does not create a dependency cycle. Mark concrete leaf classes `final`, use `override` on every override, and apply standard attributes only where their semantics improve correctness.
 
 Keep GPU-resource ownership explicit and pair new headers/sources in the appropriate module. Add shader files with descriptive PascalCase names such as `LightingFragment.glsl`.
 
@@ -30,7 +30,7 @@ Keep GPU-resource ownership explicit and pair new headers/sources in the appropr
 
 For rendering or asset changes, test the relevant scene manually and verify that shader and asset paths resolve from the working directory. Include reproduction/verification notes and screenshots for visible rendering changes. Keep commits focused and use concise imperative subjects, for example `Add spot light attenuation`. In pull requests, describe the behavior change, configuration tested, affected assets, and any follow-up work.
 
-Place code in the module that owns its responsibility. Keep resource-specific behavior with that resource, shared OpenGL runtime/context/error handling in `src/pipeline/device/`, and reusable pipeline abstractions in their dedicated pipeline module. Do not place cross-cutting helpers in a feature or resource `.cpp` merely because that is where they are first needed; create or extend the appropriate shared module and use it from callers.
+Place code in the module that owns its responsibility. Keep resource-specific behavior with that resource, shared OpenGL runtime/context/error handling in `OpenFrame/Source/pipeline/device/`, and reusable pipeline abstractions in their dedicated pipeline module. Do not place cross-cutting helpers in a feature or resource `.cpp` merely because that is where they are first needed; create or extend the appropriate shared module and use it from callers.
 
 ## Production Engine Standard
 
@@ -50,7 +50,7 @@ Always use multi threaded, most performant option.
 
 Always go big, when we implement an feature, always plan for adding the full feature and AAA like capabaility.
 
-Never ever use raw types such as int, char, long or etc. Always use the ones aliased in types.h under src
+Never ever use raw types such as int, char, long or etc. Always use the ones aliased in OpenFrame/Source/types.h.
 
 This engine is not a hobbyist level, we are going to push for max graphics such as full on PBR materials and most demanding lights. We are not just building simple gl wrappers, we are defining our own engine systems.
 

@@ -1,0 +1,43 @@
+{
+    "FormatVersion":  1,
+    "ID":  "1782f8f7-efd0-4687-bf6c-8f5026fe1c64",
+    "EngineSchemaVersion":  1,
+    "Name":  "Baseplate",
+    "ContentMounts":  [
+                          {
+                              "VirtualRoot":  "/Game",
+                              "PhysicalRoot":  "Content",
+                              "ReadOnly":  false
+                          }
+                      ],
+    "StartupScene":  "Scenes/Baseplate.enginelevel",
+    "GameModule":  "",
+    "BuildConfigurations":  [
+                                {
+                                    "Name":  "Development",
+                                    "Optimized":  false,
+                                    "IncludeDebugSymbols":  true
+                                },
+                                {
+                                    "Name":  "Shipping",
+                                    "Optimized":  true,
+                                    "IncludeDebugSymbols":  false
+                                }
+                            ],
+    "Cook":  {
+                 "CompressionLevel":  9,
+                 "ArchiveChunkSizeBytes":  67108864,
+                 "Deterministic":  true
+             },
+    "ArchiveChunks":  [
+                          {
+                              "Name":  "Main",
+                              "VirtualRoots":  [
+                                                   "/Game"
+                                               ]
+                          }
+                      ],
+    "EnabledFeatures":  [
+
+                        ]
+}
