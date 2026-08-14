@@ -61,6 +61,21 @@ void SelectionSet::Prune(const world::Scene &Scene)
 	}
 }
 
+void SelectionSet::Prune(const instance::InstanceGraph &Graph)
+{
+	for (auto Iterator = this->Ordered.begin(); Iterator != this->Ordered.end();)
+	{
+		if (Graph.Contains(*Iterator))
+		{
+			++Iterator;
+			continue;
+		}
+		this->Membership.erase(*Iterator);
+		Iterator = this->Ordered.erase(Iterator);
+	}
+	this->Primary = this->Ordered.empty() ? util::UUID{} : this->Ordered.back();
+}
+
 bool SelectionSet::Contains(const util::UUID &Object) const
 {
 	return this->Membership.contains(Object);

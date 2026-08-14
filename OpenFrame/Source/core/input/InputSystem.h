@@ -4,6 +4,7 @@
 
 #include <array>
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -41,6 +42,7 @@ class ENGINE_API InputSystem final
 	[[nodiscard]] ControllerCapabilities GetControllerCapabilities(ControllerID Controller) const;
 	void SetControllerHaptics(ControllerID Controller, HapticState State);
 	void StopAllHaptics() noexcept;
+	[[nodiscard]] std::weak_ptr<const uint8> GetLifetimeToken() const noexcept;
 
   private:
 	struct SnapshotKey final
@@ -79,5 +81,6 @@ class ENGINE_API InputSystem final
 	std::array<std::optional<ControllerCapabilities>, 4> ControllerCapabilitySlots;
 	std::array<uint32, 4> ControllerPackets{};
 	std::array<std::chrono::steady_clock::time_point, 4> ControllerCapabilityRefresh{};
+	std::shared_ptr<const uint8> LifetimeToken = std::make_shared<const uint8>(uint8{0});
 };
 } // namespace core::input

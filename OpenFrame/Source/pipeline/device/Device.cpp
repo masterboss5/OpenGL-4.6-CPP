@@ -426,7 +426,12 @@ void Device::UnregisterContext(core::Context &Context)
 {
 	std::scoped_lock Lock(this->ContextMutex);
 	if (Context.GetStatus() == core::ContextStatus::Ready && !Context.IsCurrent())
-		Context.MakeCurrent();
+	{
+		if (Context.IsThreadTransferPending())
+			Context.AdoptCurrentThread();
+		else
+			Context.MakeCurrent();
+	}
 	this->DisableDiagnostics(Context);
 	const auto Iterator = std::remove(this->Contexts.begin(), this->Contexts.end(), &Context);
 	this->Contexts.erase(Iterator, this->Contexts.end());

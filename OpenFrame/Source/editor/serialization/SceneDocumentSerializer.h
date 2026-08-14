@@ -53,15 +53,16 @@ class SceneDocumentMigrationRegistry final
 class SceneDocumentSerializer final
 {
   public:
-	static constexpr uint32 CurrentFormatVersion = 1;
+	static constexpr uint32 CurrentFormatVersion = 2;
 	static constexpr uint32 CurrentEngineSchemaVersion = 1;
 	static constexpr uint32 CurrentComponentSchemaVersion = 1;
 
 	static void Save(document::SceneDocument &Document, const reflection::ReflectionRegistry &Reflection, resource::AssetManager &Assets,
 					 const std::filesystem::path &Path = {});
 	static void SaveSnapshot(const util::UUID &DocumentID, string_view DocumentName, const world::Scene &Scene,
-							 const reflection::ReflectionRegistry &Reflection, resource::AssetManager &Assets,
-							 const std::filesystem::path &Path, uint64 Revision, int64 TimestampMilliseconds);
+							 const instance::InstanceGraphSnapshot &Instances, const reflection::ReflectionRegistry &Reflection,
+							 resource::AssetManager &Assets, const std::filesystem::path &Path, uint64 Revision,
+							 int64 TimestampMilliseconds);
 	[[nodiscard]] static std::unique_ptr<document::SceneDocument> Load(const std::filesystem::path &Path,
 																	   const reflection::ReflectionRegistry &Reflection,
 																	   resource::AssetManager &Assets, usize CommandHistoryCapacity = 4'096,

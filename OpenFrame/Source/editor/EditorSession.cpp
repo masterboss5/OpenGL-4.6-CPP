@@ -46,6 +46,8 @@ EditorSession::EditorSession(project::ProjectDescriptor ProjectDescriptor, strin
 {
 	this->ProjectManagerInstance.GetProject().ValidateLayout();
 	this->ProjectManagerInstance.GetProject().CreateMissingDirectories();
+	this->Document->ConfigureRuntimeAssets(this->ProjectManagerInstance.GetProject().GetAssetManager(), this->PrimitiveMeshFactory,
+										   &this->BehaviorRegistry);
 	this->TransformGizmo.SetSnapSettings({.Enabled = this->Preferences.TransformSnappingEnabled,
 										  .Translation = this->Preferences.TranslationSnap,
 										  .RotationDegrees = this->Preferences.RotationSnapDegrees,
@@ -96,10 +98,9 @@ void EditorSession::WaitForBackgroundWork() noexcept
 
 void EditorSession::RequestHierarchyRefresh(core::threading::TaskScheduler &Scheduler)
 {
-	if (this->PendingHierarchy.valid() || this->Hierarchy.SceneRevision == this->Document->GetRevision())
+	if (this->PendingHierarchy.valid() || this->Hierarchy.SceneRevision == this->Document->GetInstances().GetRevision())
 		return;
-	this->PendingHierarchy =
-		hierarchy::SceneHierarchyBuilder::BuildAsync(Scheduler, this->Document->GetScene(), this->Document->GetRevision());
+	this->PendingHierarchy = hierarchy::SceneHierarchyBuilder::BuildAsync(Scheduler, this->Document->GetInstances());
 }
 
 void EditorSession::RequestContentRefresh(core::threading::TaskScheduler &Scheduler)
@@ -115,7 +116,7 @@ bool EditorSession::PollHierarchyRefresh()
 	}
 
 	hierarchy::SceneHierarchySnapshot Replacement = this->PendingHierarchy.get();
-	if (Replacement.SceneRevision != this->Document->GetRevision())
+	if (Replacement.SceneRevision != this->Document->GetInstances().GetRevision())
 		return false;
 	this->Hierarchy = std::move(Replacement);
 	this->FilteredHierarchy = hierarchy::SceneHierarchyBuilder::Filter(this->Hierarchy, this->HierarchyFilter);
@@ -253,7 +254,7 @@ void EditorSession::StartPlay(core::threading::TaskScheduler &Scheduler)
 		if (!this->GameModuleManager.IsLoaded())
 			throw play::PlaySessionException("Configured game module is not loadable: " + this->GameModuleManager.GetDiagnostic());
 	}
-	this->PlaySession.Start(this->Document->GetScene(), play::PlaySessionMode::Play);
+	this->PlaySession.Start(*this->Document, play::PlaySessionMode::Play);
 }
 
 void EditorSession::StartSimulate()
@@ -261,7 +262,7 @@ void EditorSession::StartSimulate()
 	if (this->TransformGizmo.IsDragging())
 		this->TransformGizmo.CancelDrag();
 	this->CancelViewportPicks();
-	this->PlaySession.Start(this->Document->GetScene(), play::PlaySessionMode::Simulate);
+	this->PlaySession.Start(*this->Document, play::PlaySessionMode::Simulate);
 }
 
 void EditorSession::TickPlay(core::threading::TaskScheduler &Scheduler, const float64 DeltaSeconds)
@@ -416,6 +417,8 @@ void EditorSession::OpenDocument(const std::filesystem::path &Path)
 	}
 	std::unique_ptr<document::SceneDocument> Replacement = serialization::SceneDocumentSerializer::Load(
 		Path, this->Reflection, this->ProjectManagerInstance.GetProject().GetAssetManager(), this->Preferences.CommandHistoryCapacity);
+	Replacement->ConfigureRuntimeAssets(this->ProjectManagerInstance.GetProject().GetAssetManager(), this->PrimitiveMeshFactory,
+										&this->BehaviorRegistry);
 	this->Document = std::move(Replacement);
 	this->Hierarchy = {};
 	this->FilteredHierarchy = {};
@@ -444,6 +447,8 @@ void EditorSession::RecoverDocument(const recovery::EditorRecoveryCandidate &Can
 		Verified->SnapshotPath, this->Reflection, this->ProjectManagerInstance.GetProject().GetAssetManager(),
 		this->Preferences.CommandHistoryCapacity);
 	Replacement->MarkRecovered(Verified->OriginalPath);
+	Replacement->ConfigureRuntimeAssets(this->ProjectManagerInstance.GetProject().GetAssetManager(), this->PrimitiveMeshFactory,
+										&this->BehaviorRegistry);
 	this->Document = std::move(Replacement);
 	this->Hierarchy = {};
 	this->FilteredHierarchy = {};
@@ -473,20 +478,43 @@ void EditorSession::CopySelection()
 {
 	const std::vector<util::UUID> &Selection = this->Document->GetSelection().GetOrdered();
 	if (Selection.empty())
-		throw std::logic_error("Cannot copy an empty scene selection");
-	this->ObjectClipboard = commands::SceneObjectSnapshot::Capture(*this->Document, Selection);
+		throw std::logic_error("Cannot copy an empty instance selection");
+	this->InstanceClipboard = commands::CaptureInstanceArchive(this->Document->GetInstances(), Selection);
+	const bool EveryRootHasRuntimeObject = std::ranges::all_of(this->InstanceClipboard->Roots, [this](const util::UUID &ID)
+															   { return this->Document->GetScene().FindObject(ID).IsValid(); });
+	if (EveryRootHasRuntimeObject)
+		this->ObjectClipboard = commands::SceneObjectSnapshot::Capture(*this->Document, this->InstanceClipboard->Roots);
+	else
+		this->ObjectClipboard.reset();
 }
 
 void EditorSession::PasteClipboard()
 {
 	if (!this->CanPasteClipboard())
-		throw std::logic_error("Cannot paste because the scene-object clipboard is empty");
-	this->Document->Execute(std::make_unique<commands::PasteObjectsCommand>(*this->Document, *this->ObjectClipboard));
+		throw std::logic_error("Cannot paste because the instance clipboard is empty");
+	if (this->ObjectClipboard.has_value())
+		this->Document->Execute(std::make_unique<commands::PasteObjectsCommand>(*this->Document, *this->ObjectClipboard));
+	else
+		this->Document->Execute(std::make_unique<commands::PasteInstanceArchiveCommand>(*this->Document, *this->InstanceClipboard));
 }
 
 bool EditorSession::CanPasteClipboard() const noexcept
 {
-	return this->ObjectClipboard.has_value() && !this->ObjectClipboard->Empty();
+	return this->InstanceClipboard.has_value() && !this->InstanceClipboard->Empty();
+}
+
+void EditorSession::DuplicateSelection()
+{
+	const std::vector<util::UUID> Selection = this->Document->GetSelection().GetOrdered();
+	if (Selection.empty())
+		throw std::logic_error("Cannot duplicate an empty instance selection");
+	const commands::InstanceArchive Archive = commands::CaptureInstanceArchive(this->Document->GetInstances(), Selection);
+	const bool EveryRootHasRuntimeObject =
+		std::ranges::all_of(Archive.Roots, [this](const util::UUID &ID) { return this->Document->GetScene().FindObject(ID).IsValid(); });
+	if (EveryRootHasRuntimeObject)
+		this->Document->Execute(std::make_unique<commands::DuplicateObjectsCommand>(*this->Document, Archive.Roots));
+	else
+		this->Document->Execute(std::make_unique<commands::PasteInstanceArchiveCommand>(*this->Document, Archive));
 }
 
 void EditorSession::GroupSelection()
@@ -496,75 +524,27 @@ void EditorSession::GroupSelection()
 	const std::vector<util::UUID> Selection = this->Document->GetSelection().GetOrdered();
 	if (Selection.empty())
 		throw std::logic_error("Cannot group an empty scene selection");
-
-	const hierarchy::SceneHierarchySnapshot Snapshot =
-		hierarchy::SceneHierarchyBuilder::Build(this->Document->GetScene(), this->Document->GetRevision());
-	const std::unordered_set<util::UUID> Selected(Selection.begin(), Selection.end());
-	std::vector<const hierarchy::SceneHierarchyRow *> Roots;
-	for (const hierarchy::SceneHierarchyRow &Row : Snapshot.Rows)
-	{
-		if (!Selected.contains(Row.PersistentID))
-			continue;
-		uint32 Parent = Row.ParentRow;
-		bool HasSelectedAncestor = false;
-		while (Parent != hierarchy::InvalidHierarchyRow)
-		{
-			if (Selected.contains(Snapshot.Rows[Parent].PersistentID))
-			{
-				HasSelectedAncestor = true;
-				break;
-			}
-			Parent = Snapshot.Rows[Parent].ParentRow;
-		}
-		if (!HasSelectedAncestor)
-			Roots.push_back(&Row);
-	}
-	if (Roots.empty())
-		throw std::logic_error("Scene selection did not resolve to any groupable hierarchy roots");
-
-	const uint32 FirstParentRow = Roots.front()->ParentRow;
-	const bool CommonParent =
-		std::ranges::all_of(Roots, [FirstParentRow](const hierarchy::SceneHierarchyRow *Row) { return Row->ParentRow == FirstParentRow; });
-	const util::UUID ParentID =
-		CommonParent && FirstParentRow != hierarchy::InvalidHierarchyRow ? Snapshot.Rows[FirstParentRow].PersistentID : util::UUID{};
-	const uint32 SiblingOrder = std::ranges::min(Roots, {}, &hierarchy::SceneHierarchyRow::SiblingOrder)->SiblingOrder;
-
-	glm::vec3 WorldCenter(0.0f);
-	glm::mat4 ParentWorld(1.0f);
-	{
-		auto Access = this->Document->GetScene().Read();
-		const world::SceneTransformSnapshot WorldTransforms = world::SceneTransformSnapshot::Build(Access);
-		for (const hierarchy::SceneHierarchyRow *Row : Roots)
-			WorldCenter += WorldTransforms.GetPosition(Row->Object);
-		WorldCenter /= static_cast<float32>(Roots.size());
-		if (ParentID.IsValid())
-			ParentWorld = WorldTransforms.GetMatrix(Snapshot.Rows[FirstParentRow].Object);
-	}
-	if (std::abs(glm::determinant(glm::mat3(ParentWorld))) <= 1.0e-6f)
-		throw world::SceneException("Cannot group objects under a non-invertible parent transform");
-	const glm::vec3 LocalCenter = glm::vec3(glm::inverse(ParentWorld) * glm::vec4(WorldCenter, 1.0f));
-
+	const commands::InstanceArchive InstanceSelection = commands::CaptureInstanceArchive(this->Document->GetInstances(), Selection);
+	const instance::InstanceRecord First = this->Document->GetInstances().Get(InstanceSelection.Roots.front());
+	const bool CommonParent = std::ranges::all_of(InstanceSelection.Roots, [this, &First](const util::UUID &ID)
+												  { return this->Document->GetInstances().Get(ID).Parent == First.Parent; });
+	const util::UUID Parent = CommonParent ? First.Parent : this->Document->GetInstances().GetWorkspace();
+	const util::UUID FirstSibling = *std::ranges::min_element(InstanceSelection.Roots, {}, [this](const util::UUID &ID)
+															  { return this->Document->GetInstances().Get(ID).SiblingOrder; });
+	const uint32 SiblingOrder = this->Document->GetInstances().Get(FirstSibling).SiblingOrder;
 	commands::CommandHistory &History = this->Document->GetHistory();
-	History.BeginTransaction("Group Objects");
+	History.BeginTransaction("Group Instances");
 	try
 	{
-		auto Create = std::make_unique<commands::CreateObjectCommand>(*this->Document, "Group", ParentID);
-		const util::UUID GroupID = Create->GetPersistentID();
+		auto Create = std::make_unique<commands::CreateInstanceCommand>(*this->Document, instance::class_ids::Folder, Parent);
+		const util::UUID FolderID = Create->GetInstanceID();
 		History.Execute(std::move(Create));
-		const world::ObjectHandle Group = this->Document->GetScene().FindObject(GroupID);
-		const std::array TransformTarget{commands::TransformEditTarget{
-			.Object = Group, .Before = {}, .After = {.Position = LocalCenter, .Rotation = {}, .Scale = glm::vec3(1.0f)}}};
-		History.Execute(commands::TransformEditCommand::Create(this->Document->GetScene(), TransformTarget));
-		History.Execute(std::make_unique<commands::ReparentObjectCommand>(*this->Document, GroupID, ParentID, SiblingOrder,
-																		  commands::ReparentTransformRule::PreserveWorld));
+		History.Execute(std::make_unique<commands::ReparentInstanceCommand>(*this->Document, FolderID, Parent, SiblingOrder));
 		uint32 ChildOrder = 0;
-		for (const hierarchy::SceneHierarchyRow *Row : Roots)
-		{
-			History.Execute(std::make_unique<commands::ReparentObjectCommand>(*this->Document, Row->PersistentID, GroupID, ChildOrder++,
-																			  commands::ReparentTransformRule::PreserveWorld));
-		}
+		for (const util::UUID &Root : InstanceSelection.Roots)
+			History.Execute(std::make_unique<commands::ReparentInstanceCommand>(*this->Document, Root, FolderID, ChildOrder++));
 		History.CommitTransaction();
-		this->Document->GetSelection().SelectOnly(GroupID);
+		this->Document->GetSelection().SelectOnly(FolderID);
 	}
 	catch (...)
 	{
@@ -583,12 +563,33 @@ void EditorSession::CloneSelectedPrivateMaterials(core::threading::TaskScheduler
 
 void EditorSession::DeleteSelectedObjects(core::threading::TaskScheduler &Scheduler)
 {
-	std::vector<util::UUID> Objects = this->Document->GetSelection().GetOrdered();
-	if (Objects.empty())
-		throw std::invalid_argument("Deleting scene objects requires a non-empty selection");
+	const std::vector<util::UUID> Selection = this->Document->GetSelection().GetOrdered();
+	if (Selection.empty())
+		throw std::invalid_argument("Deleting instances requires a non-empty selection");
+	const commands::InstanceArchive Archive = commands::CaptureInstanceArchive(this->Document->GetInstances(), Selection);
+	const bool EveryRootHasRuntimeObject =
+		std::ranges::all_of(Archive.Roots, [this](const util::UUID &ID) { return this->Document->GetScene().FindObject(ID).IsValid(); });
+	if (!EveryRootHasRuntimeObject)
+	{
+		commands::CommandHistory &History = this->Document->GetHistory();
+		History.BeginTransaction(Archive.Roots.size() == 1U ? "Delete Instance" : "Delete Instances");
+		try
+		{
+			for (const util::UUID &Root : Archive.Roots)
+				History.Execute(std::make_unique<commands::DeleteInstanceCommand>(*this->Document, Root));
+			History.CommitTransaction();
+		}
+		catch (...)
+		{
+			if (History.HasOpenTransaction())
+				History.CancelTransaction();
+			throw;
+		}
+		return;
+	}
 	material::PrivateMaterialAssignmentService *const Materials = &this->PrivateMaterialAssignmentService;
 	this->Document->Execute(std::make_unique<commands::DeleteObjectsCommand>(
-		*this->Document, std::move(Objects), [Materials, &Scheduler](std::vector<resource::AssetID> Assets)
+		*this->Document, Archive.Roots, [Materials, &Scheduler](std::vector<resource::AssetID> Assets)
 		{ Materials->QueueRetirementCandidates(std::move(Assets), Scheduler); }));
 }
 

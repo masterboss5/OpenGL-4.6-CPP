@@ -8,13 +8,13 @@ void EditorTheme::ApplyDark()
 {
 	ImGui::StyleColorsDark();
 	ImGuiStyle &Style = ImGui::GetStyle();
-	Style.WindowRounding = 2.0f;
-	Style.ChildRounding = 2.0f;
-	Style.FrameRounding = 3.0f;
-	Style.PopupRounding = 3.0f;
-	Style.ScrollbarRounding = 4.0f;
-	Style.GrabRounding = 3.0f;
-	Style.TabRounding = 3.0f;
+	Style.WindowRounding = 7.0f;
+	Style.ChildRounding = 7.0f;
+	Style.FrameRounding = 7.0f;
+	Style.PopupRounding = 8.0f;
+	Style.ScrollbarRounding = 9.0f;
+	Style.GrabRounding = 7.0f;
+	Style.TabRounding = 7.0f;
 	Style.FramePadding = ImVec2(7.0f, 5.0f);
 	Style.ItemSpacing = ImVec2(7.0f, 5.0f);
 	Style.WindowBorderSize = 1.0f;

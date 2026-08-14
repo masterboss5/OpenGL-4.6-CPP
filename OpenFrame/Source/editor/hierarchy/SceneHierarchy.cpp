@@ -176,11 +176,149 @@ SceneHierarchySnapshot SceneHierarchyBuilder::Build(const world::Scene &Scene, c
 	return Snapshot;
 }
 
+SceneHierarchySnapshot SceneHierarchyBuilder::Build(const instance::InstanceGraph &Graph)
+{
+	const instance::InstanceGraphSnapshot Source = Graph.Snapshot();
+	SceneHierarchySnapshot Result{.SceneRevision = Source.Revision};
+	Result.Rows.reserve(Source.Instances.size());
+	std::unordered_map<util::UUID, uint32> RowsByID;
+	RowsByID.reserve(Source.Instances.size());
+	for (const instance::InstanceRecord &Record : Source.Instances)
+	{
+		const uint32 ParentRow = Record.Parent.IsValid() ? RowsByID.at(Record.Parent) : InvalidHierarchyRow;
+		const uint32 Row = static_cast<uint32>(Result.Rows.size());
+		Result.Rows.push_back({.PersistentID = Record.ID,
+							   .Name = Record.Name,
+							   .ClassID = Record.ClassID,
+							   .ClassName = Record.ClassName,
+							   .Activation = Graph.GetActivation(Record.ID),
+							   .Protected = Record.Protected,
+							   .Depth = ParentRow == InvalidHierarchyRow ? 0U : Result.Rows[ParentRow].Depth + 1U,
+							   .ParentRow = ParentRow,
+							   .ChildCount = static_cast<uint32>(Record.Children.size()),
+							   .SiblingOrder = Record.SiblingOrder,
+							   .Enabled = Record.Enabled,
+							   .EditorVisible = true,
+							   .Locked = Record.Protected});
+		RowsByID.emplace(Record.ID, Row);
+	}
+	return Result;
+}
+
 std::future<SceneHierarchySnapshot> SceneHierarchyBuilder::BuildAsync(core::threading::TaskScheduler &Scheduler, const world::Scene &Scene,
 																	  const uint64 SceneRevision)
 {
 	return Scheduler.Submit([&Scene, SceneRevision]() { return SceneHierarchyBuilder::Build(Scene, SceneRevision); },
 							core::threading::TaskPriority::Background);
+}
+
+std::future<SceneHierarchySnapshot> SceneHierarchyBuilder::BuildAsync(core::threading::TaskScheduler &Scheduler,
+																	  const instance::InstanceGraph &Graph)
+{
+	const instance::InstanceGraphSnapshot Source = Graph.Snapshot();
+	const std::vector<instance::InstanceTypeDescriptor> Types = Graph.GetTypes().GetTypes();
+	return Scheduler.Submit(
+		[Source, Types]()
+		{
+			std::unordered_map<instance::InstanceClassID, instance::InstanceTypeDescriptor> Descriptors;
+			std::unordered_map<util::UUID, const instance::InstanceRecord *> Records;
+			Descriptors.reserve(Types.size());
+			for (const auto &Descriptor : Types)
+				Descriptors.emplace(Descriptor.ClassID, Descriptor);
+			Records.reserve(Source.Instances.size());
+			for (const instance::InstanceRecord &Record : Source.Instances)
+				Records.emplace(Record.ID, &Record);
+			SceneHierarchySnapshot Result{.SceneRevision = Source.Revision};
+			Result.Rows.reserve(Source.Instances.size());
+			std::unordered_map<util::UUID, uint32> RowsByID;
+			RowsByID.reserve(Source.Instances.size());
+			for (const instance::InstanceRecord &Record : Source.Instances)
+			{
+				const uint32 ParentRow = Record.Parent.IsValid() ? RowsByID.at(Record.Parent) : InvalidHierarchyRow;
+				instance::InstanceActivation Activation{.State = instance::InstanceActivationState::Active};
+				const auto Descriptor = Descriptors.find(Record.ClassID);
+				if (Descriptor == Descriptors.end())
+					Activation = {.State = instance::InstanceActivationState::Inactive, .Diagnostic = "Instance class is not registered"};
+				else if (Descriptor->second.Availability == instance::InstanceAvailability::Unavailable)
+					Activation = {.State = instance::InstanceActivationState::Unavailable,
+								  .Diagnostic = "This instance class is not implemented yet"};
+				else if (!Record.Enabled)
+					Activation = {.State = instance::InstanceActivationState::Inactive, .Diagnostic = "Instance is disabled"};
+				else
+				{
+					if (!Descriptor->second.AllowedServiceClasses.empty())
+					{
+						const instance::InstanceRecord *Root = &Record;
+						while (Root->Parent.IsValid())
+						{
+							const auto Parent = Records.find(Root->Parent);
+							if (Parent == Records.end())
+							{
+								Activation = {.State = instance::InstanceActivationState::Inactive,
+											  .Diagnostic = "Instance hierarchy is incomplete"};
+								break;
+							}
+							Root = Parent->second;
+						}
+						if (Activation.State == instance::InstanceActivationState::Active &&
+							std::ranges::find(Descriptor->second.AllowedServiceClasses, Root->ClassID) ==
+								Descriptor->second.AllowedServiceClasses.end())
+						{
+							Activation = {.State = instance::InstanceActivationState::Inactive,
+										  .Diagnostic = "Instance is outside a compatible service hierarchy"};
+						}
+					}
+					if (Activation.State == instance::InstanceActivationState::Active && !Descriptor->second.ExactParentClasses.empty())
+					{
+						const auto Parent = Records.find(Record.Parent);
+						const bool ValidParent =
+							Parent != Records.end() && std::ranges::find(Descriptor->second.ExactParentClasses, Parent->second->ClassID) !=
+														   Descriptor->second.ExactParentClasses.end();
+						if (!ValidParent)
+							Activation = {.State = instance::InstanceActivationState::Inactive,
+										  .Diagnostic = "Immediate parent is incompatible with " + Descriptor->second.DisplayName};
+					}
+					if (Activation.State == instance::InstanceActivationState::Active &&
+						Record.ClassID == instance::class_ids::AnimationTrack)
+					{
+						const auto Clip = Record.Properties.find("Clip");
+						if (Clip == Record.Properties.end() || !std::holds_alternative<instance::InstanceAssetReference>(Clip->second) ||
+							std::get<instance::InstanceAssetReference>(Clip->second).ID.empty())
+						{
+							Activation = {.State = instance::InstanceActivationState::Inactive,
+										  .Diagnostic = "AnimationTrack requires exactly one AnimationClip asset"};
+						}
+					}
+					if (Activation.State == instance::InstanceActivationState::Active && Record.ClassID == instance::class_ids::Script)
+					{
+						const auto StableType = Record.Properties.find("StableTypeID");
+						if (StableType == Record.Properties.end() || !std::holds_alternative<util::UUID>(StableType->second) ||
+							!std::get<util::UUID>(StableType->second).IsValid())
+						{
+							Activation = {.State = instance::InstanceActivationState::Inactive,
+										  .Diagnostic = "Script requires a registered behavior type"};
+						}
+					}
+				}
+				const uint32 Row = static_cast<uint32>(Result.Rows.size());
+				Result.Rows.push_back({.PersistentID = Record.ID,
+									   .Name = Record.Name,
+									   .ClassID = Record.ClassID,
+									   .ClassName = Record.ClassName,
+									   .Activation = std::move(Activation),
+									   .Protected = Record.Protected,
+									   .Depth = ParentRow == InvalidHierarchyRow ? 0U : Result.Rows[ParentRow].Depth + 1U,
+									   .ParentRow = ParentRow,
+									   .ChildCount = static_cast<uint32>(Record.Children.size()),
+									   .SiblingOrder = Record.SiblingOrder,
+									   .Enabled = Record.Enabled,
+									   .EditorVisible = true,
+									   .Locked = Record.Protected});
+				RowsByID.emplace(Record.ID, Row);
+			}
+			return Result;
+		},
+		core::threading::TaskPriority::Background);
 }
 
 SceneHierarchySnapshot SceneHierarchyBuilder::Filter(const SceneHierarchySnapshot &Source, const string_view Query)

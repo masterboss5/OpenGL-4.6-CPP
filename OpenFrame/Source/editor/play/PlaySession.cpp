@@ -36,8 +36,8 @@ struct AppliedTransform final
 class ApplyRuntimeTransformCommand final : public commands::EditorCommand
 {
   public:
-	ApplyRuntimeTransformCommand(world::Scene &Scene, util::UUID ObjectID, AppliedTransform Before, AppliedTransform After)
-		: Scene(&Scene), ObjectID(ObjectID), Before(Before), After(After)
+	ApplyRuntimeTransformCommand(document::SceneDocument &Document, util::UUID ObjectID, AppliedTransform Before, AppliedTransform After)
+		: Document(&Document), ObjectID(ObjectID), Before(Before), After(After)
 	{
 	}
 
@@ -59,17 +59,23 @@ class ApplyRuntimeTransformCommand final : public commands::EditorCommand
   private:
 	void Apply(const AppliedTransform &Value)
 	{
-		const world::ObjectHandle Object = this->Scene->FindObject(this->ObjectID);
+		world::Scene &Scene = this->Document->GetScene();
+		const world::ObjectHandle Object = Scene.FindObject(this->ObjectID);
 		if (!Object.IsValid())
 			throw std::out_of_range("Apply-back target no longer exists");
-		auto Access = this->Scene->Write();
+		if (this->Document->GetInstances().Contains(this->ObjectID))
+		{
+			this->Document->SetInstanceWorldTransform(this->ObjectID, Value.Position, Value.Rotation, Value.Scale);
+			return;
+		}
+		auto Access = Scene.Write();
 		const auto Handle = Access.GetComponent<components::CObjectTransformComponent>(Object);
 		if (!Handle.IsValid())
 			throw std::out_of_range("Apply-back target no longer has a transform component");
 		Access.Resolve(Handle).SetTransform(Value.Position, Value.Rotation, Value.Scale);
 	}
 
-	world::Scene *Scene = nullptr;
+	document::SceneDocument *Document = nullptr;
 	util::UUID ObjectID;
 	AppliedTransform Before;
 	AppliedTransform After;
@@ -137,6 +143,20 @@ void PlaySession::Start(const world::Scene &EditScene, const PlaySessionMode Mod
 	}
 }
 
+void PlaySession::Start(const document::SceneDocument &Document, const PlaySessionMode Mode)
+{
+	this->RuntimeInstances = Document.GetInstances().Snapshot();
+	try
+	{
+		this->Start(Document.GetScene(), Mode);
+	}
+	catch (...)
+	{
+		this->RuntimeInstances = {};
+		throw;
+	}
+}
+
 PlaySessionApplyBackResult PlaySession::ApplyBack(document::SceneDocument &Document, const PlaySessionApplyBackOptions Options)
 {
 	this->RequireOwnerThread();
@@ -191,7 +211,7 @@ PlaySessionApplyBackResult PlaySession::ApplyBack(document::SceneDocument &Docum
 	{
 		for (const PendingChange &Change : Changes)
 			Document.GetHistory().Execute(
-				std::make_unique<ApplyRuntimeTransformCommand>(Document.GetScene(), Change.ObjectID, Change.Before, Change.After));
+				std::make_unique<ApplyRuntimeTransformCommand>(Document, Change.ObjectID, Change.Before, Change.After));
 		Transaction.Commit();
 		Result.ChangedObjects = Changes.size();
 		return Result;
@@ -382,6 +402,11 @@ const string &PlaySession::GetDiagnostic() const
 	return this->Diagnostic;
 }
 
+const instance::InstanceGraphSnapshot &PlaySession::GetRuntimeInstances() const noexcept
+{
+	return this->RuntimeInstances;
+}
+
 void PlaySession::ValidateSpecification() const
 {
 	if (!(this->Specification.FixedDeltaSeconds > 0.0) || !std::isfinite(this->Specification.FixedDeltaSeconds))
@@ -460,6 +485,7 @@ void PlaySession::ResetRuntime() noexcept
 {
 	this->Behaviors.reset();
 	this->RuntimeWorld = {};
+	this->RuntimeInstances = {};
 	this->AuthoringTransforms.clear();
 	this->FixedAccumulatorSeconds = 0.0;
 	if (this->State == PlaySessionState::Stopping)

@@ -333,10 +333,50 @@ void UpdateComponent(world::Scene::WriteAccess &Access, components::CObjectAnima
 {
 	if (!Component.IsEnabled())
 		return;
-	const components::AnimationPlaybackInterval Playback = Component.AdvancePlayback(DeltaSeconds);
-	resource::AssetPtr<resource::AnimationGraphAsset> Graph = PinRequired(Component.GetGraph(), "Animation component graph");
-	EvaluatedPose Pose = EvaluateGraph(*Graph, Component, Playback.Current);
-	PublishAnimationEvents(Component, Pose, Playback);
+	components::AnimationPlaybackInterval Playback;
+	resource::AssetPtr<resource::AnimationGraphAsset> Graph;
+	EvaluatedPose Pose;
+	if (Component.UsesDirectTracks())
+	{
+		if (Component.IsRootMotionEnabled())
+			throw std::runtime_error("Direct AnimationTrack playback does not support root motion");
+		bool HasPose = false;
+		float32 AccumulatedWeight = 0.0F;
+		for (components::DirectAnimationTrack &Track : Component.GetDirectTracks())
+		{
+			if (!Track.Playing || Track.Weight <= 0.0F)
+				continue;
+			Track.PreviousPlaybackTime = Track.PlaybackTime;
+			Track.PlaybackTime += static_cast<float64>(DeltaSeconds) * static_cast<float64>(Track.Speed);
+			if (!std::isfinite(Track.PlaybackTime))
+				throw std::overflow_error("AnimationTrack playback time exceeded the finite range");
+			resource::AssetPtr<resource::AnimationClipAsset> Clip = PinRequired(Track.Clip, "AnimationTrack clip");
+			EvaluatedPose TrackPose = SampleClip(*Clip, Track.PlaybackTime);
+			TrackPose.ContributingClips.push_back({Track.Clip, Clip});
+			PublishAnimationEvents(Component, TrackPose, {Track.PreviousPlaybackTime, Track.PlaybackTime});
+			if (!HasPose)
+			{
+				Pose = std::move(TrackPose);
+				AccumulatedWeight = Track.Weight;
+				HasPose = true;
+			}
+			else
+			{
+				const float32 CombinedWeight = AccumulatedWeight + Track.Weight;
+				Pose = Blend(std::move(Pose), std::move(TrackPose), Track.Weight / CombinedWeight, false);
+				AccumulatedWeight = CombinedWeight;
+			}
+		}
+		if (!HasPose)
+			return;
+	}
+	else
+	{
+		Playback = Component.AdvancePlayback(DeltaSeconds);
+		Graph = PinRequired(Component.GetGraph(), "Animation component graph");
+		Pose = EvaluateGraph(*Graph, Component, Playback.Current);
+		PublishAnimationEvents(Component, Pose, Playback);
+	}
 	resource::AssetPtr<resource::SkeletonAsset> Skeleton = Pose.PinnedSkeleton;
 	if (Component.IsRootMotionEnabled())
 	{

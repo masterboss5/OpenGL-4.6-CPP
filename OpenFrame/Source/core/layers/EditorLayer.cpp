@@ -225,7 +225,11 @@ void EditorLayer::Run(const core::ApplicationFrame &Frame)
 				this->HomeProjectDiagnostic.clear();
 				project::ProjectDescriptor Descriptor = this->ProjectHub.OpenProject(*InterfaceFrame.OpenProjectRequest);
 				this->OpenProject(std::move(Descriptor));
-				this->UserInterface->RecycleFrame(std::move(InterfaceFrame));
+				// The completed Home frame may own newly-created detached ImGui
+				// window contexts. Render it before switching to the project UI so
+				// those contexts complete their render-thread round trip and the
+				// closing modal is presented exactly once.
+				this->SubmitHomeFrame(std::move(InterfaceFrame));
 				return;
 			}
 			if (InterfaceFrame.CreateProjectRequest.has_value())
@@ -234,7 +238,7 @@ void EditorLayer::Run(const core::ApplicationFrame &Frame)
 				project::ProjectDescriptor Descriptor = this->ProjectHub.CreateBaseplateProject(
 					{.Name = InterfaceFrame.CreateProjectRequest->first, .ParentDirectory = InterfaceFrame.CreateProjectRequest->second});
 				this->OpenProject(std::move(Descriptor));
-				this->UserInterface->RecycleFrame(std::move(InterfaceFrame));
+				this->SubmitHomeFrame(std::move(InterfaceFrame));
 				return;
 			}
 		}

@@ -256,7 +256,13 @@ float32 ActionValue::Magnitude() const noexcept
 
 InputSystem::~InputSystem()
 {
+	this->LifetimeToken.reset();
 	this->StopAllHaptics();
+}
+
+std::weak_ptr<const uint8> InputSystem::GetLifetimeToken() const noexcept
+{
+	return this->LifetimeToken;
 }
 
 void InputSystem::BeginFrame(WindowManager &WindowManager)

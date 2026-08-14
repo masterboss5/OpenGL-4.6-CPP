@@ -205,12 +205,37 @@ void EditorActionRegistry::InstallInput(core::input::InputSystem &Input)
 		throw;
 	}
 	this->InstalledInput = &Input;
+	this->InstalledInputLifetime = Input.GetLifetimeToken();
+}
+
+[[nodiscard]] bool EditableInstanceSelectionAvailable(const EditorActionContext &Context)
+{
+	const std::vector<util::UUID> Selection = Context.Session.GetDocument().GetSelection().GetOrdered();
+	if (!EditWorldAvailable(Context) || Selection.empty())
+		return false;
+	const instance::InstanceGraph &Graph = Context.Session.GetDocument().GetInstances();
+	return std::ranges::all_of(Selection, [&Graph](const util::UUID &ID) { return Graph.Contains(ID) && !Graph.Get(ID).Protected; });
+}
+
+[[nodiscard]] string EditableInstanceSelectionDisabledReason(const EditorActionContext &Context)
+{
+	if (!EditWorldAvailable(Context))
+		return EditWorldDisabledReason(Context);
+	if (Context.Session.GetDocument().GetSelection().Empty())
+		return "Select at least one instance before running this command.";
+	return "Protected service roots cannot be copied, grouped, duplicated, or deleted.";
 }
 
 void EditorActionRegistry::UninstallInput() noexcept
 {
 	if (this->InstalledInput == nullptr)
 		return;
+	if (this->InstalledInputLifetime.expired())
+	{
+		this->InstalledInput = nullptr;
+		this->InstalledInputLifetime.reset();
+		return;
+	}
 	for (const auto &[ID, Descriptor] : this->Actions)
 	{
 		(void)Descriptor;
@@ -230,6 +255,7 @@ void EditorActionRegistry::UninstallInput() noexcept
 	{
 	}
 	this->InstalledInput = nullptr;
+	this->InstalledInputLifetime.reset();
 }
 
 std::vector<EditorActionResult> EditorActionRegistry::ProcessInput(const core::WindowID Window, EditorActionContext &Context,
@@ -488,20 +514,19 @@ void RegisterCoreEditorActions(EditorActionRegistry &Registry)
 	Registry.Register({.ID = IDs::CopyObjects,
 					   .Name = "Edit.CopyObjects",
 					   .DisplayName = "Copy",
-					   .Description = "Copy complete selected scene-object subtrees into the editor clipboard",
+					   .Description = "Copy complete selected instance subtrees into the editor clipboard",
 					   .Icon = "Duplicate",
 					   .Category = EditorActionCategory::Edit,
 					   .Order = 30,
 					   .Shortcut = KeyBinding(IDs::CopyObjects, core::input::Key::C, core::input::Modifier::Control),
-					   .CanExecute = [](const EditorActionContext &Context)
-					   { return EditWorldAvailable(Context) && !Context.Session.GetDocument().GetSelection().Empty(); },
-					   .DisabledReason = &SelectionActionDisabledReason,
+					   .CanExecute = &EditableInstanceSelectionAvailable,
+					   .DisabledReason = &EditableInstanceSelectionDisabledReason,
 					   .Execute = [](EditorActionContext &Context) { Context.Session.CopySelection(); }});
 	Registry.Register(
 		{.ID = IDs::PasteObjects,
 		 .Name = "Edit.PasteObjects",
 		 .DisplayName = "Paste",
-		 .Description = "Paste a new undoable copy of the scene-object clipboard",
+		 .Description = "Paste a new undoable copy of the instance clipboard",
 		 .Icon = "Duplicate",
 		 .Category = EditorActionCategory::Edit,
 		 .Order = 40,
@@ -519,32 +544,28 @@ void RegisterCoreEditorActions(EditorActionRegistry &Registry)
 	Registry.Register({.ID = IDs::DuplicateObjects,
 					   .Name = "Edit.DuplicateObjects",
 					   .DisplayName = "Duplicate",
-					   .Description = "Duplicate the selected scene-object subtrees",
+					   .Description = "Duplicate the selected instance subtrees",
 					   .Icon = "Duplicate",
 					   .Category = EditorActionCategory::Edit,
 					   .Order = 50,
 					   .Shortcut = KeyBinding(IDs::DuplicateObjects, core::input::Key::D, core::input::Modifier::Control),
-					   .CanExecute = [](const EditorActionContext &Context)
-					   { return EditWorldAvailable(Context) && !Context.Session.GetDocument().GetSelection().Empty(); },
-					   .DisabledReason = &SelectionActionDisabledReason,
-					   .Execute =
-						   [](EditorActionContext &Context)
+					   .CanExecute = &EditableInstanceSelectionAvailable,
+					   .DisabledReason = &EditableInstanceSelectionDisabledReason,
+					   .Execute = [](EditorActionContext &Context)
 					   {
-						   Context.Session.GetDocument().Execute(std::make_unique<commands::DuplicateObjectsCommand>(
-							   Context.Session.GetDocument(), Context.Session.GetDocument().GetSelection().GetOrdered()));
+						   Context.Session.DuplicateSelection();
 						   Context.Session.CloneSelectedPrivateMaterials(Context.Scheduler);
 					   }});
 	Registry.Register({.ID = IDs::GroupObjects,
 					   .Name = "Edit.GroupObjects",
 					   .DisplayName = "Group",
-					   .Description = "Create a transformable hierarchy group around the selected scene-object roots",
+					   .Description = "Create a Folder around the selected instance roots",
 					   .Icon = "Group",
 					   .Category = EditorActionCategory::Edit,
 					   .Order = 55,
 					   .Shortcut = KeyBinding(IDs::GroupObjects, core::input::Key::G, core::input::Modifier::Control),
-					   .CanExecute = [](const EditorActionContext &Context)
-					   { return EditWorldAvailable(Context) && !Context.Session.GetDocument().GetSelection().Empty(); },
-					   .DisabledReason = &SelectionActionDisabledReason,
+					   .CanExecute = &EditableInstanceSelectionAvailable,
+					   .DisabledReason = &EditableInstanceSelectionDisabledReason,
 					   .Execute = [](EditorActionContext &Context) { Context.Session.GroupSelection(); }});
 	Registry.Register({.ID = IDs::ToggleSelectionLocked,
 					   .Name = "Edit.ToggleSelectionLocked",
@@ -582,14 +603,13 @@ void RegisterCoreEditorActions(EditorActionRegistry &Registry)
 	Registry.Register({.ID = IDs::DeleteObjects,
 					   .Name = "Edit.DeleteObjects",
 					   .DisplayName = "Delete",
-					   .Description = "Delete the selected scene-object subtrees",
+					   .Description = "Delete the selected instance subtrees",
 					   .Icon = "Delete",
 					   .Category = EditorActionCategory::Edit,
 					   .Order = 60,
 					   .Shortcut = KeyBinding(IDs::DeleteObjects, core::input::Key::Delete),
-					   .CanExecute = [](const EditorActionContext &Context)
-					   { return EditWorldAvailable(Context) && !Context.Session.GetDocument().GetSelection().Empty(); },
-					   .DisabledReason = &SelectionActionDisabledReason,
+					   .CanExecute = &EditableInstanceSelectionAvailable,
+					   .DisabledReason = &EditableInstanceSelectionDisabledReason,
 					   .Execute = [](EditorActionContext &Context) { Context.Session.DeleteSelectedObjects(Context.Scheduler); }});
 	Registry.Register(
 		{.ID = IDs::ImportAssets,

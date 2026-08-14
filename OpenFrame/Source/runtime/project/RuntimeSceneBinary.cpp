@@ -82,9 +82,9 @@ std::vector<uint8> RuntimeSceneBinary::Compile(const std::span<const uint8> Json
 		usize Nodes = 0;
 		usize StringBytes = 0;
 		ValidateJsonBudget(Root, 0, Nodes, StringBytes);
-		if (!Root.is_object() || Root.value("FormatVersion", uint32{0}) != RuntimeSceneBinary::FormatVersion || !Root.contains("ID") ||
-			!util::UUID::TryParse(Root.at("ID").get<string>()).has_value() || Root.value("Name", string{}).empty() ||
-			!Root.contains("Objects") || !Root.at("Objects").is_array())
+		if (!Root.is_object() || Root.value("FormatVersion", uint32{0}) != RuntimeSceneBinary::SceneDocumentFormatVersion ||
+			!Root.contains("ID") || !util::UUID::TryParse(Root.at("ID").get<string>()).has_value() ||
+			Root.value("Name", string{}).empty() || !Root.contains("Objects") || !Root.at("Objects").is_array())
 			throw RuntimeSceneBinaryException("Scene source identity, version, name, or object table is invalid");
 		const std::vector<uint8> Payload = Json::to_cbor(Root);
 		std::vector<uint8> Result;

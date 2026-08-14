@@ -118,22 +118,40 @@ void ValidateDetachedWindowLifecycle(core::WindowManager &Manager)
 	if (!ForeignLookupRejected.load(std::memory_order_acquire))
 		throw std::runtime_error("WindowManager allowed a borrowed Window pointer to escape onto a foreign thread");
 
+	core::Context &PrimaryContext = PrimaryWindow.GetContext();
 	core::Context &DetachedContext = DetachedWindow.GetContext();
+	DetachedContext.PrepareThreadTransfer();
 	core::threading::RenderThread RenderThread({.QueueCapacity = 16});
-	RenderThread.Start(DetachedContext);
+	RenderThread.Start(PrimaryContext);
 	const bool Adopted = RenderThread
-							 .Submit([&DetachedContext, DetachedWindowID]()
-									 { return DetachedContext.IsCurrent() && DetachedContext.GetWindowID() == DetachedWindowID; })
+							 .Submit(
+								 [&PrimaryContext, &DetachedContext, DetachedWindowID]()
+								 {
+									 DetachedContext.AdoptCurrentThread();
+									 const bool Result = DetachedContext.IsCurrent() && DetachedContext.GetWindowID() == DetachedWindowID;
+									 DetachedContext.PrepareThreadTransfer();
+									 PrimaryContext.MakeCurrent();
+									 return Result;
+								 })
 							 .get();
 	RenderThread.Stop();
-	if (!Adopted || !DetachedContext.IsCurrent() || DetachedContext.IsThreadTransferPending())
-		throw std::runtime_error("Detached window context did not complete its render-thread transfer and owner-thread return");
+	if (!Adopted || !PrimaryContext.IsCurrent() || !DetachedContext.IsThreadTransferPending())
+		throw std::runtime_error("Detached window context did not return from a completed render frame");
 
-	DetachedContext.MarkReset();
+	// Destroying a platform window after its final frame must adopt the pending
+	// transfer on the owner thread before unregistering its debug callback.
+	Manager.DestroyWindow(DetachedWindowID);
+	if (Manager.FindManagedWindow(DetachedWindowID) != nullptr)
+		throw std::runtime_error("Detached window survived its owner-thread shutdown");
+
+	core::Window &ResetWindow = Manager.CreateWindow(Specification);
+	core::Context &ResetContext = ResetWindow.GetContext();
+	const core::WindowID ResetWindowID = ResetWindow.GetID();
+	ResetContext.MarkReset();
 	bool ResetRejected = false;
 	try
 	{
-		DetachedContext.RequireCurrentThread();
+		ResetContext.RequireCurrentThread();
 	}
 	catch (const core::ContextException &)
 	{
@@ -142,9 +160,7 @@ void ValidateDetachedWindowLifecycle(core::WindowManager &Manager)
 	if (!ResetRejected)
 		throw std::runtime_error("Reset detached context remained usable after a simulated device failure");
 
-	Manager.DestroyWindow(DetachedWindowID);
-	if (Manager.FindManagedWindow(DetachedWindowID) != nullptr)
-		throw std::runtime_error("Detached window survived its owner-thread shutdown");
+	Manager.DestroyWindow(ResetWindowID);
 }
 
 class TemporaryEditorProject final
@@ -730,7 +746,7 @@ void ValidateRoundedShadowCapture(const std::filesystem::path &CapturePath)
 		// Horizontal transition width is meaningful only where the curved
 		// perimeter normal has a strong horizontal component. Near its top tangent
 		// the same narrow edge spans many X pixels by geometry alone.
-		if (MaximumRise < 3.0f || DarkReference < 80.0f || DarkReference > 150.0f || LightReference < 150.0f)
+		if (MaximumRise < 3.0f || LightReference - DarkReference < 12.0f)
 			continue;
 		const float32 Range = LightReference - DarkReference;
 		const float32 LowerThreshold = DarkReference + Range * 0.1f;

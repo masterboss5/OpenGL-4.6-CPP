@@ -9,6 +9,7 @@
 #include "Source/editor/asset/PrimitiveMeshFactory.h"
 #include "Source/editor/build/ProjectBuildService.h"
 #include "Source/editor/cook/CookPackageService.h"
+#include "Source/editor/commands/InstanceCommands.h"
 #include "Source/editor/commands/SceneObjectCommands.h"
 #include "Source/editor/document/SceneDocument.h"
 #include "Source/editor/hierarchy/SceneHierarchy.h"
@@ -86,6 +87,7 @@ class EditorSession final
 	void CreatePrimitive(asset::PrimitiveShape Shape, util::UUID Parent = {});
 	void CopySelection();
 	void PasteClipboard();
+	void DuplicateSelection();
 	void GroupSelection();
 	void CloneSelectedPrivateMaterials(core::threading::TaskScheduler &Scheduler);
 	void DeleteSelectedObjects(core::threading::TaskScheduler &Scheduler);
@@ -158,6 +160,7 @@ class EditorSession final
 	std::vector<ViewportControllerEntry> ViewportControllers;
 	viewport::TransformGizmoController TransformGizmo;
 	std::optional<commands::SceneObjectSnapshot> ObjectClipboard;
+	std::optional<commands::InstanceArchive> InstanceClipboard;
 	hierarchy::SceneHierarchySnapshot Hierarchy;
 	hierarchy::SceneHierarchySnapshot FilteredHierarchy;
 	string HierarchyFilter;

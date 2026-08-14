@@ -2,6 +2,8 @@
 
 #include "Source/core/io/SecurePath.h"
 #include "Source/core/io/UserPaths.h"
+#include "Source/editor/instance/InstanceTypes.h"
+#include "Source/editor/serialization/SceneDocumentSerializer.h"
 #include "Source/editor/serialization/ProjectDescriptorSerializer.h"
 #include "Source/util/UUID.h"
 
@@ -52,9 +54,36 @@ void WriteTextFile(const std::filesystem::path &Root, const std::filesystem::pat
 [[nodiscard]] string BuildBaseplateScene(const string_view ProjectName)
 {
 	const util::UUID SceneID = util::UUID::GenerateRandomUUID();
+	const util::UUID WorkspaceID = util::UUID::GenerateRandomUUID();
+	const util::UUID LightingServiceID = util::UUID::GenerateRandomUUID();
+	const util::UUID GUIID = util::UUID::GenerateRandomUUID();
+	const util::UUID AudioID = util::UUID::GenerateRandomUUID();
+	const util::UUID ScriptsID = util::UUID::GenerateRandomUUID();
 	const util::UUID CameraID = util::UUID::GenerateRandomUUID();
 	const util::UUID BaseplateID = util::UUID::GenerateRandomUUID();
 	const util::UUID LightID = util::UUID::GenerateRandomUUID();
+	const auto Property = [](string Kind, Json Value) { return Json{{"Kind", std::move(Kind)}, {"Value", std::move(Value)}}; };
+	const auto Instance = [](const util::UUID &ID, const instance::InstanceClassID ClassID, string ClassName, string Name,
+							 const util::UUID &Parent, const uint32 Order, const bool Protected, Json Properties = Json::object())
+	{
+		return Json{{"ID", ID.ToString()},
+					{"ClassID", ClassID.ToString()},
+					{"ClassName", std::move(ClassName)},
+					{"Name", std::move(Name)},
+					{"Parent", Parent.IsValid() ? Json(Parent.ToString()) : Json(nullptr)},
+					{"SiblingOrder", Order},
+					{"Enabled", true},
+					{"Protected", Protected},
+					{"Properties", std::move(Properties)}};
+	};
+	const auto TransformProperties =
+		[&Property](const std::array<float32, 3> Position, const std::array<float32, 3> RotationEuler, const std::array<float32, 3> Scale)
+	{
+		const glm::quat Rotation = glm::quat(glm::radians(glm::vec3(RotationEuler[0], RotationEuler[1], RotationEuler[2])));
+		return Json{{"Position", Property("Vector3", Json::array({Position[0], Position[1], Position[2]}))},
+					{"Rotation", Property("Quaternion", Json::array({Rotation.w, Rotation.x, Rotation.y, Rotation.z}))},
+					{"Scale", Property("Vector3", Json::array({Scale[0], Scale[1], Scale[2]}))}};
+	};
 	const auto Identity = [](const util::UUID &ID, const string_view Name, const uint32 Order)
 	{
 		return Json{{"ID", ID.ToString()},
@@ -134,11 +163,50 @@ void WriteTextFile(const std::filesystem::path &Root, const std::filesystem::pat
 																	 {"ShadowNormalBias", 0.02f},
 																	 {"ShadowFilterRadius", 1.5f}}}};
 
-	return Json{{"FormatVersion", 1},
+	Json CameraProperties = TransformProperties({0.0F, 6.0F, 12.0F}, {-18.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F});
+	CameraProperties.update({{"Projection", Property("String", "Perspective")},
+							 {"FieldOfView", Property("Scalar", 60.0)},
+							 {"OrthographicHeight", Property("Scalar", 10.0)},
+							 {"NearPlane", Property("Scalar", 0.05)},
+							 {"FarPlane", Property("Scalar", 100'000.0)},
+							 {"ExposureCompensation", Property("Scalar", 0.0)},
+							 {"Primary", Property("Boolean", true)},
+							 {"TemporalJitter", Property("Boolean", true)}});
+	Json BaseplateProperties = TransformProperties({0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, {16.0F, 1.0F, 16.0F});
+	BaseplateProperties["Shape"] = Property("String", "Plane");
+	Json LightProperties = TransformProperties({0.0F, 0.0F, 0.0F}, {-45.0F, 35.0F, 0.0F}, {1.0F, 1.0F, 1.0F});
+	LightProperties.erase("Position");
+	LightProperties.erase("Scale");
+	LightProperties.update({{"Color", Property("Vector3", Json::array({1.0F, 0.96F, 0.9F}))},
+							{"IlluminanceLux", Property("Scalar", 50'000.0)},
+							{"AngularDiameterDegrees", Property("Scalar", 0.53)},
+							{"CascadeCount", Property("UnsignedInteger", uint64{4})},
+							{"CascadeDistributionExponent", Property("Scalar", 2.0)},
+							{"CastShadows", Property("Boolean", true)},
+							{"ShadowResolution", Property("UnsignedInteger", uint64{2'048})},
+							{"ShadowConstantBias", Property("Scalar", 0.0005)},
+							{"ShadowSlopeBias", Property("Scalar", 1.5)},
+							{"ShadowNormalBias", Property("Scalar", 0.02)},
+							{"ShadowFilterRadius", Property("Scalar", 1.5)}});
+	Json Instances = Json::array();
+	Instances.push_back(Instance(WorkspaceID, instance::class_ids::Workspace, "Workspace", "Workspace", {}, 0, true));
+	Instances.push_back(
+		Instance(CameraID, instance::class_ids::Camera, "Camera", "Primary Camera", WorkspaceID, 0, false, std::move(CameraProperties)));
+	Instances.push_back(
+		Instance(BaseplateID, instance::class_ids::Part, "Part", "Baseplate", WorkspaceID, 1, false, std::move(BaseplateProperties)));
+	Instances.push_back(Instance(LightingServiceID, instance::class_ids::Lighting, "Lighting", "Lighting", {}, 1, true));
+	Instances.push_back(Instance(LightID, instance::class_ids::DirectionalLight, "DirectionalLight", "Sun", LightingServiceID, 0, false,
+								 std::move(LightProperties)));
+	Instances.push_back(Instance(GUIID, instance::class_ids::GUI, "GUI", "GUI", {}, 2, true));
+	Instances.push_back(Instance(AudioID, instance::class_ids::Audio, "Audio", "Audio", {}, 3, true));
+	Instances.push_back(Instance(ScriptsID, instance::class_ids::Scripts, "Scripts", "Scripts", {}, 4, true));
+
+	return Json{{"FormatVersion", serialization::SceneDocumentSerializer::CurrentFormatVersion},
 				{"EngineSchemaVersion", 1},
 				{"MigrationData", Json::object()},
 				{"ID", SceneID.ToString()},
 				{"Name", string(ProjectName) + " Baseplate"},
+				{"Instances", std::move(Instances)},
 				{"Objects", Json::array({std::move(Camera), std::move(Baseplate), std::move(Light)})}}
 			   .dump(2) +
 		   '\n';

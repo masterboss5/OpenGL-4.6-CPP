@@ -39,6 +39,8 @@ void CreatePrimitiveCommand::Execute()
 	try
 	{
 		(void)this->Document->GetScene().AddComponent<components::CObjectMeshComponent>(Object, this->Model);
+		this->Document->GetInstances().SetClass(this->PersistentID, instance::class_ids::Part);
+		this->Document->GetInstances().SetProperty(this->PersistentID, "Shape", string(asset::PrimitiveMeshFactory::GetName(this->Shape)));
 		this->Present = true;
 	}
 	catch (...)

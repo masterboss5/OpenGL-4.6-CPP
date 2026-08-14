@@ -12,6 +12,7 @@
 #include "Source/editor/commands/MeshMaterialOverrideCommand.h"
 #include "Source/editor/commands/BehaviorCommands.h"
 #include "Source/editor/commands/CreatePrimitiveCommand.h"
+#include "Source/editor/commands/InstanceCommands.h"
 #include "Source/editor/commands/SceneObjectCommands.h"
 #include "Source/editor/commands/TransformEditCommand.h"
 #include "Source/editor/cook/CookPackageService.h"
@@ -2594,16 +2595,16 @@ void ValidateEditorActions()
 	Require(Session.GetDocument().GetScene().GetObjectCount() == 1,
 			"undo did not remove the scene-object subtree created by the paste action");
 	const util::UUID GroupedPrimitiveID = Session.GetDocument().GetSelection().GetOrdered().front();
-	Require(Actions.Invoke(action::IDs::GroupObjects, Context).Status == action::EditorActionStatus::Executed &&
-				Session.GetDocument().GetScene().GetObjectCount() == 2 && Session.GetDocument().GetSelection().Size() == 1,
-			"group action did not create and select one hierarchy group around the selected object");
+	const action::EditorActionResult GroupResult = Actions.Invoke(action::IDs::GroupObjects, Context);
+	Require(GroupResult.Status == action::EditorActionStatus::Executed && Session.GetDocument().GetScene().GetObjectCount() == 1 &&
+				Session.GetDocument().GetSelection().Size() == 1,
+			"group action did not create and select one organizational Folder around the selected instance: " + GroupResult.Diagnostic);
 	{
 		const util::UUID GroupID = Session.GetDocument().GetSelection().GetPrimary();
-		const world::ObjectHandle Group = Session.GetDocument().GetScene().FindObject(GroupID);
-		const world::ObjectHandle GroupedPrimitive = Session.GetDocument().GetScene().FindObject(GroupedPrimitiveID);
-		auto Access = Session.GetDocument().GetScene().Read();
-		Require(Access.Resolve(Access.GetComponent<components::CObjectHierarchyComponent>(GroupedPrimitive)).GetParent() == Group,
-				"group action did not preserve the selected object beneath its new group hierarchy");
+		const instance::InstanceRecord Group = Session.GetDocument().GetInstances().Get(GroupID);
+		Require(Group.ClassID == instance::class_ids::Folder && Group.Children.size() == 1 &&
+					Group.Children.front() == GroupedPrimitiveID && !Session.GetDocument().GetScene().FindObject(GroupID).IsValid(),
+				"group action did not preserve the selected instance beneath a hierarchy-only Folder");
 	}
 	Session.GetDocument().Undo();
 	Require(Session.GetDocument().GetScene().GetObjectCount() == 1 && Session.GetDocument().GetSelection().Contains(GroupedPrimitiveID),
@@ -3127,10 +3128,42 @@ void ValidateProjectHub()
 	std::ifstream SceneStream(ProjectRoot / "Content" / "Scenes" / "Baseplate.enginelevel", std::ios::binary);
 	Require(SceneStream.is_open(), "Baseplate scene could not be reopened for validation");
 	const nlohmann::json Scene = nlohmann::json::parse(SceneStream);
-	Require(Scene.at("Objects").size() == 3 && Scene.at("Objects")[0].at("Name") == "Primary Camera" &&
-				Scene.at("Objects")[1].at("Name") == "Baseplate" && Scene.at("Objects")[2].at("Name") == "Sun" &&
+	SceneStream.close();
+	Require(Scene.at("FormatVersion").get<uint32>() == serialization::SceneDocumentSerializer::CurrentFormatVersion &&
+				Scene.at("Instances").size() == 8 && Scene.at("Objects").size() == 3 &&
+				Scene.at("Objects")[0].at("Name") == "Primary Camera" && Scene.at("Objects")[1].at("Name") == "Baseplate" &&
+				Scene.at("Objects")[2].at("Name") == "Sun" &&
 				Scene.at("Objects")[2].at("Components").contains("CObjectDirectionalLightComponent"),
-			"Baseplate scene does not contain the camera, plane, and shadow-casting sun template");
+			"Baseplate scene does not contain its typed services, camera, plane, and shadow-casting sun template");
+	reflection::ReflectionRegistry Reflection;
+	reflection::RegisterCoreComponentReflection(Reflection);
+	resource::AssetManager Assets(ProjectRoot / "Content");
+	const std::filesystem::path ScenePath = ProjectRoot / "Content" / "Scenes" / "Baseplate.enginelevel";
+	std::unique_ptr<document::SceneDocument> Loaded = serialization::SceneDocumentSerializer::Load(ScenePath, Reflection, Assets);
+	Require(Loaded->GetInstances().Snapshot().Instances.size() == 8,
+			"new Baseplate project could not load its authoritative typed instance graph");
+	serialization::SceneDocumentSerializer::Save(*Loaded, Reflection, Assets, ScenePath);
+	std::unique_ptr<document::SceneDocument> ReopenedScene = serialization::SceneDocumentSerializer::Load(ScenePath, Reflection, Assets);
+	Require(ReopenedScene->GetInstances().Snapshot().Instances.size() == 8,
+			"new Baseplate project did not survive its first editor save and reopen");
+	nlohmann::json LegacyScene = Scene;
+	LegacyScene["FormatVersion"] = 1U;
+	LegacyScene.erase("Instances");
+	const std::filesystem::path LegacyScenePath = ProjectRoot / "Content" / "Scenes" / "LegacyBaseplate.enginelevel";
+	{
+		std::ofstream LegacyStream(LegacyScenePath, std::ios::binary | std::ios::trunc);
+		LegacyStream << LegacyScene.dump(2);
+		Require(static_cast<bool>(LegacyStream), "legacy Baseplate migration fixture could not be written");
+	}
+	std::unique_ptr<document::SceneDocument> Migrated = serialization::SceneDocumentSerializer::Load(LegacyScenePath, Reflection, Assets);
+	Require(Migrated->GetInstances().Snapshot().Instances.size() == 8,
+			"existing pre-instance Baseplate scene did not migrate into the typed graph");
+	serialization::SceneDocumentSerializer::Save(*Migrated, Reflection, Assets, LegacyScenePath);
+	std::ifstream MigratedStream(LegacyScenePath, std::ios::binary);
+	const nlohmann::json MigratedJson = nlohmann::json::parse(MigratedStream);
+	Require(MigratedJson.at("FormatVersion").get<uint32>() == serialization::SceneDocumentSerializer::CurrentFormatVersion &&
+				MigratedJson.at("Instances").size() == 8,
+			"saving a migrated Baseplate scene did not publish the current typed format");
 	Require(Hub.GetRecentProjects().size() == 1 && Hub.GetRecentProjects().front().Available,
 			"new project was not published to the recent-project list");
 	const project::ProjectDescriptor Reopened = Hub.OpenProject(Descriptor.DescriptorPath);
@@ -3365,8 +3398,8 @@ void ValidateCookPackaging()
 	serialization::ProjectDescriptorSerializer::Save(Descriptor);
 	{
 		std::ofstream Scene(Root / "Content" / "Data" / "Startup.enginelevel", std::ios::binary);
-		Scene << "{\"FormatVersion\":1,\"ID\":\"" << util::UUID::GenerateRandomUUID().ToString()
-			  << "\",\"Name\":\"CookValidation\",\"Objects\":[]}";
+		Scene << "{\"FormatVersion\":" << serialization::SceneDocumentSerializer::CurrentFormatVersion << ",\"ID\":\""
+			  << util::UUID::GenerateRandomUUID().ToString() << "\",\"Name\":\"CookValidation\",\"Objects\":[],\"Instances\":[]}";
 		std::ofstream Asset(Root / "Content" / "Data" / "Payload.bin", std::ios::binary);
 		for (uint32 Index = 0; Index < 16'384; ++Index)
 			Asset.put(static_cast<char>(Index % 251U));
@@ -3731,6 +3764,200 @@ void ValidateEditorRecovery()
 				std::filesystem::is_regular_file(ExternalVictim),
 			"discarding recovery trusted a caller-controlled snapshot path or did not remove the derived recovery files");
 }
+void ValidateTypedInstanceGraph()
+{
+	document::SceneDocument Document("TypedInstances");
+	instance::InstanceGraph &Graph = Document.GetInstances();
+	const instance::InstanceGraphSnapshot Initial = Graph.Snapshot();
+	Require(Initial.Instances.size() == 5, "new instance graph does not contain exactly five service roots");
+	const std::array ExpectedServices{instance::class_ids::Workspace, instance::class_ids::Lighting, instance::class_ids::GUI,
+									  instance::class_ids::Audio, instance::class_ids::Scripts};
+	for (usize Index = 0; Index < ExpectedServices.size(); ++Index)
+	{
+		Require(Initial.Instances[Index].ClassID == ExpectedServices[Index] && Initial.Instances[Index].Protected &&
+					!Initial.Instances[Index].Parent.IsValid(),
+				"instance service order or protection is invalid");
+	}
+	const util::UUID Workspace = Graph.GetWorkspace();
+	const util::UUID Folder = Graph.Create(instance::class_ids::Folder, Workspace);
+	const util::UUID DuplicateFolder = Graph.Create(instance::class_ids::Folder, Workspace);
+	Require(Graph.Get(Folder).Name == "Folder" && Graph.Get(DuplicateFolder).Name == "Folder 2",
+			"instance graph did not generate deterministic unique sibling names");
+	const util::UUID Model = Graph.Create(instance::class_ids::Model, Folder);
+	const util::UUID Part = Graph.Create(instance::class_ids::Part, Model);
+	Graph.SetProperty(Part, "Position", glm::vec3(12.0F, 3.0F, -4.0F));
+	Graph.ApplyModelPivotDelta(Model, glm::vec3(2.0F, 0.0F, 0.0F), glm::angleAxis(glm::radians(90.0F), glm::vec3(0.0F, 1.0F, 0.0F)));
+	Require(glm::distance(std::get<glm::vec3>(Graph.Get(Part).Properties.at("Position")), glm::vec3(-2.0F, 3.0F, -12.0F)) < 0.001F,
+			"Model pivot operation did not transform descendant Part world positions");
+	Graph.Reparent(Part, Workspace, 1);
+	Require(glm::distance(std::get<glm::vec3>(Graph.Get(Part).Properties.at("Position")), glm::vec3(-2.0F, 3.0F, -12.0F)) < 0.001F,
+			"reparenting a Part changed its world transform");
+	const util::UUID InvalidTrack = Graph.Create(instance::class_ids::AnimationTrack, Folder);
+	const instance::InstanceActivation InvalidActivation = Graph.GetActivation(InvalidTrack);
+	Require(InvalidActivation.State == instance::InstanceActivationState::Inactive && !InvalidActivation.Diagnostic.empty() &&
+				Graph.Get(InvalidTrack).Parent == Folder,
+			"invalid exact-parent modifier was relocated or did not report an inactive diagnostic");
+	bool CycleRejected = false;
+	try
+	{
+		Graph.Reparent(Folder, Model, 0);
+	}
+	catch (const std::invalid_argument &)
+	{
+		CycleRejected = true;
+	}
+	Require(CycleRejected, "instance graph accepted a hierarchy cycle");
+	bool ServiceMutationRejected = false;
+	try
+	{
+		Graph.Rename(Workspace, "World");
+	}
+	catch (const std::logic_error &)
+	{
+		ServiceMutationRejected = true;
+	}
+	Require(ServiceMutationRejected, "protected service instance accepted a rename");
+	const util::UUID MisplacedPart = Graph.Create(instance::class_ids::Part, Graph.GetLighting());
+	Require(Graph.Get(MisplacedPart).Parent == Graph.GetLighting() &&
+				Graph.GetActivation(MisplacedPart).State == instance::InstanceActivationState::Inactive,
+			"an incompatible instance was implicitly relocated instead of remaining visibly inactive");
+	bool InvalidFieldOfViewRejected = false;
+	const util::UUID SchemaCamera = Graph.Create(instance::class_ids::Camera, Workspace);
+	try
+	{
+		Graph.SetProperty(SchemaCamera, "FieldOfView", 180.0);
+	}
+	catch (const std::out_of_range &)
+	{
+		InvalidFieldOfViewRejected = true;
+	}
+	Require(InvalidFieldOfViewRejected && std::get<float64>(Graph.Get(SchemaCamera).Properties.at("FieldOfView")) == 60.0,
+			"schema range validation accepted an invalid camera field of view or partially published it");
+	bool InvalidCameraPlanesRejected = false;
+	try
+	{
+		Graph.SetProperty(SchemaCamera, "NearPlane", 200'000.0);
+	}
+	catch (const std::out_of_range &)
+	{
+		InvalidCameraPlanesRejected = true;
+	}
+	Require(InvalidCameraPlanesRejected, "camera property validation accepted a near plane outside its declared range");
+	Graph.SetClass(MisplacedPart, instance::class_ids::Folder);
+	Require(Graph.Get(MisplacedPart).ClassID == instance::class_ids::Folder && Graph.Get(MisplacedPart).Properties.empty() &&
+				Graph.GetActivation(MisplacedPart).State == instance::InstanceActivationState::Active,
+			"changing an instance class retained stale properties or stale activation rules");
+
+	Document.Execute(std::make_unique<commands::CreateInstanceCommand>(Document, instance::class_ids::Camera, Workspace));
+	const util::UUID Created = Document.GetSelection().GetPrimary();
+	Require(Graph.Contains(Created) && Graph.Get(Created).ClassID == instance::class_ids::Camera,
+			"CreateInstanceCommand did not create and select the requested concrete class");
+	Document.Undo();
+	Require(!Graph.Contains(Created), "CreateInstanceCommand undo did not remove the created instance");
+	Document.Redo();
+	Require(Graph.Contains(Created), "CreateInstanceCommand redo did not restore the same instance identity");
+	const std::filesystem::path RuntimeAssetRoot = std::filesystem::temp_directory_path() / "OpenFrame" / "Validation" /
+												   ("TypedInstances-" + util::UUID::GenerateRandomUUID().ToString());
+	struct RuntimeAssetCleanup final
+	{
+		std::filesystem::path Root;
+		~RuntimeAssetCleanup()
+		{
+			std::error_code Error;
+			std::filesystem::remove_all(this->Root, Error);
+		}
+	};
+	[[maybe_unused]] RuntimeAssetCleanup Cleanup{RuntimeAssetRoot};
+	std::filesystem::create_directories(RuntimeAssetRoot);
+	resource::AssetManager RuntimeAssets(RuntimeAssetRoot);
+	asset::PrimitiveMeshFactory RuntimePrimitives(RuntimeAssets);
+	Document.ConfigureRuntimeAssets(RuntimeAssets, RuntimePrimitives);
+	const world::ObjectHandle CameraObject = Document.GetScene().FindObject(Created);
+	Require(CameraObject.IsValid() && Document.GetScene().GetComponent<components::CObjectCameraComponent>(CameraObject).IsValid(),
+			"Camera instance did not produce camera runtime backing");
+	Document.Execute(std::make_unique<commands::SetInstancePropertyCommand>(Document, Created, "Position", glm::vec3(4.0F, 5.0F, 6.0F)));
+	{
+		const auto Access = Document.GetScene().Read();
+		const auto Transform = Access.GetComponent<components::CObjectTransformComponent>(CameraObject);
+		Require(Transform.IsValid() && Access.Resolve(Transform).GetPosition() == glm::vec3(4.0F, 5.0F, 6.0F),
+				"Camera instance property did not synchronize its runtime transform");
+	}
+	const util::UUID LightParent = Document.CreateInstance(instance::class_ids::Part, Workspace, "Light Parent");
+	const world::ObjectHandle PartObject = Document.GetScene().FindObject(LightParent);
+	Require(PartObject.IsValid() && Document.GetScene().GetComponent<components::CObjectMeshComponent>(PartObject).IsValid(),
+			"Part instance did not realize its primitive mesh runtime backing");
+	Document.SetInstanceProperty(LightParent, "Position", glm::vec3(7.0F, 8.0F, 9.0F));
+	const util::UUID PointLight = Document.CreateInstance(instance::class_ids::PointLight, LightParent);
+	const world::ObjectHandle PointLightObject = Document.GetScene().FindObject(PointLight);
+	{
+		const auto Access = Document.GetScene().Read();
+		const auto Transform = Access.GetComponent<components::CObjectTransformComponent>(PointLightObject);
+		Require(PointLightObject.IsValid() && Access.GetComponent<components::CObjectPointLightComponent>(PointLightObject).IsValid() &&
+					Transform.IsValid() && Access.Resolve(Transform).GetPosition() == glm::vec3(7.0F, 8.0F, 9.0F),
+				"PointLight instance did not bind to its exact parent transform");
+	}
+	Document.SetInstanceProperty(LightParent, "Position", glm::vec3(-2.0F, 1.0F, 3.0F));
+	{
+		const auto Access = Document.GetScene().Read();
+		const auto Transform = Access.GetComponent<components::CObjectTransformComponent>(PointLightObject);
+		Require(Access.Resolve(Transform).GetPosition() == glm::vec3(-2.0F, 1.0F, 3.0F),
+				"PointLight runtime backing did not follow its exact parent property update");
+	}
+	const util::UUID ClipboardFolder = Document.CreateInstance(instance::class_ids::Folder, Workspace, "Clipboard Folder");
+	const util::UUID ClipboardPart = Document.CreateInstance(instance::class_ids::Part, ClipboardFolder, "Referenced Part");
+	const util::UUID ClipboardScript = Document.CreateInstance(instance::class_ids::Script, ClipboardPart, "Reference Script");
+	Document.SetInstanceProperty(ClipboardScript, "Behavior.Target", ClipboardPart);
+	const std::array ClipboardSelection{ClipboardFolder, ClipboardPart};
+	commands::InstanceArchive ClipboardArchive = commands::CaptureInstanceArchive(Graph, ClipboardSelection);
+	Require(ClipboardArchive.Roots.size() == 1 && ClipboardArchive.Roots.front() == ClipboardFolder && ClipboardArchive.Records.size() == 3,
+			"typed multi-selection archive duplicated a selected descendant or omitted nested records");
+	Document.Execute(std::make_unique<commands::PasteInstanceArchiveCommand>(Document, ClipboardArchive));
+	const util::UUID PastedFolder = Document.GetSelection().GetPrimary();
+	const instance::InstanceRecord PastedFolderRecord = Graph.Get(PastedFolder);
+	Require(PastedFolderRecord.Children.size() == 1, "typed paste did not reproduce the archived hierarchy");
+	const util::UUID PastedPart = PastedFolderRecord.Children.front();
+	const instance::InstanceRecord PastedPartRecord = Graph.Get(PastedPart);
+	Require(PastedPartRecord.Children.size() == 1, "typed paste omitted a nested Script instance");
+	const instance::InstanceRecord PastedScriptRecord = Graph.Get(PastedPartRecord.Children.front());
+	Require(std::get<util::UUID>(PastedScriptRecord.Properties.at("Behavior.Target")) == PastedPart,
+			"typed paste did not remap an internal instance reference");
+	Document.Undo();
+	Require(!Graph.Contains(PastedFolder), "typed paste undo left the duplicated hierarchy present");
+	Document.Redo();
+	Require(Graph.Contains(PastedFolder), "typed paste redo did not restore stable duplicated identities");
+	auto RuntimeDuplicate = std::make_unique<commands::DuplicateObjectsCommand>(Document, std::vector<util::UUID>{LightParent});
+	commands::DuplicateObjectsCommand *const RuntimeDuplicateView = RuntimeDuplicate.get();
+	Document.Execute(std::move(RuntimeDuplicate));
+	const util::UUID DuplicatedRuntimePart = RuntimeDuplicateView->GetCreatedObjects().front();
+	Require(Graph.Get(DuplicatedRuntimePart).ClassID == instance::class_ids::Part &&
+				std::get<glm::vec3>(Graph.Get(DuplicatedRuntimePart).Properties.at("Position")) == glm::vec3(-2.0F, 1.0F, 3.0F),
+			"component-preserving duplicate lost the authoritative typed class or properties");
+	Document.Undo();
+	Require(!Graph.Contains(DuplicatedRuntimePart), "component-preserving duplicate undo left its typed instance present");
+	Document.Redo();
+	Require(Graph.Contains(DuplicatedRuntimePart) && Graph.Get(DuplicatedRuntimePart).ClassID == instance::class_ids::Part,
+			"component-preserving duplicate redo restored a generic object instead of the typed class");
+	Document.Execute(std::make_unique<commands::DuplicateInstanceCommand>(Document, Folder));
+	const util::UUID Duplicate = Document.GetSelection().GetPrimary();
+	Require(Graph.Contains(Duplicate) && Graph.Get(Duplicate).Parent == Workspace && Graph.Get(Duplicate).Name == "Folder 3",
+			"DuplicateInstanceCommand did not duplicate the subtree beside its source");
+	Document.Undo();
+	Require(!Graph.Contains(Duplicate), "DuplicateInstanceCommand undo left the duplicated subtree present");
+	Document.Execute(std::make_unique<commands::DeleteInstanceCommand>(Document, Folder));
+	Require(!Graph.Contains(Folder) && !Graph.Contains(Model), "DeleteInstanceCommand did not remove the complete subtree");
+	Document.Undo();
+	Require(Graph.Contains(Folder) && Graph.Contains(Model), "DeleteInstanceCommand undo did not restore the complete subtree");
+
+	const hierarchy::SceneHierarchySnapshot Hierarchy = hierarchy::SceneHierarchyBuilder::Build(Graph);
+	Require(Hierarchy.Rows.size() == Graph.Snapshot().Instances.size() && Hierarchy.Rows.front().ClassID == instance::class_ids::Workspace,
+			"Explorer hierarchy is not sourced from the typed instance graph");
+	instance::InstanceTypeRegistry ReplacementTypes;
+	instance::InstanceGraph Replacement(ReplacementTypes);
+	Replacement.LoadSnapshot(Graph.Snapshot());
+	Require(Replacement.Snapshot().Instances.size() == Graph.Snapshot().Instances.size() &&
+				Replacement.GetWorkspace() == Graph.GetWorkspace(),
+			"instance graph snapshot load did not preserve identities and services");
+}
 } // namespace
 
 void RunDeterministicEditorCoreChecks()
@@ -3741,6 +3968,7 @@ void RunDeterministicEditorCoreChecks()
 		std::forward<Callable>(Check)();
 	};
 	Run("authoring contracts", &ValidateAuthoringContracts);
+	Run("typed instance graph", &ValidateTypedInstanceGraph);
 	Run("viewport selection", &ValidateViewportSelection);
 	Run("component reflection", &ValidateComponentReflection);
 	Run("transform editing", &ValidateTransformEditing);

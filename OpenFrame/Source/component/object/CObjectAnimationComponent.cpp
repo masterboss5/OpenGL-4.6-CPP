@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace components
 {
@@ -15,6 +16,12 @@ CObjectAnimationComponent::CObjectAnimationComponent(world::ObjectHandle Owner, 
 		throw std::invalid_argument("Animation component graph asset is unavailable");
 }
 
+CObjectAnimationComponent::CObjectAnimationComponent(world::ObjectHandle Owner, std::vector<DirectAnimationTrack> Tracks)
+	: CObjectComponent(Owner)
+{
+	this->SetDirectTracks(std::move(Tracks));
+}
+
 void CObjectAnimationComponent::SetGraph(resource::AssetHandle<resource::AnimationGraphAsset> Replacement)
 {
 	if (!Replacement)
@@ -22,11 +29,51 @@ void CObjectAnimationComponent::SetGraph(resource::AssetHandle<resource::Animati
 	if (Replacement.Pin() == nullptr)
 		throw std::invalid_argument("Animation component graph asset is unavailable");
 	this->Graph = std::move(Replacement);
+	this->DirectTracks.clear();
 	this->Parameters.clear();
 	this->RigStates.clear();
 	this->TriggeredEvents.clear();
 	this->PlaybackTime = 0.0f;
 	this->PreviousPlaybackTime = 0.0f;
+}
+
+void CObjectAnimationComponent::SetDirectTracks(std::vector<DirectAnimationTrack> Tracks)
+{
+	if (Tracks.empty())
+		throw std::invalid_argument("Direct animation playback requires at least one AnimationTrack");
+	std::unordered_set<util::UUID> IDs;
+	for (DirectAnimationTrack &Track : Tracks)
+	{
+		if (!Track.InstanceID.IsValid() || !IDs.emplace(Track.InstanceID).second || !Track.Clip || Track.Clip.Pin() == nullptr ||
+			!std::isfinite(Track.Speed) || Track.Speed < 0.0F || !std::isfinite(Track.Weight) || Track.Weight < 0.0F || Track.Weight > 1.0F ||
+			!std::isfinite(Track.PreviousPlaybackTime) || !std::isfinite(Track.PlaybackTime) || Track.PreviousPlaybackTime < 0.0 ||
+			Track.PlaybackTime < 0.0)
+		{
+			throw std::invalid_argument("Direct AnimationTrack state is invalid");
+		}
+	}
+	this->DirectTracks = std::move(Tracks);
+	this->Graph = {};
+	this->Parameters.clear();
+	this->RigStates.clear();
+	this->TriggeredEvents.clear();
+	this->PlaybackTime = 0.0;
+	this->PreviousPlaybackTime = 0.0;
+}
+
+std::span<DirectAnimationTrack> CObjectAnimationComponent::GetDirectTracks() noexcept
+{
+	return this->DirectTracks;
+}
+
+std::span<const DirectAnimationTrack> CObjectAnimationComponent::GetDirectTracks() const noexcept
+{
+	return this->DirectTracks;
+}
+
+bool CObjectAnimationComponent::UsesDirectTracks() const noexcept
+{
+	return !this->DirectTracks.empty();
 }
 
 void CObjectAnimationComponent::SetParameter(resource::AnimationParameterID Parameter, resource::AnimationParameterType Type,
@@ -97,8 +144,13 @@ void CObjectAnimationComponent::SetRetargetProfile(resource::AssetHandle<resourc
 
 void CObjectAnimationComponent::OnAttachment()
 {
-	if (this->Graph.Pin() == nullptr)
+	if (this->DirectTracks.empty() && this->Graph.Pin() == nullptr)
 		throw std::runtime_error("Animation component graph asset is unavailable during attachment");
+	for (const DirectAnimationTrack &Track : this->DirectTracks)
+	{
+		if (Track.Clip.Pin() == nullptr)
+			throw std::runtime_error("AnimationTrack clip asset is unavailable during attachment");
+	}
 }
 
 AnimationPlaybackInterval CObjectAnimationComponent::AdvancePlayback(float32 DeltaSeconds)

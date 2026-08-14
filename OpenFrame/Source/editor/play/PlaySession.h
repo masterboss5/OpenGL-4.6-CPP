@@ -2,6 +2,7 @@
 
 #include "Source/runtime/behavior/BehaviorRuntime.h"
 #include "Source/scene/SceneCloner.h"
+#include "Source/editor/instance/InstanceGraph.h"
 
 #include <functional>
 #include <memory>
@@ -90,6 +91,7 @@ class PlaySession final
 	PlaySession &operator=(PlaySession &&) = delete;
 
 	void Start(const world::Scene &EditScene, PlaySessionMode Mode = PlaySessionMode::Play);
+	void Start(const document::SceneDocument &Document, PlaySessionMode Mode = PlaySessionMode::Play);
 	void Tick(core::threading::TaskScheduler &Scheduler, float64 DeltaSeconds);
 	void Pause();
 	void Resume();
@@ -107,6 +109,7 @@ class PlaySession final
 	[[nodiscard]] world::ObjectHandle FindRuntimeObject(const util::UUID &PersistentID) const;
 	[[nodiscard]] PlaySessionStatistics GetStatistics() const;
 	[[nodiscard]] const string &GetDiagnostic() const;
+	[[nodiscard]] const instance::InstanceGraphSnapshot &GetRuntimeInstances() const noexcept;
 
   private:
 	void ValidateSpecification() const;
@@ -135,6 +138,7 @@ class PlaySession final
 	PlaySessionStatistics Statistics;
 	string Diagnostic;
 	std::unordered_map<util::UUID, TransformSnapshot> AuthoringTransforms;
+	instance::InstanceGraphSnapshot RuntimeInstances;
 };
 } // namespace editor::play
 

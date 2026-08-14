@@ -6,6 +6,7 @@
 #include "Source/types.h"
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -191,6 +192,7 @@ class EditorActionRegistry final
 	std::unordered_map<EditorActionID, EditorActionDescriptor> Actions;
 	std::unordered_map<string, EditorActionID> ActionsByName;
 	core::input::InputSystem *InstalledInput = nullptr;
+	std::weak_ptr<const uint8> InstalledInputLifetime;
 	std::vector<const EditorActionDescriptor *> InputDescriptorsScratch;
 };
 

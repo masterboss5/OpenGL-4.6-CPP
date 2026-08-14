@@ -333,13 +333,15 @@ void EditorRecoveryStore::Begin(document::SceneDocument &Document, const reflect
 	const std::filesystem::path ManifestPath = this->ManifestPath(DocumentID);
 	const std::filesystem::path RecoveryRoot = this->RecoveryRoot;
 	const world::Scene *Scene = &Document.GetScene();
+	const instance::InstanceGraphSnapshot Instances = Document.GetInstances().Snapshot();
 	this->Pending = Scheduler.Submit(
-		[DocumentID, DocumentName, OriginalPath, Revision, SnapshotPath, ManifestPath, RecoveryRoot, Scene, &Reflection, &Assets]()
+		[DocumentID, DocumentName, OriginalPath, Revision, SnapshotPath, ManifestPath, RecoveryRoot, Scene, Instances, &Reflection,
+		 &Assets]()
 		{
 			const int64 TimestampMilliseconds =
 				std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-			serialization::SceneDocumentSerializer::SaveSnapshot(DocumentID, DocumentName, *Scene, Reflection, Assets, SnapshotPath,
-																 Revision, TimestampMilliseconds);
+			serialization::SceneDocumentSerializer::SaveSnapshot(DocumentID, DocumentName, *Scene, Instances, Reflection, Assets,
+																 SnapshotPath, Revision, TimestampMilliseconds);
 			EditorRecoveryCandidate Candidate{.DocumentID = DocumentID,
 											  .DocumentName = DocumentName,
 											  .SnapshotPath = SnapshotPath,

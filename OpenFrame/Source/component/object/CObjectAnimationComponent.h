@@ -61,6 +61,17 @@ struct TriggeredAnimationEvent final
 	string Name;
 };
 
+struct DirectAnimationTrack final
+{
+	util::UUID InstanceID;
+	resource::AssetHandle<resource::AnimationClipAsset> Clip;
+	float32 Speed = 1.0F;
+	float32 Weight = 1.0F;
+	float64 PreviousPlaybackTime = 0.0;
+	float64 PlaybackTime = 0.0;
+	bool Playing = true;
+};
+
 class ENGINE_API CObjectAnimationComponent final : public CObjectComponent
 {
   public:
@@ -68,12 +79,17 @@ class ENGINE_API CObjectAnimationComponent final : public CObjectComponent
 	CCOMPONENT_BODY(CObjectAnimationComponent)
 
 	explicit CObjectAnimationComponent(world::ObjectHandle Owner, resource::AssetHandle<resource::AnimationGraphAsset> Graph);
+	explicit CObjectAnimationComponent(world::ObjectHandle Owner, std::vector<DirectAnimationTrack> Tracks);
 
 	[[nodiscard]] const resource::AssetHandle<resource::AnimationGraphAsset> &GetGraph() const noexcept
 	{
 		return this->Graph;
 	}
 	void SetGraph(resource::AssetHandle<resource::AnimationGraphAsset> Graph);
+	void SetDirectTracks(std::vector<DirectAnimationTrack> Tracks);
+	[[nodiscard]] std::span<DirectAnimationTrack> GetDirectTracks() noexcept;
+	[[nodiscard]] std::span<const DirectAnimationTrack> GetDirectTracks() const noexcept;
+	[[nodiscard]] bool UsesDirectTracks() const noexcept;
 	void SetParameter(resource::AnimationParameterID Parameter, resource::AnimationParameterType Type, const glm::vec4 &Value);
 	[[nodiscard]] std::span<const AnimationParameterValue> GetParameters() const noexcept
 	{
@@ -134,6 +150,7 @@ class ENGINE_API CObjectAnimationComponent final : public CObjectComponent
 
   private:
 	resource::AssetHandle<resource::AnimationGraphAsset> Graph;
+	std::vector<DirectAnimationTrack> DirectTracks;
 	std::vector<AnimationParameterValue> Parameters;
 	std::vector<AnimationMorphWeight> MorphWeights;
 	std::vector<AnimationRigRuntimeState> RigStates;

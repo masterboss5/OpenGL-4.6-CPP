@@ -83,13 +83,18 @@ void ValidateJsonBudget(const Json &Root)
 void ValidateSerializedRoot(const Json &Root)
 {
 	ValidateJsonBudget(Root);
+	if (!Root.is_object() || !Root.contains("FormatVersion") || !Root.at("FormatVersion").is_number_unsigned())
+		throw SceneDocumentSerializationException("Scene document does not declare a valid format version");
+	if (Root.at("FormatVersion").get<uint32>() != SceneDocumentSerializer::CurrentFormatVersion)
+		throw SceneDocumentSerializationException("Scene document uses an incompatible pre-instance format; format version 2 is required");
 	if (!Root.is_object() || !Root.contains("FormatVersion") || !Root.at("FormatVersion").is_number_unsigned() ||
 		Root.at("FormatVersion").get<uint32>() != SceneDocumentSerializer::CurrentFormatVersion || !Root.contains("EngineSchemaVersion") ||
 		!Root.at("EngineSchemaVersion").is_number_unsigned() || Root.at("EngineSchemaVersion").get<uint32>() == 0 ||
 		Root.at("EngineSchemaVersion").get<uint32>() > SceneDocumentSerializer::CurrentEngineSchemaVersion || !Root.contains("ID") ||
 		!Root.at("ID").is_string() || !util::UUID::Parse(Root.at("ID").get<string>()).IsValid() || !Root.contains("Name") ||
 		!Root.at("Name").is_string() || Root.at("Name").get_ref<const string &>().empty() || !Root.contains("Objects") ||
-		!Root.at("Objects").is_array() || Root.at("Objects").size() > MaximumObjectCount)
+		!Root.at("Objects").is_array() || Root.at("Objects").size() > MaximumObjectCount || !Root.contains("Instances") ||
+		!Root.at("Instances").is_array() || Root.at("Instances").size() > MaximumObjectCount)
 	{
 		throw SceneDocumentSerializationException("Scene document root, version, identity, name, or object array is invalid");
 	}
@@ -839,14 +844,349 @@ void SceneDocumentMigrationRegistry::Migrate(Json &Root, const uint32 TargetForm
 
 namespace
 {
+[[nodiscard]] Json InstancePropertyToJson(const instance::InstancePropertyValue &Property)
+{
+	return std::visit(
+		[](const auto &Value) -> Json
+		{
+			using ValueType = std::decay_t<decltype(Value)>;
+			if constexpr (std::same_as<ValueType, bool>)
+				return {{"Kind", "Boolean"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, int32>)
+				return {{"Kind", "SignedInteger32"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, uint32>)
+				return {{"Kind", "UnsignedInteger32"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, int64>)
+				return {{"Kind", "SignedInteger"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, uint64>)
+				return {{"Kind", "UnsignedInteger"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, float32>)
+				return {{"Kind", "Scalar32"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, float64>)
+				return {{"Kind", "Scalar"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, string>)
+				return {{"Kind", "String"}, {"Value", Value}};
+			else if constexpr (std::same_as<ValueType, glm::vec2>)
+				return {{"Kind", "Vector2"}, {"Value", Json::array({Value.x, Value.y})}};
+			else if constexpr (std::same_as<ValueType, glm::vec3>)
+				return {{"Kind", "Vector3"}, {"Value", Json::array({Value.x, Value.y, Value.z})}};
+			else if constexpr (std::same_as<ValueType, glm::vec4>)
+				return {{"Kind", "Vector4"}, {"Value", Json::array({Value.x, Value.y, Value.z, Value.w})}};
+			else if constexpr (std::same_as<ValueType, glm::quat>)
+				return {{"Kind", "Quaternion"}, {"Value", Json::array({Value.w, Value.x, Value.y, Value.z})}};
+			else if constexpr (std::same_as<ValueType, util::UUID>)
+				return {{"Kind", "InstanceReference"}, {"Value", Value.IsValid() ? Json(Value.ToString()) : Json(nullptr)}};
+			else
+				return {{"Kind", "AssetReference"},
+						{"Value", {{"ID", Value.ID}, {"Type", static_cast<uint32>(Value.Type)}, {"Path", Value.ProjectRelativePath}}}};
+		},
+		Property);
+}
+
+[[nodiscard]] instance::InstancePropertyValue InstancePropertyFromJson(const Json &Node)
+{
+	if (!Node.is_object() || !Node.contains("Kind") || !Node.at("Kind").is_string() || !Node.contains("Value"))
+		throw SceneDocumentSerializationException("Instance property is malformed");
+	const string Kind = Node.at("Kind").get<string>();
+	const Json &Value = Node.at("Value");
+	if (Kind == "Boolean" && Value.is_boolean())
+		return Value.get<bool>();
+	if (Kind == "SignedInteger32" && Value.is_number_integer())
+		return Value.get<int32>();
+	if (Kind == "UnsignedInteger32" && Value.is_number_unsigned())
+		return Value.get<uint32>();
+	if (Kind == "SignedInteger" && Value.is_number_integer())
+		return Value.get<int64>();
+	if (Kind == "UnsignedInteger" && Value.is_number_unsigned())
+		return Value.get<uint64>();
+	if (Kind == "Scalar" && Value.is_number())
+		return Value.get<float64>();
+	if (Kind == "Scalar32" && Value.is_number())
+		return Value.get<float32>();
+	if (Kind == "String" && Value.is_string())
+		return Value.get<string>();
+	const auto RequireVector = [&Value, &Kind](const usize Count)
+	{
+		if (!Value.is_array() || Value.size() != Count ||
+			!std::ranges::all_of(Value, [](const Json &Element) { return Element.is_number(); }))
+			throw SceneDocumentSerializationException("Instance " + Kind + " property is malformed");
+	};
+	if (Kind == "Vector2")
+	{
+		RequireVector(2);
+		return glm::vec2(Value[0].get<float32>(), Value[1].get<float32>());
+	}
+	if (Kind == "Vector3")
+	{
+		RequireVector(3);
+		return glm::vec3(Value[0].get<float32>(), Value[1].get<float32>(), Value[2].get<float32>());
+	}
+	if (Kind == "Vector4")
+	{
+		RequireVector(4);
+		return glm::vec4(Value[0].get<float32>(), Value[1].get<float32>(), Value[2].get<float32>(), Value[3].get<float32>());
+	}
+	if (Kind == "Quaternion")
+	{
+		RequireVector(4);
+		return glm::quat(Value[0].get<float32>(), Value[1].get<float32>(), Value[2].get<float32>(), Value[3].get<float32>());
+	}
+	if (Kind == "InstanceReference" && Value.is_null())
+		return util::UUID{};
+	if (Kind == "InstanceReference" && Value.is_string())
+		return util::UUID::Parse(Value.get<string>());
+	if (Kind == "AssetReference" && Value.is_object() && Value.contains("ID") && Value.at("ID").is_string() && Value.contains("Type") &&
+		Value.at("Type").is_number_unsigned() && Value.contains("Path") && Value.at("Path").is_string())
+	{
+		const auto Type = static_cast<resource::AssetType>(Value.at("Type").get<uint32>());
+		if (!IsConcreteAssetType(Type) && Type != resource::AssetType::Count)
+			throw SceneDocumentSerializationException("Instance asset reference type is invalid");
+		return instance::InstanceAssetReference{
+			.ID = Value.at("ID").get<string>(), .Type = Type, .ProjectRelativePath = Value.at("Path").get<string>()};
+	}
+	throw SceneDocumentSerializationException("Instance property kind or value is invalid");
+}
+
+[[nodiscard]] Json SerializeInstances(const instance::InstanceGraphSnapshot &Snapshot)
+{
+	Json Result = Json::array();
+	for (const instance::InstanceRecord &Record : Snapshot.Instances)
+	{
+		Json Properties = Json::object();
+		for (const auto &[Name, Value] : Record.Properties)
+			Properties[Name] = InstancePropertyToJson(Value);
+		Result.push_back({{"ID", Record.ID.ToString()},
+						  {"ClassID", Record.ClassID.ToString()},
+						  {"ClassName", Record.ClassName},
+						  {"Name", Record.Name},
+						  {"Parent", Record.Parent.IsValid() ? Json(Record.Parent.ToString()) : Json(nullptr)},
+						  {"SiblingOrder", Record.SiblingOrder},
+						  {"Enabled", Record.Enabled},
+						  {"Protected", Record.Protected},
+						  {"Properties", std::move(Properties)}});
+	}
+	return Result;
+}
+
+void MigratePreInstanceDocument(Json &Root)
+{
+	if (!Root.is_object() || Root.value("FormatVersion", uint32{0}) != 1U ||
+		Root.value("EngineSchemaVersion", uint32{0}) != SceneDocumentSerializer::CurrentEngineSchemaVersion || !Root.contains("Objects") ||
+		!Root.at("Objects").is_array())
+	{
+		throw SceneDocumentSerializationException("Scene document has no built-in migration path from its current root version");
+	}
+	instance::InstanceTypeRegistry Types;
+	instance::InstanceGraph Services(Types);
+	instance::InstanceGraphSnapshot Snapshot = Services.Snapshot();
+	Snapshot.Revision = 1U;
+	const auto ReadVector3 = [](const Json &Properties, const string_view Name, const glm::vec3 Fallback)
+	{
+		const auto Found = Properties.find(string(Name));
+		if (Found == Properties.end() || !Found->is_array() || Found->size() != 3U ||
+			!std::ranges::all_of(*Found, [](const Json &Value) { return Value.is_number(); }))
+		{
+			return Fallback;
+		}
+		return glm::vec3((*Found)[0].get<float32>(), (*Found)[1].get<float32>(), (*Found)[2].get<float32>());
+	};
+	for (const Json &Object : Root.at("Objects"))
+	{
+		if (!Object.is_object() || !Object.contains("ID") || !Object.at("ID").is_string() || !Object.contains("Name") ||
+			!Object.at("Name").is_string() || !Object.contains("Components") || !Object.at("Components").is_object())
+		{
+			throw SceneDocumentSerializationException("Pre-instance scene contains an object that cannot be migrated");
+		}
+		const Json &Components = Object.at("Components");
+		instance::InstanceClassID ClassID = instance::class_ids::Model;
+		if (Components.contains(string(components::CObjectCameraComponent::ComponentName)))
+			ClassID = instance::class_ids::Camera;
+		else if (Components.contains(string(components::CObjectDirectionalLightComponent::ComponentName)))
+			ClassID = instance::class_ids::DirectionalLight;
+		else if (Components.contains(string(components::CObjectPointLightComponent::ComponentName)))
+			ClassID = instance::class_ids::PointLight;
+		else if (Components.contains(string(components::CObjectSpotLightComponent::ComponentName)))
+			ClassID = instance::class_ids::SpotLight;
+		else if (Components.contains(string(components::CObjectMeshComponent::ComponentName)))
+			ClassID = instance::class_ids::MeshPart;
+		const std::shared_ptr<const instance::InstanceTypeDescriptor> Descriptor = Types.Find(ClassID);
+		if (Descriptor == nullptr)
+			throw SceneDocumentSerializationException("Pre-instance scene maps to an unregistered instance class");
+		instance::InstanceRecord Record{.ID = util::UUID::Parse(Object.at("ID").get<string>()),
+										.ClassID = ClassID,
+										.ClassName = Descriptor->ClassName,
+										.Name = Object.at("Name").get<string>(),
+										.Properties = Descriptor->DefaultProperties,
+										.SiblingOrder = Object.value("SiblingOrder", uint32{0})};
+		if (!Record.ID.IsValid())
+			throw SceneDocumentSerializationException("Pre-instance scene contains an invalid object identity");
+		if (Object.contains("Parent") && Object.at("Parent").is_string())
+			Record.Parent = util::UUID::Parse(Object.at("Parent").get<string>());
+		else
+			Record.Parent = ClassID == instance::class_ids::DirectionalLight ? Services.GetLighting() : Services.GetWorkspace();
+
+		const auto TransformNode = Components.find(string(components::CObjectTransformComponent::ComponentName));
+		if (TransformNode != Components.end() && TransformNode->is_object() && TransformNode->contains("Properties") &&
+			TransformNode->at("Properties").is_object())
+		{
+			const Json &Properties = TransformNode->at("Properties");
+			const glm::vec3 Position = ReadVector3(Properties, "Position", glm::vec3(0.0F));
+			const glm::vec3 RotationEuler = ReadVector3(Properties, "RotationEuler", glm::vec3(0.0F));
+			const glm::quat Rotation = glm::quat(glm::radians(RotationEuler));
+			const glm::vec3 Scale = ReadVector3(Properties, "Scale", glm::vec3(1.0F));
+			if (ClassID == instance::class_ids::Model)
+			{
+				Record.Properties.insert_or_assign("PivotPosition", Position);
+				Record.Properties.insert_or_assign("PivotRotation", Rotation);
+				Record.Properties.insert_or_assign("PivotScale", Scale);
+			}
+			else
+			{
+				if (Record.Properties.contains("Position"))
+					Record.Properties.insert_or_assign("Position", Position);
+				if (Record.Properties.contains("Rotation"))
+					Record.Properties.insert_or_assign("Rotation", Rotation);
+				if (Record.Properties.contains("Scale"))
+					Record.Properties.insert_or_assign("Scale", Scale);
+			}
+		}
+		const auto CopyNumber =
+			[&Components, &Record](const string_view ComponentName, const string_view SourceName, const string_view DestinationName)
+		{
+			const auto Component = Components.find(string(ComponentName));
+			if (Component == Components.end() || !Component->is_object() || !Component->contains("Properties"))
+				return;
+			const Json &Properties = Component->at("Properties");
+			const auto Value = Properties.find(string(SourceName));
+			if (Value != Properties.end() && Value->is_number() && Record.Properties.contains(string(DestinationName)))
+				Record.Properties.insert_or_assign(string(DestinationName), Value->get<float64>());
+		};
+		const auto CopyBoolean =
+			[&Components, &Record](const string_view ComponentName, const string_view SourceName, const string_view DestinationName)
+		{
+			const auto Component = Components.find(string(ComponentName));
+			if (Component == Components.end() || !Component->is_object() || !Component->contains("Properties"))
+				return;
+			const Json &Properties = Component->at("Properties");
+			const auto Value = Properties.find(string(SourceName));
+			if (Value != Properties.end() && Value->is_boolean() && Record.Properties.contains(string(DestinationName)))
+				Record.Properties.insert_or_assign(string(DestinationName), Value->get<bool>());
+		};
+		if (ClassID == instance::class_ids::Camera)
+		{
+			const string_view Component = components::CObjectCameraComponent::ComponentName;
+			CopyNumber(Component, "VerticalFieldOfViewDegrees", "FieldOfView");
+			CopyNumber(Component, "OrthographicHeight", "OrthographicHeight");
+			CopyNumber(Component, "NearPlane", "NearPlane");
+			CopyNumber(Component, "FarPlane", "FarPlane");
+			CopyNumber(Component, "ExposureCompensation", "ExposureCompensation");
+			CopyBoolean(Component, "Primary", "Primary");
+			CopyBoolean(Component, "TemporalJitterEnabled", "TemporalJitter");
+			const Json &Properties = Components.at(string(Component)).at("Properties");
+			Record.Properties.insert_or_assign("Projection", Properties.value("Projection", uint32{0}) == 0U ? string("Perspective")
+																											 : string("Orthographic"));
+		}
+		const auto MigrateLight = [&Components, &Record, &CopyNumber, &CopyBoolean, &ReadVector3](const string_view Component)
+		{
+			const Json &Properties = Components.at(string(Component)).at("Properties");
+			Record.Properties.insert_or_assign("Color", ReadVector3(Properties, "Color", glm::vec3(1.0F)));
+			for (const string_view Name : {string_view("ShadowConstantBias"), string_view("ShadowSlopeBias"),
+										   string_view("ShadowNormalBias"), string_view("ShadowFilterRadius")})
+				CopyNumber(Component, Name, Name);
+			CopyBoolean(Component, "CastShadows", "CastShadows");
+			const auto Resolution = Properties.find("ShadowResolution");
+			if (Resolution != Properties.end() && Resolution->is_number_unsigned())
+				Record.Properties.insert_or_assign("ShadowResolution", Resolution->get<uint64>());
+		};
+		if (ClassID == instance::class_ids::DirectionalLight)
+		{
+			const string_view Component = components::CObjectDirectionalLightComponent::ComponentName;
+			MigrateLight(Component);
+			CopyNumber(Component, "IlluminanceLux", "IlluminanceLux");
+			CopyNumber(Component, "AngularDiameterDegrees", "AngularDiameterDegrees");
+			const Json &Properties = Components.at(string(Component)).at("Properties");
+			if (const auto Count = Properties.find("CascadeCount"); Count != Properties.end() && Count->is_number_unsigned())
+				Record.Properties.insert_or_assign("CascadeCount", Count->get<uint64>());
+			CopyNumber(Component, "CascadeDistributionExponent", "CascadeDistributionExponent");
+		}
+		else if (ClassID == instance::class_ids::PointLight)
+		{
+			const string_view Component = components::CObjectPointLightComponent::ComponentName;
+			MigrateLight(Component);
+			CopyNumber(Component, "LuminousPowerLumens", "LuminousPowerLumens");
+			CopyNumber(Component, "Range", "Range");
+			CopyNumber(Component, "SourceRadius", "SourceRadius");
+		}
+		else if (ClassID == instance::class_ids::SpotLight)
+		{
+			const string_view Component = components::CObjectSpotLightComponent::ComponentName;
+			MigrateLight(Component);
+			CopyNumber(Component, "LuminousPowerLumens", "LuminousPowerLumens");
+			CopyNumber(Component, "Range", "Range");
+			CopyNumber(Component, "InnerConeDegrees", "InnerConeDegrees");
+			CopyNumber(Component, "OuterConeDegrees", "OuterConeDegrees");
+		}
+		else if (ClassID == instance::class_ids::MeshPart)
+		{
+			const Json &Model = Components.at(string(components::CObjectMeshComponent::ComponentName)).at("Properties").at("Model");
+			if (Model.is_object())
+			{
+				Record.Properties.insert_or_assign(
+					"Model", instance::InstanceAssetReference{.ID = Model.value("ID", string{}),
+															  .Type = static_cast<resource::AssetType>(Model.value("Type", uint32{3})),
+															  .ProjectRelativePath = Model.value("Path", string{})});
+			}
+		}
+		Snapshot.Instances.push_back(std::move(Record));
+	}
+	Root["Instances"] = SerializeInstances(Snapshot);
+	Root["FormatVersion"] = SceneDocumentSerializer::CurrentFormatVersion;
+}
+
+[[nodiscard]] instance::InstanceGraphSnapshot DeserializeInstances(const Json &Root)
+{
+	if (!Root.contains("Instances") || !Root.at("Instances").is_array() || Root.at("Instances").size() > MaximumObjectCount)
+		throw SceneDocumentSerializationException("Scene document instance array is invalid");
+	instance::InstanceGraphSnapshot Result{.Revision = 1};
+	Result.Instances.reserve(Root.at("Instances").size());
+	for (const Json &Node : Root.at("Instances"))
+	{
+		if (!Node.is_object() || !Node.contains("ID") || !Node.at("ID").is_string() || !Node.contains("ClassID") ||
+			!Node.at("ClassID").is_string() || !Node.contains("ClassName") || !Node.at("ClassName").is_string() || !Node.contains("Name") ||
+			!Node.at("Name").is_string() || !Node.contains("Parent") || (!Node.at("Parent").is_null() && !Node.at("Parent").is_string()) ||
+			!Node.contains("SiblingOrder") || !Node.at("SiblingOrder").is_number_unsigned() || !Node.contains("Enabled") ||
+			!Node.at("Enabled").is_boolean() || !Node.contains("Protected") || !Node.at("Protected").is_boolean() ||
+			!Node.contains("Properties") || !Node.at("Properties").is_object())
+		{
+			throw SceneDocumentSerializationException("Scene document contains an invalid instance record");
+		}
+		instance::InstancePropertyMap Properties;
+		for (const auto &[Name, Value] : Node.at("Properties").items())
+			Properties.emplace(Name, InstancePropertyFromJson(Value));
+		Result.Instances.push_back(
+			{.ID = util::UUID::Parse(Node.at("ID").get<string>()),
+			 .ClassID = util::UUID::Parse(Node.at("ClassID").get<string>()),
+			 .ClassName = Node.at("ClassName").get<string>(),
+			 .Name = Node.at("Name").get<string>(),
+			 .Parent = Node.at("Parent").is_null() ? util::UUID{} : util::UUID::Parse(Node.at("Parent").get<string>()),
+			 .Properties = std::move(Properties),
+			 .SiblingOrder = Node.at("SiblingOrder").get<uint32>(),
+			 .Enabled = Node.at("Enabled").get<bool>(),
+			 .Protected = Node.at("Protected").get<bool>()});
+	}
+	return Result;
+}
+
 [[nodiscard]] Json SerializeScene(const util::UUID &DocumentID, const string_view DocumentName, const world::Scene &Scene,
-								  const reflection::ReflectionRegistry &Reflection, resource::AssetManager &Assets)
+								  const instance::InstanceGraphSnapshot &Instances, const reflection::ReflectionRegistry &Reflection,
+								  resource::AssetManager &Assets)
 {
 	Json Root{{"FormatVersion", SceneDocumentSerializer::CurrentFormatVersion},
 			  {"EngineSchemaVersion", SceneDocumentSerializer::CurrentEngineSchemaVersion},
 			  {"MigrationData", Json::object()},
 			  {"ID", DocumentID.ToString()},
 			  {"Name", DocumentName},
+			  {"Instances", SerializeInstances(Instances)},
 			  {"Objects", Json::array()}};
 	const world::Scene::ReadAccess Access = Scene.Read();
 	for (const world::ObjectHandle Object : Access.Objects())
@@ -987,7 +1327,8 @@ void SceneDocumentSerializer::Save(document::SceneDocument &Document, const refl
 	Document.AssertOwnerThread();
 	const std::filesystem::path Destination = Path.empty() ? Document.GetPath() : Path;
 	const uint64 Revision = Document.GetRevision();
-	Json Root = SerializeScene(Document.GetID(), Document.GetName(), Document.GetScene(), Reflection, Assets);
+	Json Root =
+		SerializeScene(Document.GetID(), Document.GetName(), Document.GetScene(), Document.GetInstances().Snapshot(), Reflection, Assets);
 	Root = MergePreservedData(std::move(Root), Document.GetPreservedSerializationData());
 	WriteScene(Root, Destination, &Document, Revision);
 	Document.SetPreservedSerializationData(Root.dump());
@@ -995,12 +1336,13 @@ void SceneDocumentSerializer::Save(document::SceneDocument &Document, const refl
 }
 
 void SceneDocumentSerializer::SaveSnapshot(const util::UUID &DocumentID, const string_view DocumentName, const world::Scene &Scene,
+										   const instance::InstanceGraphSnapshot &Instances,
 										   const reflection::ReflectionRegistry &Reflection, resource::AssetManager &Assets,
 										   const std::filesystem::path &Path, const uint64 Revision, const int64 TimestampMilliseconds)
 {
 	if (!DocumentID.IsValid() || DocumentName.empty() || Revision == 0 || TimestampMilliseconds <= 0)
 		throw SceneDocumentSerializationException("Scene snapshot requires a valid document identity and name");
-	Json Root = SerializeScene(DocumentID, DocumentName, Scene, Reflection, Assets);
+	Json Root = SerializeScene(DocumentID, DocumentName, Scene, Instances, Reflection, Assets);
 	const string CanonicalContent = Root.dump();
 	const uint64 ContentChecksum = core::io::CompressedArchive::CalculateChecksum(
 		std::span(reinterpret_cast<const uint8 *>(CanonicalContent.data()), CanonicalContent.size()));
@@ -1017,16 +1359,27 @@ std::unique_ptr<document::SceneDocument> SceneDocumentSerializer::Load(const std
 																	   const SceneDocumentMigrationRegistry *Migrations)
 {
 	Json Root = ReadJsonFile(Path);
+	if (Root.is_object() && Root.value("FormatVersion", uint32{0}) == 1U)
+		MigratePreInstanceDocument(Root);
 	if (Migrations != nullptr)
 	{
 		Migrations->Migrate(Root, SceneDocumentSerializer::CurrentFormatVersion, SceneDocumentSerializer::CurrentEngineSchemaVersion,
 							SceneDocumentSerializer::CurrentComponentSchemaVersion);
 	}
 	ValidateSerializedRoot(Root);
+	const instance::InstanceGraphSnapshot InstanceSnapshot = DeserializeInstances(Root);
 	PreflightReflectedProperties(Root, Reflection, Assets);
 	resource::AssetLoadTransaction AssetTransaction = Assets.BeginLoadTransaction();
 	auto Document = std::make_unique<document::SceneDocument>(Root.at("Name").get<string>(), world::SceneCapacitySpecification{},
 															  util::UUID::Parse(Root.at("ID").get<string>()), CommandHistoryCapacity);
+	try
+	{
+		Document->GetInstances().LoadSnapshot(InstanceSnapshot);
+	}
+	catch (const std::exception &Exception)
+	{
+		throw SceneDocumentSerializationException("Scene instance graph is invalid: " + string(Exception.what()));
+	}
 	std::unordered_map<util::UUID, world::ObjectHandle> Objects;
 	for (const Json &ObjectNode : Root["Objects"])
 	{

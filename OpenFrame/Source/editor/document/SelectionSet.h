@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Source/scene/Scene.h"
+#include "Source/editor/instance/InstanceGraph.h"
 #include "Source/types.h"
 #include "Source/util/UUID.h"
 
@@ -18,6 +19,7 @@ class SelectionSet final
 	void Toggle(const util::UUID &Object);
 	void Clear() noexcept;
 	void Prune(const world::Scene &Scene);
+	void Prune(const instance::InstanceGraph &Graph);
 
 	[[nodiscard]] bool Contains(const util::UUID &Object) const;
 	[[nodiscard]] bool Empty() const noexcept;

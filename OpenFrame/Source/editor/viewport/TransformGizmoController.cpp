@@ -918,7 +918,7 @@ void TransformGizmoController::ApplyScale(const Ray &Ray, const Camera &Camera)
 void TransformGizmoController::Publish(const std::span<const commands::TransformEditTarget> Targets)
 {
 	this->ActiveDocument->GetHistory().Execute(
-		commands::TransformEditCommand::Create(this->ActiveDocument->GetScene(), Targets, "Transform selection"));
+		commands::TransformEditCommand::Create(*this->ActiveDocument, Targets, "Transform selection"));
 	this->HasPublishedEdit = true;
 }
 } // namespace editor::viewport

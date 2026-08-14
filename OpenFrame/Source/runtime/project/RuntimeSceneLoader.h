@@ -30,7 +30,7 @@ class ENGINE_API RuntimeSceneLoadException final : public std::runtime_error
 class ENGINE_API RuntimeSceneLoader final
 {
   public:
-	static constexpr uint32 CurrentFormatVersion = RuntimeSceneBinary::FormatVersion;
+	static constexpr uint32 CurrentFormatVersion = RuntimeSceneBinary::SceneDocumentFormatVersion;
 
 	[[nodiscard]] static LoadedRuntimeScene Load(const std::filesystem::path &Path, resource::AssetManager &Assets);
 };

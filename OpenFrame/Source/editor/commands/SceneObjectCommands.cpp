@@ -112,6 +112,7 @@ struct ObjectState final
 	glm::vec3 Position{0.0f};
 	glm::quat Rotation{1.0f, 0.0f, 0.0f, 0.0f};
 	glm::vec3 Scale{1.0f};
+	std::optional<instance::InstanceRecord> Instance;
 	std::optional<CameraState> Camera;
 	std::optional<MeshState> Mesh;
 	std::optional<AnimationState> Animation;
@@ -490,7 +491,12 @@ class SceneObjectArchive final
 		{
 			const uint32 RootDepth = Hierarchy.Rows[Root].Depth;
 			for (uint32 Row = Root; Row < Hierarchy.Rows.size() && (Row == Root || Hierarchy.Rows[Row].Depth > RootDepth); ++Row)
-				this->Objects.push_back(CaptureObject(Access, Hierarchy, Hierarchy.Rows[Row]));
+			{
+				ObjectState State = CaptureObject(Access, Hierarchy, Hierarchy.Rows[Row]);
+				if (Document.GetInstances().Contains(State.ID))
+					State.Instance = Document.GetInstances().Get(State.ID);
+				this->Objects.push_back(std::move(State));
+			}
 		}
 		if (Duplicate)
 			this->RemapForDuplicate();
@@ -563,6 +569,15 @@ class SceneObjectArchive final
 					throw std::out_of_range("Scene object archive parent is not available during restore");
 				const world::ObjectHandle Object = Document.CreateObject(State.Name, Parent, State.ID);
 				Created.push_back(State.ID);
+				if (State.Instance.has_value())
+				{
+					instance::InstanceGraph &Graph = Document.GetInstances();
+					Graph.SetClass(State.ID, State.Instance->ClassID);
+					Graph.Reparent(State.ID, State.Instance->Parent, State.Instance->SiblingOrder);
+					Graph.SetEnabled(State.ID, State.Instance->Enabled);
+					for (const auto &[Name, Value] : State.Instance->Properties)
+						Graph.SetProperty(State.ID, Name, Value);
+				}
 				RestoreComponents(Document.GetScene(), Object, State);
 				if (Parent.IsValid())
 					Document.GetScene().SetParent(Object, Parent, State.SiblingOrder);
@@ -617,6 +632,23 @@ class SceneObjectArchive final
 		{
 			if (const auto Parent = Remap.find(Object.Parent); Parent != Remap.end())
 				Object.Parent = Parent->second;
+			if (Object.Instance.has_value())
+			{
+				Object.Instance->ID = Object.ID;
+				Object.Instance->Name = Object.Name;
+				if (const auto Parent = Remap.find(Object.Instance->Parent); Parent != Remap.end())
+					Object.Instance->Parent = Parent->second;
+				for (util::UUID &Child : Object.Instance->Children)
+					if (const auto Replacement = Remap.find(Child); Replacement != Remap.end())
+						Child = Replacement->second;
+				for (auto &[Name, Value] : Object.Instance->Properties)
+				{
+					(void)Name;
+					if (util::UUID *Reference = std::get_if<util::UUID>(&Value); Reference != nullptr)
+						if (const auto Replacement = Remap.find(*Reference); Replacement != Remap.end())
+							*Reference = Replacement->second;
+				}
+			}
 			if (!Object.Behaviors.has_value())
 				continue;
 			for (components::BehaviorInstance &Behavior : *Object.Behaviors)

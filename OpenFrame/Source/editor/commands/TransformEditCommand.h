@@ -7,6 +7,11 @@
 #include <span>
 #include <vector>
 
+namespace editor::document
+{
+class SceneDocument;
+}
+
 namespace editor::commands
 {
 struct TransformState final
@@ -30,6 +35,8 @@ class TransformEditCommand final : public EditorCommand
   public:
 	[[nodiscard]] static EditorCommandPtr Create(world::Scene &Scene, std::span<const TransformEditTarget> Targets,
 												 string Name = "Transform selection");
+	[[nodiscard]] static EditorCommandPtr Create(document::SceneDocument &Document, std::span<const TransformEditTarget> Targets,
+												 string Name = "Transform selection");
 
 	[[nodiscard]] string_view GetName() const noexcept override;
 	void Execute() override;
@@ -41,14 +48,16 @@ class TransformEditCommand final : public EditorCommand
 	{
 		world::ObjectHandle Object;
 		world::ComponentHandle<components::CObjectTransformComponent> Component;
+		util::UUID InstanceID;
 		TransformState Before;
 		TransformState After;
 	};
 
-	TransformEditCommand(world::Scene &Scene, std::vector<Entry> Entries, string Name);
+	TransformEditCommand(world::Scene &Scene, document::SceneDocument *Document, std::vector<Entry> Entries, string Name);
 	void Apply(bool UseAfter);
 
 	world::Scene *Scene = nullptr;
+	document::SceneDocument *Document = nullptr;
 	std::vector<Entry> Entries;
 	string Name;
 };

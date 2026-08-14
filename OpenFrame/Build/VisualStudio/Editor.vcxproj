@@ -36,6 +36,9 @@
   <ImportGroup Label="PropertySheets">
     <Import Project="EngineProject.props" />
   </ImportGroup>
+  <PropertyGroup>
+    <OutDir>$(RepositoryRoot)Artifacts\</OutDir>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
       <PreprocessorDefinitions>IMGUI_IMPL_OPENGL_LOADER_GLEW;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -43,9 +46,29 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
+      <ProgramDataBaseFileName>$(IntDir)$(TargetName).pdb</ProgramDataBaseFileName>
       <AdditionalDependencies>glfw3.lib;opengl32.lib;User32.lib;Gdi32.lib;Shell32.lib;glew32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <Link>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ApplicationRuntimeDependency Include="$(BuildOutputRoot)$(Configuration)\Engine\OpenFrameEngine.dll" />
+    <ApplicationRuntimeDependency Include="$(RepositoryRoot)ThirdParty\ASSIMP\lib\assimp-vc145-mt.dll" />
+    <ApplicationRuntimeDependency Include="$(RepositoryRoot)ThirdParty\GLEW\bin\Release\x64\glew32.dll" />
+  </ItemGroup>
+  <Target Name="ResetApplicationOutput" BeforeTargets="PrepareForBuild">
+    <RemoveDir Directories="$(OutDir)" Condition="Exists('$(OutDir)')" />
+    <MakeDir Directories="$(OutDir)" />
+  </Target>
+  <Target Name="DeployApplicationRuntime" AfterTargets="Build">
+    <Error Condition="!Exists('%(ApplicationRuntimeDependency.Identity)')"
+           Text="Required OpenFrame runtime file is missing: %(ApplicationRuntimeDependency.Identity)" />
+    <Copy SourceFiles="@(ApplicationRuntimeDependency)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
   <ItemGroup>
     <ClCompile Include="..\..\..\ThirdParty\IMGUI\imgui.cpp">
       <TreatWarningAsError>false</TreatWarningAsError>

@@ -29,6 +29,7 @@
 #include "Source/editor/commands/PropertyEditCommand.h"
 #include "Source/editor/commands/MeshMaterialOverrideCommand.h"
 #include "Source/editor/commands/BehaviorCommands.h"
+#include "Source/editor/commands/InstanceCommands.h"
 #include "Source/editor/commands/SceneObjectCommands.h"
 #include "Source/editor/material/MaterialDocument.h"
 #include "Source/editor/preferences/EditorContentBrowserStore.h"
@@ -39,6 +40,7 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_internal.h>
 #include <misc/cpp/imgui_stdlib.h>
+#include <gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <array>
@@ -179,6 +181,7 @@ struct EditorUserInterface::State final
 	std::vector<std::pair<const string *, components::BehaviorPropertyValue *>> BehaviorPropertiesScratch;
 	std::vector<util::UUID> MissingComponentObjectsScratch;
 	std::vector<uint32> ExplorerOpenDepthsScratch;
+	std::vector<uint32> ExplorerVisibleRowsScratch;
 	std::vector<const asset::ContentEntry *> ContentEntriesScratch;
 	std::vector<core::diagnostics::Diagnostic> DiagnosticsScratch;
 	std::vector<const action::EditorActionDescriptor *> ActionDescriptorsScratch;
@@ -197,6 +200,9 @@ struct EditorUserInterface::State final
 	util::UUID ExplorerSelectionAnchor;
 	string ExplorerRenameValue;
 	bool ExplorerRenameRequested = false;
+	util::UUID ExplorerInsertParent;
+	string ExplorerInsertFilter;
+	bool ExplorerInsertRequested = false;
 	string NewProjectName = "New Project";
 	std::filesystem::path NewProjectParent;
 	string NewProjectParentText;
@@ -205,6 +211,36 @@ struct EditorUserInterface::State final
 
 namespace
 {
+[[nodiscard]] string NormalizeFilterText(const string_view Text)
+{
+	string Result(Text);
+	std::ranges::transform(Result, Result.begin(), [](const string::value_type Value)
+						   { return static_cast<string::value_type>(std::tolower(static_cast<unsigned char>(Value))); });
+	return Result;
+}
+
+[[nodiscard]] instance::InstancePropertyValue ToInstanceProperty(const components::BehaviorPropertyValue &Value)
+{
+	return std::visit([](const auto &TypedValue) -> instance::InstancePropertyValue { return TypedValue; }, Value);
+}
+
+[[nodiscard]] string InstancePropertyDisplayName(const string_view Name)
+{
+	const string_view Unqualified = Name.starts_with("Behavior.") ? Name.substr(9) : Name;
+	string Result;
+	Result.reserve(Unqualified.size() + 4U);
+	for (usize Index = 0; Index < Unqualified.size(); ++Index)
+	{
+		if (Index != 0 && std::isupper(static_cast<unsigned char>(Unqualified[Index])) != 0 &&
+			std::islower(static_cast<unsigned char>(Unqualified[Index - 1U])) != 0)
+		{
+			Result.push_back(' ');
+		}
+		Result.push_back(Unqualified[Index]);
+	}
+	return Result;
+}
+
 void RetireThumbnailTexture(auto &State, const asset::AssetThumbnailKey &Key)
 {
 	const auto Found = State.ThumbnailTextures.find(Key);
@@ -1448,12 +1484,319 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 		ImGui::TextDisabled("Select an object to inspect its components.");
 	else
 	{
-		const world::ObjectHandle Object = Session.GetDocument().GetScene().FindObject(Selection.GetPrimary());
+		const util::UUID SelectedID = Selection.GetPrimary();
+		const bool TypedInstance = Session.GetDocument().GetInstances().Contains(SelectedID);
+		if (TypedInstance)
+		{
+			const instance::InstanceRecord Record = Session.GetDocument().GetInstances().Get(SelectedID);
+			const std::shared_ptr<const instance::InstanceTypeDescriptor> InstanceType =
+				Session.GetDocument().GetInstanceTypes().Find(Record.ClassID);
+			const instance::InstanceActivation Activation = Session.GetDocument().GetInstances().GetActivation(SelectedID);
+			ImGui::TextUnformatted(Record.Name.c_str());
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", Record.ClassName.c_str());
+			if (Activation.State != instance::InstanceActivationState::Active)
+			{
+				const ImVec4 Color = Activation.State == instance::InstanceActivationState::Unavailable ? ImVec4(0.58F, 0.6F, 0.67F, 1.0F)
+																										: ImVec4(0.95F, 0.67F, 0.25F, 1.0F);
+				ImGui::TextColored(Color, "%s", Activation.Diagnostic.c_str());
+			}
+			if (Record.Protected && Record.Properties.empty())
+				ImGui::TextDisabled("This service currently has no editable properties.");
+			if (Record.ClassID == instance::class_ids::Script)
+			{
+				Session.GetBehaviorRegistry().SnapshotInto(State.BehaviorDescriptorsScratch);
+				const string &CurrentBehavior = std::get<string>(Record.Properties.at("BehaviorName"));
+				ImGui::SetNextItemWidth(-1.0F);
+				if (ImGui::BeginCombo("##ScriptBehavior", CurrentBehavior.empty() ? "Choose behavior..." : CurrentBehavior.c_str()))
+				{
+					for (const runtime::behavior::BehaviorDescriptor &Behavior : State.BehaviorDescriptorsScratch)
+					{
+						const bool Selected = Behavior.Name == CurrentBehavior &&
+											  Behavior.StableTypeID == std::get<util::UUID>(Record.Properties.at("StableTypeID"));
+						if (!ImGui::Selectable((Behavior.ModuleName + " / " + Behavior.Name).c_str(), Selected))
+							continue;
+						commands::CommandHistory &History = Session.GetDocument().GetHistory();
+						try
+						{
+							History.BeginTransaction("Configure Script");
+							for (const auto &[Name, Value] : Record.Properties)
+							{
+								(void)Value;
+								if (Name.starts_with("Behavior."))
+									History.Execute(
+										std::make_unique<commands::RemoveInstancePropertyCommand>(Session.GetDocument(), Record.ID, Name));
+							}
+							const auto Set = [&](string Name, instance::InstancePropertyValue Value)
+							{
+								History.Execute(std::make_unique<commands::SetInstancePropertyCommand>(Session.GetDocument(), Record.ID,
+																									   std::move(Name), std::move(Value)));
+							};
+							Set("BehaviorType", static_cast<uint64>(Behavior.Type));
+							Set("BehaviorName", Behavior.Name);
+							Set("ModuleName", Behavior.ModuleName);
+							Set("StableTypeID", Behavior.StableTypeID);
+							Set("SchemaVersion", static_cast<uint64>(Behavior.SchemaVersion));
+							for (const runtime::behavior::BehaviorPropertyDescriptor &Property : Behavior.Properties)
+								Set("Behavior." + Property.Name, ToInstanceProperty(Property.DefaultValue));
+							History.CommitTransaction();
+						}
+						catch (const std::exception &Exception)
+						{
+							if (History.HasOpenTransaction())
+								History.CancelTransaction();
+							Context.Diagnostics.Publish(core::diagnostics::DiagnosticSeverity::Error, "Script", Exception.what());
+						}
+					}
+					ImGui::EndCombo();
+				}
+			}
+			if (!Record.Properties.empty() &&
+				ImGui::BeginTable("InstanceProperties", 2,
+								  ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+			{
+				std::vector<const std::pair<const string, instance::InstancePropertyValue> *> Properties;
+				Properties.reserve(Record.Properties.size());
+				for (const auto &Property : Record.Properties)
+					Properties.push_back(&Property);
+				const auto PropertyOrder = [&InstanceType](const string_view Name)
+				{
+					if (InstanceType == nullptr)
+						return std::numeric_limits<usize>::max();
+					const auto Found = std::ranges::find(InstanceType->Properties, Name, &instance::InstancePropertyDescriptor::Name);
+					return Found == InstanceType->Properties.end()
+							   ? std::numeric_limits<usize>::max()
+							   : static_cast<usize>(std::distance(InstanceType->Properties.begin(), Found));
+				};
+				std::ranges::sort(Properties,
+								  [&PropertyOrder](const auto *Left, const auto *Right)
+								  {
+									  return std::tuple{PropertyOrder(Left->first), Left->first} <
+											 std::tuple{PropertyOrder(Right->first), Right->first};
+								  });
+				string CurrentCategory;
+				for (const auto *Property : Properties)
+				{
+					const auto PropertySchema =
+						InstanceType == nullptr
+							? std::vector<instance::InstancePropertyDescriptor>::const_iterator{}
+							: std::ranges::find(InstanceType->Properties, Property->first, &instance::InstancePropertyDescriptor::Name);
+					const instance::InstancePropertyDescriptor *Schema =
+						InstanceType != nullptr && PropertySchema != InstanceType->Properties.end() ? &*PropertySchema : nullptr;
+					if (!State.PropertyFilter.empty() &&
+						NormalizeFilterText(Property->first + " " + (Schema != nullptr ? Schema->Category : string{}))
+								.find(NormalizeFilterText(State.PropertyFilter)) == string::npos)
+						continue;
+					const string Category = Schema != nullptr ? Schema->Category : "Behavior";
+					if (Category != CurrentCategory)
+					{
+						CurrentCategory = Category;
+						ImGui::TableNextRow();
+						ImGui::TableSetColumnIndex(0);
+						ImGui::TextDisabled("%s", CurrentCategory.c_str());
+						ImGui::TableSetColumnIndex(1);
+						ImGui::Separator();
+					}
+					ImGui::TableNextRow();
+					ImGui::TableSetColumnIndex(0);
+					const string DisplayName = Schema != nullptr ? Schema->DisplayName : InstancePropertyDisplayName(Property->first);
+					ImGui::TextUnformatted(DisplayName.c_str());
+					ImGui::TableSetColumnIndex(1);
+					ImGui::PushID(Property->first.c_str());
+					const bool ReadOnly = Schema != nullptr && Schema->ReadOnly;
+					const float32 DragSpeed = Schema != nullptr ? static_cast<float32>(Schema->Step) : 0.05F;
+					const auto Commit = [&](instance::InstancePropertyValue Value)
+					{
+						try
+						{
+							Session.GetDocument().Execute(std::make_unique<commands::SetInstancePropertyCommand>(
+								Session.GetDocument(), Record.ID, Property->first, std::move(Value)));
+						}
+						catch (const std::exception &Exception)
+						{
+							Context.Diagnostics.Publish(core::diagnostics::DiagnosticSeverity::Error, "Properties", Exception.what());
+						}
+					};
+					std::visit(
+						[&](const auto &StoredValue)
+						{
+							using ValueType = std::decay_t<decltype(StoredValue)>;
+							ValueType Value = StoredValue;
+							if constexpr (std::same_as<ValueType, bool>)
+							{
+								if (ReadOnly)
+									ImGui::TextUnformatted(Value ? "True" : "False");
+								else if (ImGui::Checkbox("##Value", &Value))
+									Commit(Value);
+							}
+							else if constexpr (std::same_as<ValueType, int32>)
+							{
+								const int32 Minimum = Schema != nullptr && Schema->Minimum ? static_cast<int32>(*Schema->Minimum) : 0;
+								const int32 Maximum = Schema != nullptr && Schema->Maximum ? static_cast<int32>(*Schema->Maximum) : 0;
+								if (!ReadOnly && ImGui::DragScalar("##Value", ImGuiDataType_S32, &Value, DragSpeed,
+																   Schema != nullptr && Schema->Minimum ? &Minimum : nullptr,
+																   Schema != nullptr && Schema->Maximum ? &Maximum : nullptr))
+									Commit(Value);
+								else if (ReadOnly)
+									ImGui::Text("%d", Value);
+							}
+							else if constexpr (std::same_as<ValueType, uint32>)
+							{
+								const uint32 Minimum = Schema != nullptr && Schema->Minimum ? static_cast<uint32>(*Schema->Minimum) : 0;
+								const uint32 Maximum = Schema != nullptr && Schema->Maximum ? static_cast<uint32>(*Schema->Maximum) : 0;
+								if (!ReadOnly && ImGui::DragScalar("##Value", ImGuiDataType_U32, &Value, DragSpeed,
+																   Schema != nullptr && Schema->Minimum ? &Minimum : nullptr,
+																   Schema != nullptr && Schema->Maximum ? &Maximum : nullptr))
+									Commit(Value);
+								else if (ReadOnly)
+									ImGui::Text("%u", Value);
+							}
+							else if constexpr (std::same_as<ValueType, int64>)
+							{
+								const int64 Minimum = Schema != nullptr && Schema->Minimum ? static_cast<int64>(*Schema->Minimum) : 0;
+								const int64 Maximum = Schema != nullptr && Schema->Maximum ? static_cast<int64>(*Schema->Maximum) : 0;
+								if (!ReadOnly && ImGui::DragScalar("##Value", ImGuiDataType_S64, &Value, DragSpeed,
+																   Schema != nullptr && Schema->Minimum ? &Minimum : nullptr,
+																   Schema != nullptr && Schema->Maximum ? &Maximum : nullptr))
+									Commit(Value);
+								else if (ReadOnly)
+									ImGui::Text("%lld", static_cast<long long>(Value));
+							}
+							else if constexpr (std::same_as<ValueType, uint64>)
+							{
+								if (ReadOnly)
+									ImGui::Text("%llu", static_cast<unsigned long long>(Value));
+								else if (Schema != nullptr && Schema->Presentation == instance::InstancePropertyPresentation::Choice)
+								{
+									const string Current = std::to_string(Value);
+									if (ImGui::BeginCombo("##Value", Current.c_str()))
+									{
+										for (const string &Option : Schema->Choices)
+										{
+											if (ImGui::Selectable(Option.c_str(), Option == Current))
+												Commit(static_cast<uint64>(std::stoull(Option)));
+										}
+										ImGui::EndCombo();
+									}
+								}
+								else
+								{
+									const uint64 Minimum = Schema != nullptr && Schema->Minimum ? static_cast<uint64>(*Schema->Minimum) : 0;
+									const uint64 Maximum = Schema != nullptr && Schema->Maximum ? static_cast<uint64>(*Schema->Maximum) : 0;
+									if (ImGui::DragScalar("##Value", ImGuiDataType_U64, &Value, DragSpeed,
+														  Schema != nullptr && Schema->Minimum ? &Minimum : nullptr,
+														  Schema != nullptr && Schema->Maximum ? &Maximum : nullptr))
+										Commit(Value);
+								}
+							}
+							else if constexpr (std::same_as<ValueType, float32>)
+							{
+								const float32 Minimum =
+									Schema != nullptr && Schema->Minimum ? static_cast<float32>(*Schema->Minimum) : 0.0F;
+								const float32 Maximum =
+									Schema != nullptr && Schema->Maximum ? static_cast<float32>(*Schema->Maximum) : 0.0F;
+								if (!ReadOnly && ImGui::DragScalar("##Value", ImGuiDataType_Float, &Value, DragSpeed,
+																   Schema != nullptr && Schema->Minimum ? &Minimum : nullptr,
+																   Schema != nullptr && Schema->Maximum ? &Maximum : nullptr))
+									Commit(Value);
+								else if (ReadOnly)
+									ImGui::Text("%.6g", static_cast<float64>(Value));
+							}
+							else if constexpr (std::same_as<ValueType, float64>)
+							{
+								const float64 Minimum = Schema != nullptr && Schema->Minimum ? *Schema->Minimum : 0.0;
+								const float64 Maximum = Schema != nullptr && Schema->Maximum ? *Schema->Maximum : 0.0;
+								if (!ReadOnly && ImGui::DragScalar("##Value", ImGuiDataType_Double, &Value, DragSpeed,
+																   Schema != nullptr && Schema->Minimum ? &Minimum : nullptr,
+																   Schema != nullptr && Schema->Maximum ? &Maximum : nullptr))
+									Commit(Value);
+								else if (ReadOnly)
+									ImGui::Text("%.6g", Value);
+							}
+							else if constexpr (std::same_as<ValueType, string>)
+							{
+								if (Schema != nullptr && Schema->Presentation == instance::InstancePropertyPresentation::Choice)
+								{
+									if (ImGui::BeginCombo("##Value", Value.c_str()))
+									{
+										for (const string &Option : Schema->Choices)
+										{
+											if (ImGui::Selectable(Option.c_str(), Value == Option))
+												Commit(Option);
+										}
+										ImGui::EndCombo();
+									}
+								}
+								else if (ReadOnly)
+									ImGui::TextUnformatted(Value.empty() ? "None" : Value.c_str());
+								else if (InputText("##Value", Value))
+									Commit(Value);
+							}
+							else if constexpr (std::same_as<ValueType, glm::vec2>)
+							{
+								if (ImGui::DragFloat2("##Value", &Value.x, 0.05F))
+									Commit(Value);
+							}
+							else if constexpr (std::same_as<ValueType, glm::vec3>)
+							{
+								if (Schema != nullptr && Schema->Presentation == instance::InstancePropertyPresentation::Color)
+								{
+									if (ImGui::ColorEdit3("##Value", &Value.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+										Commit(Value);
+								}
+								else if (ImGui::DragFloat3("##Value", &Value.x, 0.05F))
+									Commit(Value);
+							}
+							else if constexpr (std::same_as<ValueType, glm::vec4>)
+							{
+								if (ImGui::DragFloat4("##Value", &Value.x, 0.05F))
+									Commit(Value);
+							}
+							else if constexpr (std::same_as<ValueType, glm::quat>)
+							{
+								glm::vec3 EulerDegrees = glm::degrees(glm::eulerAngles(Value));
+								if (ImGui::DragFloat3("##Value", &EulerDegrees.x, 0.25F))
+									Commit(glm::quat(glm::radians(EulerDegrees)));
+							}
+							else if constexpr (std::same_as<ValueType, util::UUID>)
+								ImGui::TextUnformatted(Value.IsValid() ? Value.ToString().c_str() : "None");
+							else
+							{
+								const string Label = Value.ID.empty() ? "None" : Value.ProjectRelativePath;
+								if (ImGui::BeginCombo("##Value", Label.empty() ? "None" : Label.c_str()))
+								{
+									if (ImGui::Selectable("None", Value.ID.empty()))
+										Commit(instance::InstanceAssetReference{.Type = Value.Type});
+									for (const asset::ContentEntry &Entry : Session.GetAssetRegistry().GetSnapshot().Entries)
+									{
+										if (Entry.Kind != asset::ContentEntryKind::Asset || !Entry.AssetType.has_value() ||
+											*Entry.AssetType != Value.Type)
+											continue;
+										if (ImGui::Selectable(Entry.DisplayName.c_str(), Entry.ID == Value.ID))
+											Commit(instance::InstanceAssetReference{.ID = Entry.ID,
+																					.Type = *Entry.AssetType,
+																					.ProjectRelativePath =
+																						Entry.RelativePath.generic_string()});
+									}
+									ImGui::EndCombo();
+								}
+							}
+						},
+						Property->second);
+					ImGui::PopID();
+				}
+				ImGui::EndTable();
+			}
+			ImGui::Separator();
+		}
+		const world::ObjectHandle Object = Session.GetDocument().GetScene().FindObject(SelectedID);
 		if (Object.IsValid())
 		{
-			if (ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f)))
+			const instance::InstanceRecord TypedRecord =
+				TypedInstance ? Session.GetDocument().GetInstances().Get(SelectedID) : instance::InstanceRecord{};
+			if (!TypedInstance && ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f)))
 				ImGui::OpenPopup("Add Object Component");
-			if (ImGui::BeginPopup("Add Object Component"))
+			if (!TypedInstance && ImGui::BeginPopup("Add Object Component"))
 			{
 				const auto AddComponent = [&]<IsCObjectComponent ComponentType>(const char *Name)
 				{
@@ -1493,18 +1836,26 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 				ImGui::TextDisabled("Drop a Model into the viewport to add a mesh.");
 				ImGui::EndPopup();
 			}
-			RenderComponent<components::CObjectIdentityComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderComponent<components::CObjectTransformComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderComponent<components::CObjectHierarchyComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderComponent<components::CObjectCameraComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderComponent<components::CObjectMeshComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderMeshMaterials(State, Session, Context, Object);
-			RenderComponent<components::CObjectAnimationComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderComponent<components::CObjectBehaviorComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderBehaviorInstances(State, Session, Context, Object);
-			RenderComponent<components::CObjectDirectionalLightComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderComponent<components::CObjectPointLightComponent>(State, Session, Context, Object, State.PropertyFilter);
-			RenderComponent<components::CObjectSpotLightComponent>(State, Session, Context, Object, State.PropertyFilter);
+			if (TypedInstance)
+			{
+				if (TypedRecord.ClassID == instance::class_ids::Part || TypedRecord.ClassID == instance::class_ids::MeshPart)
+					RenderMeshMaterials(State, Session, Context, Object);
+			}
+			else
+			{
+				RenderComponent<components::CObjectIdentityComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderComponent<components::CObjectTransformComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderComponent<components::CObjectHierarchyComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderComponent<components::CObjectCameraComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderComponent<components::CObjectMeshComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderMeshMaterials(State, Session, Context, Object);
+				RenderComponent<components::CObjectAnimationComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderComponent<components::CObjectBehaviorComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderBehaviorInstances(State, Session, Context, Object);
+				RenderComponent<components::CObjectDirectionalLightComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderComponent<components::CObjectPointLightComponent>(State, Session, Context, Object, State.PropertyFilter);
+				RenderComponent<components::CObjectSpotLightComponent>(State, Session, Context, Object, State.PropertyFilter);
+			}
 		}
 	}
 	ImGui::End();
@@ -1575,6 +1926,77 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			Context.Diagnostics.Publish(core::diagnostics::DiagnosticSeverity::Error, "Explorer", Exception.what());
 		}
 	};
+	const auto RequestInsert = [&State](const util::UUID Parent)
+	{
+		State.ExplorerInsertParent = Parent;
+		State.ExplorerInsertFilter.clear();
+		State.ExplorerInsertRequested = true;
+	};
+	const auto RenderInsertPalette = [&]()
+	{
+		if (State.ExplorerInsertRequested)
+		{
+			ImGui::OpenPopup("Insert Instance");
+			State.ExplorerInsertRequested = false;
+		}
+		ImGui::SetNextWindowSize(ImVec2(420.0F, 520.0F), ImGuiCond_Appearing);
+		if (!ImGui::BeginPopup("Insert Instance"))
+			return;
+		ImGui::TextUnformatted("Insert Instance");
+		ImGui::TextDisabled("Creates directly beneath the selected parent");
+		ImGui::SetNextItemWidth(-1.0F);
+		if (ImGui::IsWindowAppearing())
+			ImGui::SetKeyboardFocusHere();
+		(void)InputText("##InstanceSearch", State.ExplorerInsertFilter);
+		ImGui::Separator();
+		const string Query = NormalizeFilterText(State.ExplorerInsertFilter);
+		const std::vector<instance::InstanceTypeDescriptor> Types = Session.GetDocument().GetInstanceTypes().GetCreatableTypes();
+		const instance::InstanceRecord InsertParent = Session.GetDocument().GetInstances().Get(State.ExplorerInsertParent);
+		instance::InstanceRecord InsertRoot = InsertParent;
+		while (InsertRoot.Parent.IsValid())
+			InsertRoot = Session.GetDocument().GetInstances().Get(InsertRoot.Parent);
+		string Category;
+		for (const instance::InstanceTypeDescriptor &Type : Types)
+		{
+			if (!Type.ExactParentClasses.empty() &&
+				std::ranges::find(Type.ExactParentClasses, InsertParent.ClassID) == Type.ExactParentClasses.end())
+				continue;
+			if (!Type.AllowedServiceClasses.empty() &&
+				std::ranges::find(Type.AllowedServiceClasses, InsertRoot.ClassID) == Type.AllowedServiceClasses.end())
+				continue;
+			const string SearchText =
+				NormalizeFilterText(Type.DisplayName + " " + Type.ClassName + " " + Type.Category + " " + Type.Description);
+			if (!Query.empty() && SearchText.find(Query) == string::npos)
+				continue;
+			if (Category != Type.Category)
+			{
+				Category = Type.Category;
+				if (ImGui::GetCursorPosY() > ImGui::GetStyle().WindowPadding.y + ImGui::GetTextLineHeightWithSpacing() * 3.0F)
+					ImGui::Spacing();
+				ImGui::TextDisabled("%s", Category.c_str());
+			}
+			ImGui::PushID(Type.ClassID.ToString().c_str());
+			const ImVec2 ItemStart = ImGui::GetCursorScreenPos();
+			const bool Selected = ImGui::Selectable("##InstanceType", false, ImGuiSelectableFlags_None, ImVec2(0.0F, 38.0F));
+			ImDrawList *DrawList = ImGui::GetWindowDrawList();
+			const ImU32 IconColor =
+				ImGui::ColorConvertFloat4ToU32(ImVec4(Type.IconColor.x, Type.IconColor.y, Type.IconColor.z, Type.IconColor.w));
+			DrawList->AddCircleFilled(ImVec2(ItemStart.x + 14.0F, ItemStart.y + 18.0F), 8.0F, IconColor);
+			DrawList->AddText(ImVec2(ItemStart.x + 30.0F, ItemStart.y + 3.0F), ImGui::GetColorU32(ImGuiCol_Text), Type.DisplayName.c_str());
+			const string Detail =
+				Type.Availability == instance::InstanceAvailability::Unavailable ? Type.Description + "  •  Unavailable" : Type.Description;
+			DrawList->AddText(ImVec2(ItemStart.x + 30.0F, ItemStart.y + 20.0F), ImGui::GetColorU32(ImGuiCol_TextDisabled), Detail.c_str());
+			if (Selected)
+			{
+				ExecuteCommand(
+					std::make_unique<commands::CreateInstanceCommand>(Session.GetDocument(), Type.ClassID, State.ExplorerInsertParent));
+				State.ExpandedObjects[State.ExplorerInsertParent] = true;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::PopID();
+		}
+		ImGui::EndPopup();
+	};
 	const auto RenderPrimitiveCreationMenu = [&](const util::UUID Parent)
 	{
 		if (!ImGui::BeginMenu("Create Primitive", Session.GetPlaySession().GetState() == play::PlaySessionState::Stopped))
@@ -1631,29 +2053,103 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 	};
 
 	const std::vector<hierarchy::SceneHierarchyRow> &Rows = Session.GetHierarchy().Rows;
-	std::vector<uint32> &OpenDepths = State.ExplorerOpenDepthsScratch;
-	OpenDepths.clear();
+	std::vector<uint32> &VisibleRows = State.ExplorerVisibleRowsScratch;
+	VisibleRows.clear();
 	for (usize RowIndex = 0; RowIndex < Rows.size(); ++RowIndex)
 	{
 		const hierarchy::SceneHierarchyRow &Row = Rows[RowIndex];
-		while (!OpenDepths.empty() && OpenDepths.back() >= Row.Depth)
-		{
-			ImGui::TreePop();
-			OpenDepths.pop_back();
-		}
-		ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
-		if (Row.ChildCount == 0)
-			Flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-		if (Session.GetDocument().GetSelection().Contains(Row.PersistentID))
-			Flags |= ImGuiTreeNodeFlags_Selected;
-		if (!State.ExpandedObjects.contains(Row.PersistentID))
-			ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-		const bool Expanded =
-			ImGui::TreeNodeEx(reinterpret_cast<const void *>(static_cast<uintptr_t>(Row.Object.Slot + 1U)), Flags, "%s", Row.Name.c_str());
+		VisibleRows.push_back(static_cast<uint32>(RowIndex));
+		const auto [ExpandedState, Inserted] = State.ExpandedObjects.try_emplace(Row.PersistentID, true);
+		(void)Inserted;
+		bool Expanded = ExpandedState->second;
+		const string RowID = Row.PersistentID.ToString();
+		ImGui::PushID(RowID.c_str());
+		const float32 RowHeight = 28.0F;
+		const bool RowPressed = ImGui::InvisibleButton("##InstanceRow", ImVec2(-1.0F, RowHeight));
 		const ImVec2 RowMinimum = ImGui::GetItemRectMin();
 		const ImVec2 RowMaximum = ImGui::GetItemRectMax();
+		const bool RowHovered = ImGui::IsItemHovered();
+		const bool RowSelected = Session.GetDocument().GetSelection().Contains(Row.PersistentID);
+		ImDrawList *const DrawList = ImGui::GetWindowDrawList();
+		if (RowSelected || RowHovered)
+		{
+			const ImU32 Background = ImGui::GetColorU32(RowSelected ? ImGuiCol_Header : ImGuiCol_HeaderHovered);
+			DrawList->AddRectFilled(RowMinimum, RowMaximum, Background, 6.0F);
+		}
+		const float32 Indent = 18.0F;
+		for (uint32 Depth = 0; Depth < Row.Depth; ++Depth)
+		{
+			const float32 GuideX = RowMinimum.x + 8.0F + static_cast<float32>(Depth) * Indent;
+			DrawList->AddLine(ImVec2(GuideX, RowMinimum.y), ImVec2(GuideX, RowMaximum.y), ImGui::GetColorU32(ImGuiCol_Separator), 1.0F);
+		}
+		const float32 ContentX = RowMinimum.x + 4.0F + static_cast<float32>(Row.Depth) * Indent;
+		const ImVec2 ArrowMinimum(ContentX, RowMinimum.y + 4.0F);
+		const ImVec2 ArrowMaximum(ContentX + 18.0F, RowMaximum.y - 4.0F);
+		const bool ArrowHovered = Row.ChildCount != 0 && ImGui::IsMouseHoveringRect(ArrowMinimum, ArrowMaximum);
+		if (Row.ChildCount != 0)
+		{
+			const ImVec2 Center((ArrowMinimum.x + ArrowMaximum.x) * 0.5F, (ArrowMinimum.y + ArrowMaximum.y) * 0.5F);
+			const ImU32 ArrowColor = ImGui::GetColorU32(ArrowHovered ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+			if (Expanded)
+				DrawList->AddTriangleFilled(ImVec2(Center.x - 4.0F, Center.y - 2.0F), ImVec2(Center.x + 4.0F, Center.y - 2.0F),
+											ImVec2(Center.x, Center.y + 3.0F), ArrowColor);
+			else
+				DrawList->AddTriangleFilled(ImVec2(Center.x - 2.0F, Center.y - 4.0F), ImVec2(Center.x - 2.0F, Center.y + 4.0F),
+											ImVec2(Center.x + 3.0F, Center.y), ArrowColor);
+		}
+		const std::shared_ptr<const instance::InstanceTypeDescriptor> RowType = Session.GetDocument().GetInstanceTypes().Find(Row.ClassID);
+		const glm::vec4 RowIconColor = RowType == nullptr ? glm::vec4(0.65F, 0.68F, 0.75F, 1.0F) : RowType->IconColor;
+		const ImU32 RowIconPacked = ImGui::ColorConvertFloat4ToU32(ImVec4(RowIconColor.x, RowIconColor.y, RowIconColor.z, RowIconColor.w));
+		const string_view RowIcon = State.Icons.Find(Row.ClassName);
+		constexpr float32 IconCellLeftMargin = 2.0F;
+		constexpr float32 IconCellWidth = 26.0F;
+		constexpr float32 IconLabelGap = 7.0F;
+		const float32 IconCellMinimumX = ArrowMaximum.x + IconCellLeftMargin;
+		if (!RowIcon.empty())
+		{
+			const ImVec2 IconSize = ImGui::CalcTextSize(RowIcon.data(), RowIcon.data() + RowIcon.size());
+			const ImVec2 IconPosition(IconCellMinimumX + std::max((IconCellWidth - IconSize.x) * 0.5F, 0.0F),
+									  RowMinimum.y + std::max((RowHeight - IconSize.y) * 0.5F, 0.0F));
+			DrawList->AddText(IconPosition, RowIconPacked, RowIcon.data(), RowIcon.data() + RowIcon.size());
+		}
+		else
+			DrawList->AddCircleFilled(ImVec2(IconCellMinimumX + IconCellWidth * 0.5F, (RowMinimum.y + RowMaximum.y) * 0.5F), 5.0F,
+									  RowIconPacked);
+		const ImVec2 LabelSize = ImGui::CalcTextSize(Row.Name.c_str());
+		DrawList->AddText(
+			ImVec2(IconCellMinimumX + IconCellWidth + IconLabelGap, RowMinimum.y + std::max((RowHeight - LabelSize.y) * 0.5F, 0.0F)),
+			ImGui::GetColorU32(ImGuiCol_Text), Row.Name.c_str());
+		if (Row.Activation.State != instance::InstanceActivationState::Active)
+		{
+			const ImU32 WarningColor = Row.Activation.State == instance::InstanceActivationState::Unavailable ? IM_COL32(145, 150, 165, 255)
+																											  : IM_COL32(245, 180, 65, 255);
+			DrawList->AddCircleFilled(ImVec2(RowMaximum.x - 30.0F, (RowMinimum.y + RowMaximum.y) * 0.5F), 3.5F, WarningColor);
+			if (RowHovered && !Row.Activation.Diagnostic.empty())
+				ImGui::SetTooltip("%s", Row.Activation.Diagnostic.c_str());
+		}
+		if (RowHovered || RowSelected)
+		{
+			const ImVec2 PlusMinimum(RowMaximum.x - 23.0F, RowMinimum.y + 1.0F);
+			const ImVec2 PlusMaximum(RowMaximum.x - 3.0F, RowMaximum.y - 1.0F);
+			const bool PlusHovered = ImGui::IsMouseHoveringRect(PlusMinimum, PlusMaximum);
+			DrawList->AddRectFilled(PlusMinimum, PlusMaximum, ImGui::GetColorU32(PlusHovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button),
+									5.0F);
+			const ImVec2 Center((PlusMinimum.x + PlusMaximum.x) * 0.5F, (PlusMinimum.y + PlusMaximum.y) * 0.5F);
+			const ImU32 PlusColor = ImGui::GetColorU32(ImGuiCol_Text);
+			DrawList->AddLine(ImVec2(Center.x - 4.0F, Center.y), ImVec2(Center.x + 4.0F, Center.y), PlusColor, 1.5F);
+			DrawList->AddLine(ImVec2(Center.x, Center.y - 4.0F), ImVec2(Center.x, Center.y + 4.0F), PlusColor, 1.5F);
+			if (PlusHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+				RequestInsert(Row.PersistentID);
+		}
+		const bool ArrowClicked = ArrowHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+		if ((ArrowClicked || (RowHovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) && Row.ChildCount != 0)
+		{
+			Expanded = !Expanded;
+			ExpandedState->second = Expanded;
+		}
 		State.ExpandedObjects[Row.PersistentID] = Expanded;
-		if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+		const bool PlusClicked = RowHovered && ImGui::GetMousePos().x >= RowMaximum.x - 23.0F;
+		if (RowPressed && !ArrowClicked && !PlusClicked)
 		{
 			const ImGuiIO &IO = ImGui::GetIO();
 			if (IO.KeyShift && State.ExplorerSelectionAnchor.IsValid())
@@ -1688,15 +2184,40 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 		}
 		if (ImGui::BeginDragDropSource())
 		{
-			const string ID = Row.PersistentID.ToString();
-			ImGui::SetDragDropPayload("SCENE_OBJECT_ID", ID.c_str(), ID.size() + 1U);
-			ImGui::TextUnformatted(Row.Name.c_str());
+			if (!Session.GetDocument().GetSelection().Contains(Row.PersistentID))
+				Session.GetDocument().GetSelection().SelectOnly(Row.PersistentID);
+			string PayloadText;
+			uint32 RootCount = 0;
+			const std::vector<util::UUID> &Selected = Session.GetDocument().GetSelection().GetOrdered();
+			const std::unordered_set<util::UUID> SelectedSet(Selected.begin(), Selected.end());
+			for (const util::UUID &SelectedID : Selected)
+			{
+				instance::InstanceRecord SelectedRecord = Session.GetDocument().GetInstances().Get(SelectedID);
+				bool HasSelectedAncestor = false;
+				while (SelectedRecord.Parent.IsValid())
+				{
+					if (SelectedSet.contains(SelectedRecord.Parent))
+					{
+						HasSelectedAncestor = true;
+						break;
+					}
+					SelectedRecord = Session.GetDocument().GetInstances().Get(SelectedRecord.Parent);
+				}
+				if (HasSelectedAncestor)
+					continue;
+				if (!PayloadText.empty())
+					PayloadText.push_back(';');
+				PayloadText += SelectedID.ToString();
+				++RootCount;
+			}
+			ImGui::SetDragDropPayload("INSTANCE_IDS", PayloadText.c_str(), PayloadText.size() + 1U);
+			ImGui::Text("Move %u instance%s", RootCount, RootCount == 1U ? "" : "s");
 			ImGui::EndDragDropSource();
 		}
 		if (ImGui::BeginDragDropTarget())
 		{
-			if (const ImGuiPayload *Payload = ImGui::AcceptDragDropPayload(
-					"SCENE_OBJECT_ID", ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
+			if (const ImGuiPayload *Payload = ImGui::AcceptDragDropPayload("INSTANCE_IDS", ImGuiDragDropFlags_AcceptBeforeDelivery |
+																							   ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
 			{
 				const float32 Height = std::max(RowMaximum.y - RowMinimum.y, 1.0f);
 				const float32 RelativeY = std::clamp((ImGui::GetMousePos().y - RowMinimum.y) / Height, 0.0f, 1.0f);
@@ -1714,29 +2235,47 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 				}
 				if (Payload->IsDelivery())
 				{
-					const string ID(static_cast<const char *>(Payload->Data),
-									(static_cast<const char *>(Payload->Data) + Payload->DataSize) - 1);
-					const util::UUID Child = util::UUID::Parse(ID);
-					if (Child != Row.PersistentID)
+					const string Encoded(static_cast<const string::value_type *>(Payload->Data),
+										 (static_cast<const string::value_type *>(Payload->Data) + Payload->DataSize) - 1);
+					std::vector<util::UUID> Children;
+					usize Start = 0;
+					while (Start < Encoded.size())
 					{
-						util::UUID Parent = Row.PersistentID;
-						uint32 InsertionOrder = ~uint32{0};
-						if (InsertBefore || InsertAfter)
+						const usize End = Encoded.find(';', Start);
+						Children.push_back(util::UUID::Parse(Encoded.substr(Start, End == string::npos ? string::npos : End - Start)));
+						if (End == string::npos)
+							break;
+						Start = End + 1U;
+					}
+					util::UUID Parent = Row.PersistentID;
+					uint32 InsertionOrder = ~uint32{0};
+					if (InsertBefore || InsertAfter)
+					{
+						Parent = Row.ParentRow == hierarchy::InvalidHierarchyRow ? util::UUID{} : Rows[Row.ParentRow].PersistentID;
+						InsertionOrder = Row.SiblingOrder + (InsertAfter ? 1U : 0U);
+					}
+					if (!Parent.IsValid())
+						Parent = Session.GetDocument().GetInstances().GetWorkspace();
+					commands::CommandHistory &History = Session.GetDocument().GetHistory();
+					try
+					{
+						History.BeginTransaction(Children.size() == 1U ? "Move Instance" : "Move Instances");
+						for (const util::UUID &Child : Children)
 						{
-							Parent = Row.ParentRow == hierarchy::InvalidHierarchyRow ? util::UUID{} : Rows[Row.ParentRow].PersistentID;
-							InsertionOrder = Row.SiblingOrder + (InsertAfter ? 1U : 0U);
-							const auto Source = std::ranges::find(Rows, Child, &hierarchy::SceneHierarchyRow::PersistentID);
-							if (Source != Rows.end())
-							{
-								const util::UUID SourceParent = Source->ParentRow == hierarchy::InvalidHierarchyRow
-																	? util::UUID{}
-																	: Rows[Source->ParentRow].PersistentID;
-								if (SourceParent == Parent && Source->SiblingOrder < InsertionOrder)
-									--InsertionOrder;
-							}
+							if (Child == Row.PersistentID)
+								continue;
+							History.Execute(
+								std::make_unique<commands::ReparentInstanceCommand>(Session.GetDocument(), Child, Parent, InsertionOrder));
+							if (InsertionOrder != ~uint32{0})
+								++InsertionOrder;
 						}
-						ExecuteCommand(
-							std::make_unique<commands::ReparentObjectCommand>(Session.GetDocument(), Child, Parent, InsertionOrder));
+						History.CommitTransaction();
+					}
+					catch (const std::exception &Exception)
+					{
+						if (History.HasOpenTransaction())
+							History.CancelTransaction();
+						Context.Diagnostics.Publish(core::diagnostics::DiagnosticSeverity::Error, "Explorer", Exception.what());
 					}
 				}
 			}
@@ -1746,10 +2285,9 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 		{
 			if (!Session.GetDocument().GetSelection().Contains(Row.PersistentID))
 				Session.GetDocument().GetSelection().SelectOnly(Row.PersistentID);
-			if (ImGui::MenuItem("Create Child"))
-				ExecuteCommand(std::make_unique<commands::CreateObjectCommand>(Session.GetDocument(), "Object", Row.PersistentID));
-			RenderPrimitiveCreationMenu(Row.PersistentID);
-			if (ImGui::MenuItem("Rename"))
+			if (ImGui::MenuItem("Insert Instance"))
+				RequestInsert(Row.PersistentID);
+			if (ImGui::MenuItem("Rename", nullptr, false, !Row.Protected))
 			{
 				State.ExplorerRenameObject = Row.PersistentID;
 				State.ExplorerRenameValue = Row.Name;
@@ -1763,50 +2301,96 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 				(void)Actions.Invoke(action::IDs::DuplicateObjects, Context);
 			if (RenderRegisteredMenuItem(action::IDs::GroupObjects, "Ctrl+G"))
 				(void)Actions.Invoke(action::IDs::GroupObjects, Context);
-			if (ImGui::MenuItem("Move to Root"))
-				ExecuteCommand(std::make_unique<commands::ReparentObjectCommand>(Session.GetDocument(), Row.PersistentID, util::UUID{}));
-			ImGui::Separator();
-			try
+			if (Row.Activation.State != instance::InstanceActivationState::Active)
 			{
-				if (ImGui::MenuItem("Enabled", nullptr, Row.Enabled))
-					EditSelectedIdentityProperty("Enabled", !Row.Enabled);
-				if (ImGui::MenuItem("Visible in Editor", nullptr, Row.EditorVisible))
-					EditSelectedIdentityProperty("EditorVisible", !Row.EditorVisible);
-				if (ImGui::MenuItem("Locked", nullptr, Row.Locked))
-					EditSelectedIdentityProperty("Locked", !Row.Locked);
-				if (ImGui::BeginMenu("Mobility"))
-				{
-					for (const auto [Mobility, Name] : {std::pair{components::ObjectMobility::Static, "Static"},
-														std::pair{components::ObjectMobility::Stationary, "Stationary"},
-														std::pair{components::ObjectMobility::Movable, "Movable"}})
-					{
-						if (ImGui::MenuItem(Name, nullptr, Row.Mobility == Mobility))
-							EditSelectedIdentityProperty("Mobility", static_cast<uint32>(Mobility));
-					}
-					ImGui::EndMenu();
-				}
+				ImGui::Separator();
+				ImGui::TextDisabled("%s", Row.Activation.Diagnostic.c_str());
 			}
-			catch (const std::exception &Exception)
+			if (!Row.Protected)
 			{
-				Context.Diagnostics.Publish(core::diagnostics::DiagnosticSeverity::Error, "Explorer", Exception.what());
+				ImGui::Separator();
+				if (ImGui::MenuItem("Delete", "Delete"))
+					(void)Actions.Invoke(action::IDs::DeleteObjects, Context);
 			}
-			ImGui::Separator();
-			if (RenderRegisteredMenuItem(action::IDs::DeleteObjects, "Delete"))
-				(void)Actions.Invoke(action::IDs::DeleteObjects, Context);
 			ImGui::EndPopup();
 		}
-		if (Row.ChildCount != 0 && Expanded)
-			OpenDepths.push_back(Row.Depth);
-		else if (Row.ChildCount != 0 && !Expanded)
+		if (Row.ChildCount != 0 && !Expanded)
 		{
 			while (RowIndex + 1U < Rows.size() && Rows[RowIndex + 1U].Depth > Row.Depth)
 				++RowIndex;
 		}
+		ImGui::PopID();
 	}
-	while (!OpenDepths.empty())
+	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive() && !VisibleRows.empty())
 	{
-		ImGui::TreePop();
-		OpenDepths.pop_back();
+		const util::UUID Primary = Session.GetDocument().GetSelection().GetPrimary();
+		auto Current =
+			std::ranges::find_if(VisibleRows, [&Rows, &Primary](const uint32 Index) { return Rows[Index].PersistentID == Primary; });
+		usize CurrentPosition = Current == VisibleRows.end() ? 0U : static_cast<usize>(std::distance(VisibleRows.begin(), Current));
+		const auto SelectVisible = [&](const usize Position)
+		{
+			const hierarchy::SceneHierarchyRow &Target = Rows[VisibleRows[Position]];
+			Session.GetDocument().GetSelection().SelectOnly(Target.PersistentID);
+			State.ExplorerSelectionAnchor = Target.PersistentID;
+		};
+		if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))
+			SelectVisible(CurrentPosition == 0 ? 0 : CurrentPosition - 1U);
+		else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow))
+			SelectVisible(std::min(CurrentPosition + 1U, VisibleRows.size() - 1U));
+		else if (Current != VisibleRows.end() && ImGui::IsKeyPressed(ImGuiKey_LeftArrow))
+		{
+			const hierarchy::SceneHierarchyRow &CurrentRow = Rows[*Current];
+			if (CurrentRow.ChildCount != 0 && State.ExpandedObjects[CurrentRow.PersistentID])
+				State.ExpandedObjects[CurrentRow.PersistentID] = false;
+			else if (CurrentRow.ParentRow != hierarchy::InvalidHierarchyRow)
+			{
+				const auto Parent = std::ranges::find(VisibleRows, CurrentRow.ParentRow);
+				if (Parent != VisibleRows.end())
+					SelectVisible(static_cast<usize>(std::distance(VisibleRows.begin(), Parent)));
+			}
+		}
+		else if (Current != VisibleRows.end() && ImGui::IsKeyPressed(ImGuiKey_RightArrow))
+		{
+			const hierarchy::SceneHierarchyRow &CurrentRow = Rows[*Current];
+			if (CurrentRow.ChildCount != 0 && !State.ExpandedObjects[CurrentRow.PersistentID])
+				State.ExpandedObjects[CurrentRow.PersistentID] = true;
+			else if (CurrentRow.ChildCount != 0 && CurrentPosition + 1U < VisibleRows.size())
+				SelectVisible(CurrentPosition + 1U);
+		}
+		else if (Current != VisibleRows.end() && ImGui::IsKeyPressed(ImGuiKey_Enter))
+		{
+			const hierarchy::SceneHierarchyRow &CurrentRow = Rows[*Current];
+			if (CurrentRow.ChildCount != 0)
+				State.ExpandedObjects[CurrentRow.PersistentID] = !State.ExpandedObjects[CurrentRow.PersistentID];
+		}
+		else if (Current != VisibleRows.end() && ImGui::IsKeyPressed(ImGuiKey_F2))
+		{
+			const hierarchy::SceneHierarchyRow &CurrentRow = Rows[*Current];
+			if (!CurrentRow.Protected)
+			{
+				State.ExplorerRenameObject = CurrentRow.PersistentID;
+				State.ExplorerRenameValue = CurrentRow.Name;
+				State.ExplorerRenameRequested = true;
+			}
+		}
+		else if (Current != VisibleRows.end() && ImGui::IsKeyPressed(ImGuiKey_Insert))
+			RequestInsert(Rows[*Current].PersistentID);
+		else if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+		{
+			Session.GetDocument().GetSelection().Clear();
+			State.ExplorerSelectionAnchor = {};
+		}
+	}
+	if (ImGui::GetDragDropPayload() != nullptr && ImGui::IsWindowHovered())
+	{
+		const float32 MouseY = ImGui::GetMousePos().y;
+		const float32 WindowTop = ImGui::GetWindowPos().y;
+		const float32 WindowBottom = WindowTop + ImGui::GetWindowHeight();
+		constexpr float32 ScrollZone = 36.0F;
+		if (MouseY < WindowTop + ScrollZone)
+			ImGui::SetScrollY(std::max(0.0F, ImGui::GetScrollY() - (WindowTop + ScrollZone - MouseY) * 0.35F));
+		else if (MouseY > WindowBottom - ScrollZone)
+			ImGui::SetScrollY(ImGui::GetScrollY() + (MouseY - (WindowBottom - ScrollZone)) * 0.35F);
 	}
 	if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsAnyItemHovered())
 	{
@@ -1815,9 +2399,8 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 	}
 	if (ImGui::BeginPopupContextWindow("ExplorerContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 	{
-		if (ImGui::MenuItem("Create Object"))
-			ExecuteCommand(std::make_unique<commands::CreateObjectCommand>(Session.GetDocument(), "Object"));
-		RenderPrimitiveCreationMenu({});
+		if (ImGui::MenuItem("Insert into Workspace"))
+			RequestInsert(Session.GetDocument().GetInstances().GetWorkspace());
 		if (RenderRegisteredMenuItem(action::IDs::PasteObjects, "Ctrl+V"))
 			(void)Actions.Invoke(action::IDs::PasteObjects, Context);
 		ImGui::EndPopup();
@@ -1836,8 +2419,8 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			ImGui::BeginDisabled();
 		if (ImGui::Button("Rename", ImVec2(110.0f, 0.0f)))
 		{
-			ExecuteCommand(std::make_unique<commands::RenameObjectCommand>(Session.GetDocument(), State.ExplorerRenameObject,
-																		   State.ExplorerRenameValue));
+			ExecuteCommand(std::make_unique<commands::RenameInstanceCommand>(Session.GetDocument(), State.ExplorerRenameObject,
+																			 State.ExplorerRenameValue));
 			ImGui::CloseCurrentPopup();
 		}
 		if (!CanSubmit)
@@ -1847,6 +2430,7 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			ImGui::CloseCurrentPopup();
 		ImGui::EndPopup();
 	}
+	RenderInsertPalette();
 	ImGui::End();
 	if (Open != Panel.Open)
 		Session.GetWorkspace().SetOpen(Panel.ID, Open);
@@ -3980,25 +4564,46 @@ void EditorUserInterface::Render(const EditorUIFrame &Frame, const std::span<con
 		if (ManagedWindow == nullptr || ManagedWindow->IsMinimized())
 			continue;
 		core::Context &Context = ManagedWindow->GetContext();
+		const bool DetachedWindow = !WindowFrame.Main;
 		if (Context.IsThreadTransferPending())
 			Context.AdoptCurrentThread();
 		else
 			Context.MakeCurrent();
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		glDrawBuffer(GL_BACK);
-		const core::WindowExtent Extent = ManagedWindow->GetFramebufferExtent();
-		glViewport(0, 0, static_cast<GLsizei>(Extent.Width), static_cast<GLsizei>(Extent.Height));
-		if (!WindowFrame.Main)
+		try
 		{
-			glDisable(GL_DEPTH_TEST);
-			glDisable(GL_STENCIL_TEST);
-			glDisable(GL_SCISSOR_TEST);
-			glClearColor(0.025f, 0.028f, 0.035f, 1.0f);
-			glClear(GL_COLOR_BUFFER_BIT);
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+			glDrawBuffer(GL_BACK);
+			const core::WindowExtent Extent = ManagedWindow->GetFramebufferExtent();
+			glViewport(0, 0, static_cast<GLsizei>(Extent.Width), static_cast<GLsizei>(Extent.Height));
+			if (DetachedWindow)
+			{
+				glDisable(GL_DEPTH_TEST);
+				glDisable(GL_STENCIL_TEST);
+				glDisable(GL_SCISSOR_TEST);
+				glClearColor(0.025f, 0.028f, 0.035f, 1.0f);
+				glClear(GL_COLOR_BUFFER_BIT);
+			}
+			this->StateData->Renderer->Render(WindowFrame.DrawData->Data, Context);
+			if (DetachedWindow)
+			{
+				ManagedWindow->Present();
+				Context.PrepareThreadTransfer();
+			}
 		}
-		this->StateData->Renderer->Render(WindowFrame.DrawData->Data, Context);
-		if (!WindowFrame.Main)
-			ManagedWindow->Present();
+		catch (...)
+		{
+			if (DetachedWindow && Context.IsCurrent())
+			{
+				try
+				{
+					Context.PrepareThreadTransfer();
+				}
+				catch (...)
+				{
+				}
+			}
+			throw;
+		}
 	}
 	this->StateData->Window->GetContext().MakeCurrent();
 }
