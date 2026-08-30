@@ -25,7 +25,7 @@ class InstanceGraph final
 	InstanceGraph &operator=(InstanceGraph &&) = delete;
 
 	[[nodiscard]] util::UUID Create(const InstanceClassID &ClassID, const util::UUID &Parent, string Name = {},
-									util::UUID ID = util::UUID::GenerateRandomUUID());
+									util::UUID ID = util::UUID::GenerateRandomUUID(), InstancePropertyMap InitialProperties = {});
 	void Destroy(const util::UUID &ID);
 	void Rename(const util::UUID &ID, string Name);
 	void SetClass(const util::UUID &ID, const InstanceClassID &ClassID);

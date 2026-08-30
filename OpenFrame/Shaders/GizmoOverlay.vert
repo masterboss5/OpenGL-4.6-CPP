@@ -23,6 +23,7 @@ uniform mat3 gizmoBasis;
 uniform float gizmoScale;
 uniform uint gizmoOperation;
 uniform uint activeHandle;
+uniform uint gizmoCapabilityMask;
 
 out vec4 gizmoColor;
 
@@ -253,8 +254,10 @@ void main()
 						   ? BuildTranslateSegment(segment, start, end, color, handle)
 						   : (gizmoOperation == 1U ? BuildRotateSegment(segment, start, end, color, handle)
 												   : (gizmoOperation == 2U ? BuildScaleSegment(segment, start, end, color, handle)
-																		   : BuildUniversalSegment(segment, start, end, color, handle)));
-	if (!valid)
+														   : BuildUniversalSegment(segment, start, end, color, handle)));
+	const uint requiredCapability = gizmoOperation == 0U ? 1U : (gizmoOperation == 1U ? 2U : (gizmoOperation == 2U ? 4U :
+		(handle >= 13U ? 4U : (handle >= 9U ? 2U : 1U))));
+	if (!valid || (gizmoCapabilityMask & requiredCapability) == 0U)
 	{
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 		gizmoColor = vec4(0.0);

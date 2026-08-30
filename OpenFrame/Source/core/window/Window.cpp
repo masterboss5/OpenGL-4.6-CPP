@@ -130,6 +130,8 @@ struct Window::State final
 	bool GestureActive = false;
 	GLFWcursor *Cursor = nullptr;
 	CursorMode CursorMode = CursorMode::Visible;
+	CursorShape ActiveCursorShape = CursorShape::Arrow;
+	bool CursorShapeInitialized = false;
 	WindowID Owner;
 	bool Modal = false;
 	TitleBarSpecification TitleBar;
@@ -1401,6 +1403,8 @@ void Window::SetCursorMode(const CursorMode Mode)
 void Window::SetCursorShape(const CursorShape Shape)
 {
 	this->RequireOwnerThread();
+	if (this->StateData->CursorShapeInitialized && this->StateData->ActiveCursorShape == Shape)
+		return;
 	int32 NativeShape = GLFW_ARROW_CURSOR;
 	if (Shape == CursorShape::Text)
 		NativeShape = GLFW_IBEAM_CURSOR;
@@ -1427,6 +1431,8 @@ void Window::SetCursorShape(const CursorShape Shape)
 	if (this->StateData->Cursor != nullptr)
 		glfwDestroyCursor(this->StateData->Cursor);
 	this->StateData->Cursor = Replacement;
+	this->StateData->ActiveCursorShape = Shape;
+	this->StateData->CursorShapeInitialized = true;
 }
 
 void Window::SetCustomCursor(const WindowImageView &Image, const WindowPosition HotSpot)
@@ -1446,6 +1452,7 @@ void Window::SetCustomCursor(const WindowImageView &Image, const WindowPosition 
 	if (this->StateData->Cursor != nullptr)
 		glfwDestroyCursor(this->StateData->Cursor);
 	this->StateData->Cursor = Replacement;
+	this->StateData->CursorShapeInitialized = false;
 }
 
 void Window::SetCustomCursor(const resource::AssetHandle<resource::Texture2DAsset> &Image, const WindowPosition HotSpot)

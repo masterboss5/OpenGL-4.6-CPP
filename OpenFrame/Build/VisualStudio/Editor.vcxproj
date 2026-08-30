@@ -98,6 +98,8 @@
     <ClCompile Include="..\..\Source\editor\ui\EditorLayoutStore.cpp" />
     <ClCompile Include="..\..\Source\editor\ui\EditorPanel.cpp" />
       <ClCompile Include="..\..\Source\editor\ui\EditorTheme.cpp" />
+	  <ClCompile Include="..\..\Source\editor\ui\EditorStyle.cpp" />
+	  <ClCompile Include="..\..\Source\editor\ui\EditorWidgets.cpp" />
     <ClCompile Include="..\..\Source\editor\ui\EditorUIContext.cpp" />
     <ClCompile Include="..\..\Source\editor\ui\EditorUIRenderer.cpp" />
     <ClCompile Include="..\..\Source\editor\ui\EditorUIWindowBridge.cpp" />

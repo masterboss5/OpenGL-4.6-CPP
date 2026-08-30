@@ -12,6 +12,7 @@
 
 #include <optional>
 #include <array>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -47,7 +48,8 @@ enum class SceneDebugLineCategory : uint8
 	Bounds,
 	Skeleton,
 	Camera,
-	Light
+	Light,
+	SelectedLight
 };
 
 struct SceneDebugLine final
@@ -87,6 +89,7 @@ struct SceneRenderSnapshotBuildOptions final
 	bool IncludeSkeletons = false;
 	bool IncludeCameras = false;
 	bool IncludeLights = false;
+	std::span<const world::ObjectHandle> SelectedObjects;
 };
 
 struct SceneRenderSnapshotBuildScratch final

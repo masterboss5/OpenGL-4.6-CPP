@@ -168,10 +168,11 @@ world::ObjectHandle SceneDocument::CreateObject(SceneObjectSpecification Specifi
 	return Object;
 }
 
-util::UUID SceneDocument::CreateInstance(const instance::InstanceClassID ClassID, const util::UUID Parent, string Name, const util::UUID ID)
+util::UUID SceneDocument::CreateInstance(const instance::InstanceClassID ClassID, const util::UUID Parent, string Name, const util::UUID ID,
+										 instance::InstancePropertyMap InitialProperties)
 {
 	this->AssertOwnerThread();
-	(void)this->Instances.Create(ClassID, Parent, std::move(Name), ID);
+	(void)this->Instances.Create(ClassID, Parent, std::move(Name), ID, std::move(InitialProperties));
 	try
 	{
 		this->CreateRuntimeBacking(ID);
@@ -262,8 +263,7 @@ void SceneDocument::SetInstanceProperty(const util::UUID &ID, string Name, insta
 	this->AssertOwnerThread();
 	const instance::InstanceRecord Before = this->Instances.Get(ID);
 	const util::UUID AnimationModel = this->FindAnimationModel(ID);
-	if (Before.ClassID == instance::class_ids::Model &&
-		(Name == "PivotPosition" || Name == "PivotRotation" || Name == "PivotScale"))
+	if (Before.ClassID == instance::class_ids::Model && (Name == "PivotPosition" || Name == "PivotRotation" || Name == "PivotScale"))
 	{
 		glm::vec3 Position = GetInstanceProperty<glm::vec3>(Before, "PivotPosition");
 		glm::quat Rotation = GetInstanceProperty<glm::quat>(Before, "PivotRotation");
@@ -298,7 +298,7 @@ void SceneDocument::RemoveInstanceProperty(const util::UUID &ID, const string_vi
 }
 
 void SceneDocument::SetInstanceWorldTransform(const util::UUID &ID, const glm::vec3 &Position, const glm::quat &Rotation,
-											 const glm::vec3 &Scale)
+											  const glm::vec3 &Scale)
 {
 	this->AssertOwnerThread();
 	this->Instances.SetWorldTransform(ID, Position, Rotation, Scale);
@@ -536,8 +536,8 @@ void SceneDocument::CreateRuntimeBacking(const util::UUID &ID)
 	if (this->Instances.GetActivation(ID).State != instance::InstanceActivationState::Active)
 		return;
 	const bool RequiresObject = Record.ClassID == instance::class_ids::Model || Record.ClassID == instance::class_ids::Part ||
-								Record.ClassID == instance::class_ids::MeshPart ||
-								Record.ClassID == instance::class_ids::Camera || Record.ClassID == instance::class_ids::DirectionalLight ||
+								Record.ClassID == instance::class_ids::MeshPart || Record.ClassID == instance::class_ids::Camera ||
+								Record.ClassID == instance::class_ids::DirectionalLight ||
 								Record.ClassID == instance::class_ids::PointLight || Record.ClassID == instance::class_ids::SpotLight;
 	if (!RequiresObject)
 		return;
@@ -602,13 +602,7 @@ void SceneDocument::SynchronizeRuntimeBacking(const util::UUID &ID)
 			Rotation = std::get<glm::quat>(RotationValue->second);
 		if (ScaleValue != Current.Properties.end() && std::holds_alternative<glm::vec3>(ScaleValue->second))
 			Scale = std::get<glm::vec3>(ScaleValue->second);
-		if ((Current.ClassID == instance::class_ids::PointLight || Current.ClassID == instance::class_ids::SpotLight) &&
-			Current.Parent.IsValid())
-		{
-			const instance::InstanceRecord Parent = this->Instances.Get(Current.Parent);
-			Self(Self, Parent, Position, Rotation, Scale);
-		}
-		else if (Current.ClassID == instance::class_ids::Attachment && Current.Parent.IsValid())
+		if (Current.ClassID == instance::class_ids::Attachment && Current.Parent.IsValid())
 		{
 			const glm::vec3 LocalPosition = Position;
 			const glm::quat LocalRotation = Rotation;
@@ -656,7 +650,7 @@ void SceneDocument::SynchronizeRuntimeBacking(const util::UUID &ID)
 			Component.SetVerticalFieldOfViewDegrees(static_cast<float32>(GetInstanceProperty<float64>(Record, "FieldOfView")));
 			Component.SetOrthographicHeight(static_cast<float32>(GetInstanceProperty<float64>(Record, "OrthographicHeight")));
 			Component.SetClipPlanes(static_cast<float32>(GetInstanceProperty<float64>(Record, "NearPlane")),
-									 static_cast<float32>(GetInstanceProperty<float64>(Record, "FarPlane")));
+									static_cast<float32>(GetInstanceProperty<float64>(Record, "FarPlane")));
 			Component.SetExposureCompensation(static_cast<float32>(GetInstanceProperty<float64>(Record, "ExposureCompensation")));
 			Component.SetPrimary(GetInstanceProperty<bool>(Record, "Primary"));
 			Component.SetTemporalJitterEnabled(GetInstanceProperty<bool>(Record, "TemporalJitter"));
@@ -703,7 +697,7 @@ void SceneDocument::SynchronizeRuntimeBacking(const util::UUID &ID)
 			Component.SetLuminousPowerLumens(static_cast<float32>(GetInstanceProperty<float64>(Record, "LuminousPowerLumens")));
 			Component.SetRange(static_cast<float32>(GetInstanceProperty<float64>(Record, "Range")));
 			Component.SetConeAngles(static_cast<float32>(GetInstanceProperty<float64>(Record, "InnerConeDegrees")),
-								 static_cast<float32>(GetInstanceProperty<float64>(Record, "OuterConeDegrees")));
+									static_cast<float32>(GetInstanceProperty<float64>(Record, "OuterConeDegrees")));
 			ApplyShadowProperties(Record, Component.GetShadowSettings());
 		}
 	}
@@ -784,12 +778,12 @@ void SceneDocument::SynchronizeRuntimeBehaviors(const util::UUID &ParentID)
 				continue;
 			}
 			components::BehaviorInstance Behavior{.InstanceID = Child.ID,
-										  .Type = Descriptor->Type,
-										  .TypeName = Descriptor->Name,
-										  .ModuleName = Descriptor->ModuleName,
-										  .StableTypeID = Descriptor->StableTypeID,
-										  .SchemaVersion = static_cast<uint32>(GetInstanceProperty<uint64>(Child, "SchemaVersion")),
-										  .Enabled = Child.Enabled};
+												  .Type = Descriptor->Type,
+												  .TypeName = Descriptor->Name,
+												  .ModuleName = Descriptor->ModuleName,
+												  .StableTypeID = Descriptor->StableTypeID,
+												  .SchemaVersion = static_cast<uint32>(GetInstanceProperty<uint64>(Child, "SchemaVersion")),
+												  .Enabled = Child.Enabled};
 			for (const auto &[Name, Value] : Child.Properties)
 			{
 				if (!Name.starts_with("Behavior."))
@@ -909,8 +903,8 @@ void SceneDocument::SynchronizeRuntimeAnimations(const util::UUID &ModelID)
 			const components::CObjectAnimationComponent &Component = Access.Resolve(Existing);
 			for (components::DirectAnimationTrack &Target : TargetTracks)
 			{
-				const auto Previous = std::ranges::find(Component.GetDirectTracks(), Target.InstanceID,
-															&components::DirectAnimationTrack::InstanceID);
+				const auto Previous =
+					std::ranges::find(Component.GetDirectTracks(), Target.InstanceID, &components::DirectAnimationTrack::InstanceID);
 				if (Previous != Component.GetDirectTracks().end())
 				{
 					Target.PreviousPlaybackTime = Previous->PreviousPlaybackTime;

@@ -35,6 +35,10 @@
 #include "Source/editor/preferences/EditorContentBrowserStore.h"
 #include "Source/editor/ui/EditorLayoutStore.h"
 #include "Source/editor/ui/EditorDockspace.h"
+#include "Source/editor/ui/EditorIconRegistry.h"
+#include "Source/editor/ui/EditorTheme.h"
+#include "Source/editor/ui/EditorStyle.h"
+#include "Source/editor/ui/EditorWidgets.h"
 #include "Source/runtime/project/ProjectPackage.h"
 #include "Source/editor/viewport/EditorCameraController.h"
 #include "Source/editor/viewport/EditorViewportController.h"
@@ -67,6 +71,7 @@
 #include <new>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 
@@ -655,13 +660,33 @@ void ValidateTransformEditing()
 	Require(glm::distance(CameraController.GetOrbitPivot(), ExpectedFocusCenter) < 1.0e-4f &&
 				glm::distance(Camera.Position, ExpectedFocusCenter) > 0.0f,
 			"editor camera focus did not frame the current selection around its shared center");
-	const core::input::InputSnapshot EmptyCameraInput;
 	const viewport::EditorCameraInteraction HeldFlyNavigation =
-		CameraController.Update(Camera, EmptyCameraInput, 1.0f / 60.0f, {.RightMouseDown = true}, true, true, true, false, false, false);
+		CameraController.Update(Camera, {.Pointer = {.RightMouseDown = true}}, 1.0f / 60.0f, true, true, true, false, false, false);
 	Require(HeldFlyNavigation.WantsRelativePointer, "buffered held right-mouse input did not engage editor mouse-look");
 	const viewport::EditorCameraInteraction ReleasedFlyNavigation =
-		CameraController.Update(Camera, EmptyCameraInput, 1.0f / 60.0f, {}, true, true, true, false, false, false);
+		CameraController.Update(Camera, {}, 1.0f / 60.0f, true, true, true, false, false, false);
 	Require(!ReleasedFlyNavigation.WantsRelativePointer, "editor mouse-look remained active after right mouse was released");
+
+	auto SteadyCamera = Camera;
+	auto JitteredCamera = SteadyCamera;
+	viewport::EditorCameraController SteadyController;
+	viewport::EditorCameraController JitteredController;
+	const viewport::EditorCameraNavigationInput ForwardInput{.Movement = glm::vec3(0.0f, 0.0f, 1.0f)};
+	for (uint32 Step = 0; Step < 240; ++Step)
+		(void)SteadyController.Update(SteadyCamera, ForwardInput, 1.0f / 240.0f, true, true, true, false, false, false);
+	constexpr std::array JitteredFrameDurations{1.0f / 30.0f, 1.0f / 240.0f, 1.0f / 72.0f, 1.0f / 165.0f};
+	float32 SimulatedSeconds = 0.0f;
+	usize JitteredFrame = 0;
+	while (SimulatedSeconds < 1.0f)
+	{
+		const float32 DeltaSeconds =
+			std::min(JitteredFrameDurations[JitteredFrame % JitteredFrameDurations.size()], 1.0f - SimulatedSeconds);
+		(void)JitteredController.Update(JitteredCamera, ForwardInput, DeltaSeconds, true, true, true, false, false, false);
+		SimulatedSeconds += DeltaSeconds;
+		++JitteredFrame;
+	}
+	Require(glm::distance(SteadyCamera.Position, JitteredCamera.Position) < 1.0e-4f,
+			"editor camera movement changed with an uneven frame schedule");
 
 	const viewport::TransformGizmoVisualState VisualState = Gizmo.BuildVisualState(Document, Camera);
 	const glm::vec3 AxisSample = VisualState.Pivot + glm::normalize(VisualState.Basis[0]) * VisualState.WorldScale * 0.7f;
@@ -2708,9 +2733,6 @@ void ValidateEditorActions()
 				!Actions.IsChecked(action::IDs::ToggleExplorer, Context),
 			"view action did not close the Explorer panel and update its checked state");
 	Session.GetWorkspace().SetOpen(workspace::EditorPanelID::Explorer, true);
-	Session.GetWorkspace().SetMinimized(workspace::EditorPanelID::Explorer, true);
-	Require(Session.GetWorkspace().GetPanel(workspace::EditorPanelID::Explorer).Minimized,
-			"editor workspace did not preserve a minimized resizable panel state");
 	Actions.UninstallInput();
 }
 
@@ -2893,6 +2915,56 @@ void ValidateEditorSerialization()
 	}
 	{
 		using Json = nlohmann::json;
+		document::SceneDocument LegacyLights("Version Two Lights");
+		const util::UUID Workspace = LegacyLights.GetInstances().GetWorkspace();
+		const glm::vec3 PointPosition(6.0F, 7.0F, 8.0F);
+		const glm::vec3 SpotPosition(-3.0F, 2.0F, 9.0F);
+		const glm::quat SpotRotation = glm::angleAxis(glm::radians(42.0F), glm::normalize(glm::vec3(0.0F, 1.0F, 1.0F)));
+		const util::UUID PointID = LegacyLights.CreateInstance(instance::class_ids::PointLight, Workspace, "Legacy Point",
+															   util::UUID::GenerateRandomUUID(), {{"Position", PointPosition}});
+		const util::UUID SpotID =
+			LegacyLights.CreateInstance(instance::class_ids::SpotLight, Workspace, "Legacy Spot", util::UUID::GenerateRandomUUID(),
+										{{"Position", SpotPosition}, {"Rotation", SpotRotation}});
+		const util::UUID DirectionalID = LegacyLights.CreateInstance(instance::class_ids::DirectionalLight, Workspace, "Legacy Sun");
+		const std::filesystem::path VersionTwoPath = Content / "VersionTwoLights.enginelevel";
+		serialization::SceneDocumentSerializer::Save(LegacyLights, Reflection, Assets, VersionTwoPath);
+		Json VersionTwo;
+		{
+			std::ifstream Input(VersionTwoPath, std::ios::binary);
+			VersionTwo = Json::parse(Input);
+		}
+		VersionTwo["FormatVersion"] = 2U;
+		const string LightingID = LegacyLights.GetInstances().GetLighting().ToString();
+		for (Json &Node : VersionTwo.at("Instances"))
+		{
+			const string ID = Node.at("ID").get<string>();
+			if (ID == PointID.ToString())
+				Node.at("Properties").erase("Position");
+			else if (ID == SpotID.ToString())
+			{
+				Node.at("Properties").erase("Position");
+				Node.at("Properties").erase("Rotation");
+			}
+			else if (ID == DirectionalID.ToString())
+				Node["Parent"] = LightingID;
+		}
+		{
+			std::ofstream Output(VersionTwoPath, std::ios::binary | std::ios::trunc);
+			Output << VersionTwo.dump(2) << '\n';
+		}
+		std::unique_ptr<document::SceneDocument> MigratedLights =
+			serialization::SceneDocumentSerializer::Load(VersionTwoPath, Reflection, Assets);
+		const instance::InstanceRecord MigratedPoint = MigratedLights->GetInstances().Get(PointID);
+		const instance::InstanceRecord MigratedSpot = MigratedLights->GetInstances().Get(SpotID);
+		const instance::InstanceRecord MigratedDirectional = MigratedLights->GetInstances().Get(DirectionalID);
+		Require(std::get<glm::vec3>(MigratedPoint.Properties.at("Position")) == PointPosition &&
+					glm::distance(std::get<glm::vec3>(MigratedSpot.Properties.at("Position")), SpotPosition) < 1.0e-4F &&
+					std::abs(glm::dot(std::get<glm::quat>(MigratedSpot.Properties.at("Rotation")), SpotRotation)) > 0.999F &&
+					MigratedDirectional.Parent == MigratedLights->GetInstances().GetWorkspace(),
+				"version-two light migration did not preserve world transforms or move the Sun into Workspace");
+	}
+	{
+		using Json = nlohmann::json;
 		Json Future;
 		{
 			std::ifstream Stream(ScenePath, std::ios::binary);
@@ -3063,7 +3135,6 @@ void ValidateEditorLayoutPersistence()
 
 	workspace::EditorWorkspace Source;
 	Source.SetOpen(workspace::EditorPanelID::Diagnostics, false);
-	Source.SetMinimized(workspace::EditorPanelID::AssetBrowser, true);
 	const std::array Viewports{
 		ui::EditorViewportLayoutState{
 			.View = 2, .Settings = {.ViewMode = pipeline::render::ViewportViewMode::Lit, .Overlays = {.Grid = true, .Selection = true}}},
@@ -3090,7 +3161,7 @@ void ValidateEditorLayoutPersistence()
 	ui::EditorLayoutStore Reader(LayoutPath);
 	Require(Reader.Load(Restored, DockingState, 0, 0, &RestoredViewports), "layout store did not load a published layout");
 	Require(!Restored.GetPanel(workspace::EditorPanelID::Diagnostics).Open &&
-				Restored.GetPanel(workspace::EditorPanelID::AssetBrowser).Minimized &&
+				Restored.GetPanel(workspace::EditorPanelID::AssetBrowser).Open &&
 				DockingState == "[Docking][Data]\nDockSpace ID=0xA5A5A5A5\n" && RestoredViewports.size() == Viewports.size() &&
 				RestoredViewports[0].View == Viewports[0].View && RestoredViewports[0].Settings == Viewports[0].Settings &&
 				RestoredViewports[1].View == Viewports[1].View && RestoredViewports[1].Settings == Viewports[1].Settings,
@@ -3135,6 +3206,15 @@ void ValidateProjectHub()
 				Scene.at("Objects")[2].at("Name") == "Sun" &&
 				Scene.at("Objects")[2].at("Components").contains("CObjectDirectionalLightComponent"),
 			"Baseplate scene does not contain its typed services, camera, plane, and shadow-casting sun template");
+	const auto WorkspaceNode =
+		std::ranges::find_if(Scene.at("Instances"), [](const nlohmann::json &Node)
+							 { return Node.at("ClassID").get<string>() == instance::class_ids::Workspace.ToString(); });
+	const auto SunNode =
+		std::ranges::find_if(Scene.at("Instances"), [](const nlohmann::json &Node)
+							 { return Node.at("ClassID").get<string>() == instance::class_ids::DirectionalLight.ToString(); });
+	Require(WorkspaceNode != Scene.at("Instances").end() && SunNode != Scene.at("Instances").end() &&
+				SunNode->at("Parent").get<string>() == WorkspaceNode->at("ID").get<string>(),
+			"Baseplate Sun is not an organizational child of Workspace");
 	reflection::ReflectionRegistry Reflection;
 	reflection::RegisterCoreComponentReflection(Reflection);
 	resource::AssetManager Assets(ProjectRoot / "Content");
@@ -3166,11 +3246,63 @@ void ValidateProjectHub()
 			"saving a migrated Baseplate scene did not publish the current typed format");
 	Require(Hub.GetRecentProjects().size() == 1 && Hub.GetRecentProjects().front().Available,
 			"new project was not published to the recent-project list");
+	const project::RecentProject &CreatedCard = Hub.GetRecentProjects().front();
+	Require(CreatedCard.ID == Descriptor.ID && CreatedCard.Name == Descriptor.Name && CreatedCard.LastOpenedMilliseconds > 0 &&
+				CreatedCard.LastEditedMilliseconds > 0 && CreatedCard.Thumbnail.IsValid() && CreatedCard.Thumbnail.Width == 480U &&
+				CreatedCard.Thumbnail.Height == 270U && CreatedCard.ThumbnailRevision != 0 &&
+				std::filesystem::is_regular_file(CreatedCard.ThumbnailPath),
+			"new project did not publish complete name, edit date, identity, and durable thumbnail card metadata");
+	const int64 InitialEditTime = CreatedCard.LastEditedMilliseconds;
+	const uint64 InitialThumbnailRevision = CreatedCard.ThumbnailRevision;
+	std::vector<uint8> CapturedPixels(8U * 4U * 4U, 0U);
+	for (usize Offset = 0; Offset < CapturedPixels.size(); Offset += 4U)
+	{
+		CapturedPixels[Offset] = 23U;
+		CapturedPixels[Offset + 1U] = 97U;
+		CapturedPixels[Offset + 2U] = 151U;
+		CapturedPixels[Offset + 3U] = 255U;
+	}
+	Hub.UpdateProjectThumbnail(Descriptor, 8U, 4U, CapturedPixels, true);
+	Hub.MarkProjectEdited(Descriptor);
+	const project::RecentProject &UpdatedCard = Hub.GetRecentProjects().front();
+	const usize UpdatedCenter =
+		(static_cast<usize>(UpdatedCard.Thumbnail.Height / 2U) * UpdatedCard.Thumbnail.Width + UpdatedCard.Thumbnail.Width / 2U) * 4U;
+	Require(UpdatedCard.LastEditedMilliseconds >= InitialEditTime && UpdatedCard.ThumbnailRevision != 0 &&
+				UpdatedCard.ThumbnailRevision != InitialThumbnailRevision && UpdatedCard.Thumbnail.Pixels[UpdatedCenter] == 23U &&
+				UpdatedCard.Thumbnail.Pixels[UpdatedCenter + 1U] == 97U && UpdatedCard.Thumbnail.Pixels[UpdatedCenter + 2U] == 151U,
+			"project-card capture did not resize, persist, and publish the real viewport thumbnail or edit timestamp");
+	project::ProjectHub ReloadedHub(Root / "Projects", Root / "State");
+	Require(ReloadedHub.GetRecentProjects().size() == 1 && ReloadedHub.GetRecentProjects().front().ID == Descriptor.ID &&
+				ReloadedHub.GetRecentProjects().front().Name == Descriptor.Name &&
+				ReloadedHub.GetRecentProjects().front().LastEditedMilliseconds == UpdatedCard.LastEditedMilliseconds &&
+				ReloadedHub.GetRecentProjects().front().Thumbnail.IsValid() &&
+				ReloadedHub.GetRecentProjects().front().Thumbnail.Pixels[UpdatedCenter] == 23U,
+			"project-card metadata and thumbnail did not survive a Project Hub restart");
 	const project::ProjectDescriptor Reopened = Hub.OpenProject(Descriptor.DescriptorPath);
 	Require(Reopened.ID == Descriptor.ID && Hub.GetRecentProjects().size() == 1,
 			"opening a recent project did not preserve identity or deduplicate its record");
 	Hub.RemoveRecent(Descriptor.DescriptorPath);
 	Require(Hub.GetRecentProjects().empty(), "recent project removal did not update the Project Hub state");
+	{
+		std::ofstream LegacyState(Root / "State" / "RecentProjects.json", std::ios::binary | std::ios::trunc);
+		LegacyState << nlohmann::json{{"FormatVersion", 1U},
+									  {"Projects", nlohmann::json::array({{{"Name", "Stale legacy name"},
+																		   {"Path", Descriptor.DescriptorPath.generic_string()},
+																		   {"LastOpenedMilliseconds", int64{7}}}})}}
+						   .dump(2);
+		Require(static_cast<bool>(LegacyState), "legacy recent-project validation state could not be written");
+	}
+	project::ProjectHub MigratedHub(Root / "Projects", Root / "State");
+	Require(MigratedHub.GetRecentProjects().size() == 1 && MigratedHub.GetRecentProjects().front().ID == Descriptor.ID &&
+				MigratedHub.GetRecentProjects().front().Name == Descriptor.Name &&
+				MigratedHub.GetRecentProjects().front().Thumbnail.IsValid() &&
+				MigratedHub.GetRecentProjects().front().LastEditedMilliseconds > 0,
+			"legacy recent-project state did not migrate into complete project-card metadata");
+	std::ifstream MigratedStateStream(Root / "State" / "RecentProjects.json", std::ios::binary);
+	const nlohmann::json MigratedState = nlohmann::json::parse(MigratedStateStream);
+	Require(MigratedState.at("FormatVersion").get<uint32>() == 2U && MigratedState.at("Projects")[0].contains("ID") &&
+				MigratedState.at("Projects")[0].contains("LastEditedMilliseconds"),
+			"legacy recent-project migration did not publish the current durable metadata format");
 }
 
 void ValidateReferenceDockLayoutResizing()
@@ -3227,7 +3359,8 @@ void ValidateReferenceDockLayoutResizing()
 	ImGuiDockNode *const Right = SmallerChild(RightSplit, ImGuiAxis_X);
 	ImGuiDockNode *const CenterSplit = LargerChild(RightSplit, ImGuiAxis_X);
 	ImGuiDockNode *const Bottom = SmallerChild(CenterSplit, ImGuiAxis_Y);
-	const bool HasReferenceLeaves = Left != nullptr && Right != nullptr && CenterSplit != nullptr && Bottom != nullptr;
+	ImGuiDockNode *const Center = LargerChild(CenterSplit, ImGuiAxis_Y);
+	const bool HasReferenceLeaves = Left != nullptr && Right != nullptr && CenterSplit != nullptr && Bottom != nullptr && Center != nullptr;
 	const float32 RootWidth = Root == nullptr ? 0.0f : Root->Size.x;
 	const float32 LeftRatio = HasReferenceLeaves && RootWidth > 0.0f ? Left->Size.x / RootWidth : 0.0f;
 	const float32 RightRatio = HasReferenceLeaves && RootWidth > 0.0f ? Right->Size.x / RootWidth : 0.0f;
@@ -3241,6 +3374,8 @@ void ValidateReferenceDockLayoutResizing()
 	Require(std::abs(LeftRatio - 0.22f) <= 0.01f && std::abs(RightRatio - 0.22f) <= 0.01f,
 			"reference dock layout did not preserve equal 22-percent side panels");
 	Require(std::abs(BottomRatio - 0.28f) <= 0.01f, "reference dock layout did not preserve the 28-percent bottom panel");
+	Require(Center->IsNoTabBar() && (Center->MergedFlags & ImGuiDockNodeFlags_NoDockingOverMe) != 0,
+			"reference dock layout did not preserve the viewport as a tabless edge-to-edge center surface");
 }
 
 void ValidateColorEditPopupIdentity()
@@ -3288,6 +3423,226 @@ void ValidateColorEditPopupIdentity()
 
 	ImGui::End();
 	ImGui::EndFrame();
+}
+
+void ValidateEditorTheme()
+{
+	struct ImGuiContextScope final
+	{
+		ImGuiContextScope()
+		{
+			IMGUI_CHECKVERSION();
+			ImGui::CreateContext();
+		}
+
+		~ImGuiContextScope()
+		{
+			ImGui::DestroyContext();
+		}
+	};
+	[[maybe_unused]] ImGuiContextScope Context;
+	ui::EditorStyleSystem::ApplyDefaultDark();
+	const ui::EditorThemeTokens &Tokens = ui::EditorTheme::GetTokens();
+	const ImGuiStyle &Style = ImGui::GetStyle();
+	const auto CloseEnough = [](const float32 Left, const float32 Right) { return std::abs(Left - Right) <= 0.0001F; };
+	Require(CloseEnough(Style.WindowRounding, Tokens.WindowRounding) && CloseEnough(Style.FrameRounding, Tokens.FrameRounding) &&
+				CloseEnough(Style.ChildRounding, Tokens.ChildRounding) && CloseEnough(Style.PopupRounding, Tokens.PopupRounding),
+			"editor theme did not apply the shared radius tokens");
+	Require(CloseEnough(Style.FramePadding.x, Tokens.FramePadding.x) && CloseEnough(Style.FramePadding.y, Tokens.FramePadding.y) &&
+				CloseEnough(Style.ItemSpacing.x, Tokens.ItemSpacing.x) && CloseEnough(Style.ItemSpacing.y, Tokens.ItemSpacing.y),
+			"editor theme did not apply the shared spacing tokens");
+	Require(Style.Colors[ImGuiCol_WindowBg].x == Tokens.Canvas.x && Style.Colors[ImGuiCol_WindowBg].y == Tokens.Canvas.y &&
+				Style.Colors[ImGuiCol_WindowBg].z == Tokens.Canvas.z && Style.Colors[ImGuiCol_Text].x == Tokens.TextPrimary.x &&
+				Style.Colors[ImGuiCol_Text].y == Tokens.TextPrimary.y && Style.Colors[ImGuiCol_Text].z == Tokens.TextPrimary.z,
+			"editor theme did not apply the semantic dark palette");
+	const ui::EditorInteractionState SelectedHovered = ui::EditorStyleSystem::ResolveState(true, true, false, true);
+	const ui::EditorInteractionState SelectedPressed = ui::EditorStyleSystem::ResolveState(true, true, true, true);
+	Require(SelectedHovered == ui::EditorInteractionState::SelectedHovered &&
+				SelectedPressed == ui::EditorInteractionState::SelectedPressed,
+			"editor interaction precedence allowed hover or press to erase selection");
+	const ui::EditorControlVisual SelectedVisual = ui::EditorStyleSystem::Resolve(ui::EditorControlRole::Toolbar, SelectedHovered);
+	const ui::EditorControlVisual HoverVisual =
+		ui::EditorStyleSystem::Resolve(ui::EditorControlRole::Toolbar, ui::EditorInteractionState::Hovered);
+	Require(SelectedVisual.DrawAccent && (SelectedVisual.Fill.x != HoverVisual.Fill.x || SelectedVisual.Fill.y != HoverVisual.Fill.y ||
+										  SelectedVisual.Fill.z != HoverVisual.Fill.z),
+			"selected-hover visual collapsed into the ordinary hover visual");
+	Require(CloseEnough(Style.HoverDelayNormal, 0.4F) && CloseEnough(Tokens.SignatureRailWidth, 3.0F) &&
+				Tokens.SurfaceInset.x < Tokens.Surface.x && Tokens.ToolbarSurface.x < Tokens.Surface.x,
+			"editor style system did not apply its authored interaction signature");
+	Require(Tokens.Accent.y > Tokens.Accent.z && Tokens.Accent.z > Tokens.Accent.x && Tokens.FocusRing.x > Tokens.FocusRing.y &&
+				Tokens.HighlightLine.w >= 0.2F,
+			"editor palette lost the OpenFrame jade-and-copper identity");
+
+	ui::EditorStyleSystem::ApplyDefaultDark(2.0F);
+	ImGui::GetStyle().FontScaleDpi = 2.0F;
+	const ui::EditorThemeTokens &ScaledTokens = ui::EditorTheme::GetTokens();
+	Require(CloseEnough(ScaledTokens.ControlHeight, ui::EditorTheme::GetLogicalTokens().ControlHeight * 2.0F) &&
+				CloseEnough(ImGui::GetStyle().FramePadding.x, ui::EditorTheme::GetLogicalTokens().FramePadding.x * 2.0F) &&
+				CloseEnough(ui::EditorTheme::GetScale(), 2.0F) && CloseEnough(ui::EditorTheme::ScaleLogical(120.0F), 240.0F),
+			"editor DPI scaling enlarged fonts without enlarging token and style geometry");
+	Require(ScaledTokens.RibbonHeight >=
+				ScaledTokens.RibbonButtonHeight + ScaledTokens.WindowPadding.y * 2.0F + ImGui::GetStyle().ScrollbarSize,
+			"ribbon height cannot contain its padded buttons and horizontal scrollbar at the active DPI");
+	Require(ScaledTokens.HomeHeroHeight >= ScaledTokens.HomeActionHeight * 3.5F &&
+				ScaledTokens.HomeContentMaximumWidth >= ScaledTokens.HomeProjectCardWidth * 4.0F &&
+				ScaledTokens.HomeHeroSummaryWidth > 0.0F && ScaledTokens.HomeHeroTextMinimumWidth > ScaledTokens.HomeHeroSummaryWidth,
+			"home-screen layout tokens cannot reserve a safe, bounded full-window hub layout");
+	ImGuiIO &IO = ImGui::GetIO();
+	IO.DisplaySize = ImVec2(640.0F, 360.0F);
+	IO.DeltaTime = 1.0F / 60.0F;
+	ImFontConfig DefaultFontConfiguration;
+	DefaultFontConfiguration.SizePixels = 14.0F;
+	IO.Fonts->AddFontDefault(&DefaultFontConfiguration);
+	std::array<wchar_t, MAX_PATH> SystemDirectory{};
+	const uint32 SystemDirectoryLength = GetWindowsDirectoryW(SystemDirectory.data(), static_cast<uint32>(SystemDirectory.size()));
+	Require(SystemDirectoryLength != 0 && SystemDirectoryLength < SystemDirectory.size(),
+			"editor icon validation could not locate the system font directory");
+	std::filesystem::path IconFontPath = std::filesystem::path(SystemDirectory.data()) / "Fonts" / "SegoeIcons.ttf";
+	if (!std::filesystem::is_regular_file(IconFontPath))
+		IconFontPath = std::filesystem::path(SystemDirectory.data()) / "Fonts" / "segmdl2.ttf";
+	Require(std::filesystem::is_regular_file(IconFontPath), "editor icon validation could not locate the required system icon font");
+	static constexpr ImWchar IconRanges[]{0xE000, 0xF8FF, 0};
+	ImFontConfig IconConfiguration;
+	IconConfiguration.MergeMode = true;
+	IconConfiguration.PixelSnapH = true;
+	IconConfiguration.GlyphMinAdvanceX = 16.0F;
+	Require(IO.Fonts->AddFontFromFileTTF(IconFontPath.string().c_str(), 16.0F, &IconConfiguration, IconRanges) != nullptr,
+			"editor icon validation could not merge the system icon font");
+	IO.Fonts->Build();
+	ImGui::NewFrame();
+	ImGui::Begin("EditorTextContainmentValidation", nullptr, ImGuiWindowFlags_NoSavedSettings);
+	const std::array<const char *, 3> RecoveryActions = {"Recover Newest", "Discard All", "Later"};
+	const std::array<float32, 3> RecoveryLogicalWidths = {140.0F, 110.0F, 80.0F};
+	for (usize ActionIndex = 0; ActionIndex < RecoveryActions.size(); ++ActionIndex)
+	{
+		if (ActionIndex != 0)
+			ImGui::SameLine();
+		(void)ui::EditorWidgets::Button(
+			RecoveryActions[ActionIndex],
+			ImVec2(ui::EditorTheme::ScaleLogical(RecoveryLogicalWidths[ActionIndex]), ScaledTokens.DialogActionHeight),
+			ActionIndex == 0 ? ui::EditorControlRole::Primary : ui::EditorControlRole::Quiet);
+		const float32 RequiredWidth = ImGui::CalcTextSize(RecoveryActions[ActionIndex]).x + ScaledTokens.FramePadding.x * 2.0F;
+		Require(ImGui::GetItemRectSize().x >= RequiredWidth,
+				"DPI-scaled compact dialog action clipped a label instead of honoring its measured width");
+	}
+	ImGui::NewLine();
+	constexpr const char *BoundedLabel = "A deliberately long action label that must remain contained";
+	(void)ui::EditorWidgets::Button(BoundedLabel, ui::EditorButtonOptions{.Size = ImVec2(120.0F, 28.0F),
+																		  .Role = ui::EditorControlRole::Toolbar,
+																		  .AllowLabelClipping = true,
+																		  .Tooltip = BoundedLabel});
+	const ImVec2 ButtonMinimum = ImGui::GetItemRectMin();
+	const ImVec2 ButtonMaximum = ImGui::GetItemRectMax();
+	Require(ButtonMaximum.y - ButtonMinimum.y >= ImGui::GetFontSize() + ScaledTokens.FramePadding.y * 2.0F,
+			"custom button accepted a height too small for its scaled font and padding");
+	bool HasContainedTextClip = false;
+	for (const ImDrawCmd &Command : ImGui::GetWindowDrawList()->CmdBuffer)
+	{
+		if (Command.ElemCount != 0 && Command.ClipRect.x >= ButtonMinimum.x && Command.ClipRect.y >= ButtonMinimum.y &&
+			Command.ClipRect.z <= ButtonMaximum.x && Command.ClipRect.w <= ButtonMaximum.y)
+		{
+			HasContainedTextClip = true;
+			break;
+		}
+	}
+	Require(HasContainedTextClip, "custom button text was not rendered under a control-bounded clipping rectangle");
+	ImGui::NewLine();
+	const ui::EditorIconRegistry Icons;
+	const string_view OpenIcon = Icons.Find("Open");
+	Require(!OpenIcon.empty(), "editor icon validation could not resolve the Open glyph");
+	ImGui::BeginChild("RibbonIconContainment", ImVec2(600.0F, ScaledTokens.RibbonHeight),
+					  ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+	const ImVec2 ChildMinimum = ImGui::GetWindowPos();
+	const string RibbonLabel = string(OpenIcon) + "\nOpen";
+	(void)ui::EditorWidgets::Button(RibbonLabel.c_str(), ImVec2(0.0F, ScaledTokens.RibbonButtonHeight), ui::EditorControlRole::Toolbar);
+	const ImVec2 RibbonButtonMinimum = ImGui::GetItemRectMin();
+	const ImVec2 RibbonButtonMaximum = ImGui::GetItemRectMax();
+	Require(RibbonButtonMinimum.y >= ChildMinimum.y + ScaledTokens.WindowPadding.y - 0.5F,
+			"ribbon button border touched the child clip boundary instead of honoring window padding");
+	uint32 IconCodepoint = 0;
+	Require(ImTextCharFromUtf8(&IconCodepoint, OpenIcon.data(), OpenIcon.data() + OpenIcon.size()) > 0,
+			"editor icon validation could not decode the Open glyph");
+	ImFontBaked *const BakedFont = ImGui::GetFontBaked();
+	const ImFontGlyph *const Glyph = BakedFont == nullptr ? nullptr : BakedFont->FindGlyphNoFallback(static_cast<ImWchar>(IconCodepoint));
+	Require(Glyph != nullptr && Glyph->Visible, "editor icon validation could not retrieve merged glyph metrics");
+	const float32 InnerMinimumY = RibbonButtonMinimum.y + ScaledTokens.FramePadding.y;
+	const float32 InnerMaximumY = RibbonButtonMaximum.y - ScaledTokens.FramePadding.y;
+	const float32 GlyphHeight = Glyph->Y1 - Glyph->Y0;
+	Require(Glyph->Y0 < 0.0F, "editor icon regression fixture no longer exercises a glyph whose pixels extend above the body-text origin");
+	Require(InnerMaximumY - InnerMinimumY >= std::max(ImGui::GetFontSize(), GlyphHeight) + ImGui::GetFontSize(),
+			"ribbon button cannot contain the complete icon and label lines at the active DPI");
+	const float32 GlyphOriginY = InnerMinimumY - Glyph->Y0;
+	Require(GlyphOriginY + Glyph->Y0 >= InnerMinimumY && GlyphOriginY + Glyph->Y1 <= InnerMaximumY,
+			"glyph-bound compensation could not keep the complete ribbon icon inside the button content area");
+	ImGui::EndChild();
+	ImGui::End();
+	ImGui::EndFrame();
+}
+
+void ValidateProjectCardInteraction()
+{
+	struct ImGuiContextScope final
+	{
+		ImGuiContextScope()
+		{
+			IMGUI_CHECKVERSION();
+			ImGui::CreateContext();
+		}
+		~ImGuiContextScope()
+		{
+			ImGui::DestroyContext();
+		}
+	};
+	[[maybe_unused]] ImGuiContextScope Context;
+	ui::EditorStyleSystem::ApplyDefaultDark();
+	ImGuiIO &IO = ImGui::GetIO();
+	IO.DisplaySize = ImVec2(640.0F, 420.0F);
+	IO.DeltaTime = 1.0F / 60.0F;
+	IO.Fonts->AddFontDefault();
+	IO.Fonts->Build();
+	const auto DrawCardFrame = [](const bool PublishMousePosition, const ImVec2 MousePosition, const int32 MouseButtonState)
+	{
+		ImGuiIO &FrameIO = ImGui::GetIO();
+		if (PublishMousePosition)
+			FrameIO.AddMousePosEvent(MousePosition.x, MousePosition.y);
+		if (MouseButtonState >= 0)
+			FrameIO.AddMouseButtonEvent(ImGuiMouseButton_Left, MouseButtonState != 0);
+		ImGui::NewFrame();
+		ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+		ImGui::SetNextWindowSize(ImVec2(640.0F, 420.0F));
+		ImGui::Begin("ProjectCardValidation", nullptr,
+					 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+		const ui::EditorProjectCardResult Result = ui::EditorWidgets::ProjectCard(
+			"##Card", {.Size = ImVec2(320.0F, 246.0F),
+					   .Name = "Project Card Validation",
+					   .LastEdited = "Edited Aug 19, 2026 at 08:30 PM",
+					   .DescriptorPath = "C:/OpenFrame Projects/Project Card Validation/Project Card Validation.engineproject",
+					   .Available = true});
+		const ImVec2 Minimum = ImGui::GetItemRectMin();
+		const ImVec2 Maximum = ImGui::GetItemRectMax();
+		const usize DrawCommandCount = static_cast<usize>(ImGui::GetWindowDrawList()->CmdBuffer.Size);
+		ImGui::End();
+		ImGui::EndFrame();
+		return std::tuple{Result, Minimum, Maximum, DrawCommandCount};
+	};
+	const auto [WarmResult, WarmMinimum, WarmMaximum, WarmDrawCommands] = DrawCardFrame(true, ImVec2(120.0F, 120.0F), -1);
+	(void)WarmResult;
+	(void)WarmDrawCommands;
+	const ImVec2 CardCenter((WarmMinimum.x + WarmMaximum.x) * 0.5F, (WarmMinimum.y + WarmMaximum.y) * 0.5F);
+	const auto [HoverResult, HoverMinimum, HoverMaximum, HoverDrawCommands] = DrawCardFrame(true, CardCenter, -1);
+	(void)HoverResult;
+	(void)HoverMinimum;
+	(void)HoverMaximum;
+	(void)HoverDrawCommands;
+	const auto [PressedResult, PressedMinimum, PressedMaximum, PressedDrawCommands] = DrawCardFrame(false, {}, 1);
+	const auto [ReleasedResult, ReleasedMinimum, ReleasedMaximum, ReleasedDrawCommands] = DrawCardFrame(false, {}, 0);
+	(void)PressedMinimum;
+	(void)PressedMaximum;
+	(void)PressedDrawCommands;
+	Require(!PressedResult.OpenRequested && ReleasedResult.OpenRequested,
+			"project card did not make its complete surface a single click-to-open interaction target");
+	Require(ReleasedMaximum.x - ReleasedMinimum.x >= 320.0F && ReleasedMaximum.y - ReleasedMinimum.y >= 246.0F && ReleasedDrawCommands != 0,
+			"project card did not retain its styled thumbnail, metadata, and bounded card geometry");
 }
 
 void ValidateContentBrowserPersistence()
@@ -3887,22 +4242,61 @@ void ValidateTypedInstanceGraph()
 	Require(PartObject.IsValid() && Document.GetScene().GetComponent<components::CObjectMeshComponent>(PartObject).IsValid(),
 			"Part instance did not realize its primitive mesh runtime backing");
 	Document.SetInstanceProperty(LightParent, "Position", glm::vec3(7.0F, 8.0F, 9.0F));
-	const util::UUID PointLight = Document.CreateInstance(instance::class_ids::PointLight, LightParent);
+	const glm::vec3 PointPosition(3.0F, 4.0F, 5.0F);
+	const util::UUID PointLight = Document.CreateInstance(instance::class_ids::PointLight, LightParent, {},
+														  util::UUID::GenerateRandomUUID(), {{"Position", PointPosition}});
 	const world::ObjectHandle PointLightObject = Document.GetScene().FindObject(PointLight);
 	{
 		const auto Access = Document.GetScene().Read();
 		const auto Transform = Access.GetComponent<components::CObjectTransformComponent>(PointLightObject);
 		Require(PointLightObject.IsValid() && Access.GetComponent<components::CObjectPointLightComponent>(PointLightObject).IsValid() &&
-					Transform.IsValid() && Access.Resolve(Transform).GetPosition() == glm::vec3(7.0F, 8.0F, 9.0F),
-				"PointLight instance did not bind to its exact parent transform");
+					Transform.IsValid() && Access.Resolve(Transform).GetPosition() == PointPosition &&
+					Graph.GetActivation(PointLight).State == instance::InstanceActivationState::Active,
+				"Point Light did not realize at its independent Workspace position");
 	}
 	Document.SetInstanceProperty(LightParent, "Position", glm::vec3(-2.0F, 1.0F, 3.0F));
 	{
 		const auto Access = Document.GetScene().Read();
 		const auto Transform = Access.GetComponent<components::CObjectTransformComponent>(PointLightObject);
-		Require(Access.Resolve(Transform).GetPosition() == glm::vec3(-2.0F, 1.0F, 3.0F),
-				"PointLight runtime backing did not follow its exact parent property update");
+		Require(Access.Resolve(Transform).GetPosition() == PointPosition,
+				"organizational parent movement incorrectly changed an independent Point Light transform");
 	}
+	const glm::quat SpotRotation = glm::angleAxis(glm::radians(35.0F), glm::vec3(0.0F, 1.0F, 0.0F));
+	const util::UUID SpotLight = Document.CreateInstance(instance::class_ids::SpotLight, LightParent, {}, util::UUID::GenerateRandomUUID(),
+														 {{"Position", glm::vec3(-4.0F, 2.0F, 6.0F)}, {"Rotation", SpotRotation}});
+	const util::UUID DirectionalLight = Document.CreateInstance(instance::class_ids::DirectionalLight, Folder, {},
+																util::UUID::GenerateRandomUUID(), {{"Rotation", SpotRotation}});
+	Require(Graph.GetActivation(SpotLight).State == instance::InstanceActivationState::Active &&
+				Graph.GetActivation(DirectionalLight).State == instance::InstanceActivationState::Active,
+			"Workspace descendant hierarchy rejected an organizational Spot or Directional Light parent");
+	const util::UUID MisplacedLight = Graph.Create(instance::class_ids::PointLight, Graph.GetLighting());
+	Require(Graph.GetActivation(MisplacedLight).State == instance::InstanceActivationState::Inactive,
+			"Lighting incorrectly accepted a physical light instead of reserving environmental modifiers");
+	const auto DirectionalType = Document.GetInstanceTypes().Find(instance::class_ids::DirectionalLight);
+	const auto PointType = Document.GetInstanceTypes().Find(instance::class_ids::PointLight);
+	const auto SpotType = Document.GetInstanceTypes().Find(instance::class_ids::SpotLight);
+	Require(DirectionalType != nullptr && !DirectionalType->TransformCapabilities.Translation &&
+				DirectionalType->TransformCapabilities.Rotation && !DirectionalType->TransformCapabilities.Scale && PointType != nullptr &&
+				PointType->TransformCapabilities.Translation && !PointType->TransformCapabilities.Rotation &&
+				!PointType->TransformCapabilities.Scale && SpotType != nullptr && SpotType->TransformCapabilities.Translation &&
+				SpotType->TransformCapabilities.Rotation && !SpotType->TransformCapabilities.Scale,
+			"light descriptors do not expose the required directional, point, and spot transform capabilities");
+	Document.GetSelection().SelectOnly(PointLight);
+	Camera LightCamera(0.1F, 60.0F, 0.05F, 10'000.0F);
+	LightCamera.Position = glm::vec3(0.0F, 0.0F, 15.0F);
+	LightCamera.UpdateCameraVectors();
+	viewport::TransformGizmoController LightGizmo;
+	LightGizmo.SetOperation(viewport::TransformGizmoOperation::Scale);
+	Require(!LightGizmo.BuildVisualState(Document, LightCamera).Visible, "Point Light exposed a forbidden scale gizmo");
+	LightGizmo.SetOperation(viewport::TransformGizmoOperation::Universal);
+	const viewport::TransformGizmoVisualState PointGizmo = LightGizmo.BuildVisualState(Document, LightCamera);
+	Require(PointGizmo.Visible && PointGizmo.AllowTranslation && !PointGizmo.AllowRotation && !PointGizmo.AllowScale,
+			"Point Light universal gizmo did not filter unsupported handles");
+	const pipeline::render::SceneRenderSnapshot SelectedLightSnapshot = pipeline::render::SceneRenderSnapshotBuilder::Build(
+		Document.GetScene(), {.SelectedObjects = std::span<const world::ObjectHandle>(&PointLightObject, 1U)});
+	Require(std::ranges::any_of(SelectedLightSnapshot.DebugLines, [](const pipeline::render::SceneDebugLine &Line)
+								{ return Line.Category == pipeline::render::SceneDebugLineCategory::SelectedLight; }),
+			"selected Point Light guide was not included while the global Lights overlay was disabled");
 	const util::UUID ClipboardFolder = Document.CreateInstance(instance::class_ids::Folder, Workspace, "Clipboard Folder");
 	const util::UUID ClipboardPart = Document.CreateInstance(instance::class_ids::Part, ClipboardFolder, "Referenced Part");
 	const util::UUID ClipboardScript = Document.CreateInstance(instance::class_ids::Script, ClipboardPart, "Reference Script");
@@ -3989,6 +4383,8 @@ void RunDeterministicEditorCoreChecks()
 	Run("editor layout persistence", &ValidateEditorLayoutPersistence);
 	Run("project hub and Baseplate template", &ValidateProjectHub);
 	Run("reference dock layout resizing", &ValidateReferenceDockLayoutResizing);
+	Run("editor theme tokens", &ValidateEditorTheme);
+	Run("project card interaction", &ValidateProjectCardInteraction);
 	Run("color edit popup identity", &ValidateColorEditPopupIdentity);
 	Run("content browser persistence", &ValidateContentBrowserPersistence);
 	Run("asset thumbnails", &ValidateAssetThumbnails);

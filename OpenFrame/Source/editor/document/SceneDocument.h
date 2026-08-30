@@ -48,7 +48,8 @@ class SceneDocument final
 												   util::UUID PersistentID = util::UUID::GenerateRandomUUID());
 	[[nodiscard]] world::ObjectHandle CreateObject(SceneObjectSpecification Specification);
 	[[nodiscard]] util::UUID CreateInstance(instance::InstanceClassID ClassID, util::UUID Parent, string Name = {},
-											util::UUID ID = util::UUID::GenerateRandomUUID());
+											util::UUID ID = util::UUID::GenerateRandomUUID(),
+											instance::InstancePropertyMap InitialProperties = {});
 	void DestroyInstance(const util::UUID &ID);
 	void RenameInstance(const util::UUID &ID, string Name);
 	void ReparentInstance(const util::UUID &ID, const util::UUID &Parent, uint32 SiblingOrder = 0);

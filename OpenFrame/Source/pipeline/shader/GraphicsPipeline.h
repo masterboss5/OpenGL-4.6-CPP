@@ -172,6 +172,7 @@ enum class VertexUniform : uint8
 	GizmoScale,
 	GizmoOperation,
 	ActiveHandle,
+	GizmoCapabilityMask,
 	Count
 };
 

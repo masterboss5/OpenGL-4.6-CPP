@@ -87,7 +87,6 @@ void EditorWorkspace::ResetToReferenceLayout()
 					 .MinimumWidth = 320.0f,
 					 .MinimumHeight = 240.0f,
 					 .Open = true,
-					 .Minimized = false,
 					 .Closable = false,
 					 .Resizable = true},
 					{.ID = EditorPanelID::Properties,
@@ -110,22 +109,19 @@ void EditorWorkspace::ResetToReferenceLayout()
 					 .DefaultRegion = DockRegion::Bottom,
 					 .DefaultSizeRatio = 0.28f,
 					 .MinimumHeight = 220.0f,
-					 .Open = false,
-					 .Minimized = false},
+					 .Open = false},
 					{.ID = EditorPanelID::Output,
 					 .Name = "Output",
 					 .DefaultRegion = DockRegion::Bottom,
 					 .DefaultSizeRatio = 0.28f,
 					 .MinimumHeight = 140.0f,
-					 .Open = false,
-					 .Minimized = false},
+					 .Open = false},
 					{.ID = EditorPanelID::Diagnostics,
 					 .Name = "Diagnostics",
 					 .DefaultRegion = DockRegion::Bottom,
 					 .DefaultSizeRatio = 0.28f,
 					 .MinimumHeight = 140.0f,
-					 .Open = false,
-					 .Minimized = false}};
+					 .Open = false}};
 	++this->LayoutResetGeneration;
 }
 
@@ -135,16 +131,6 @@ void EditorWorkspace::SetOpen(const EditorPanelID Panel, const bool Open)
 	if (!Open && !State.Closable)
 		throw EditorWorkspaceException("Panel '" + State.Name + "' cannot be closed");
 	State.Open = Open;
-	if (!Open)
-		State.Minimized = false;
-}
-
-void EditorWorkspace::SetMinimized(const EditorPanelID Panel, const bool Minimized)
-{
-	EditorPanelState &State = this->GetPanel(Panel);
-	if (!State.Open && Minimized)
-		throw EditorWorkspaceException("A closed panel cannot be minimized");
-	State.Minimized = Minimized;
 }
 
 void EditorWorkspace::Toggle(const EditorPanelID Panel)

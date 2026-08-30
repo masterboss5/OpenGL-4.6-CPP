@@ -3,6 +3,8 @@
 #include "EditorDockspace.h"
 #include "EditorIconRegistry.h"
 #include "EditorLayoutStore.h"
+#include "EditorTheme.h"
+#include "EditorWidgets.h"
 #include "EditorUIContext.h"
 #include "EditorUIRenderer.h"
 #include "EditorUIWindowBridge.h"
@@ -47,11 +49,14 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <format>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <mutex>
 #include <ranges>
+#include <sstream>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
@@ -90,6 +95,12 @@ struct EditorUserInterface::State final
 		string Diagnostic;
 		std::unique_ptr<ImTextureData> Texture;
 		uint64 LastUsedFrame = 0;
+	};
+
+	struct ProjectThumbnailTexture final
+	{
+		uint64 Revision = 0;
+		std::unique_ptr<ImTextureData> Texture;
 	};
 
 	struct ViewportState final
@@ -148,6 +159,8 @@ struct EditorUserInterface::State final
 	std::vector<resource::AssetID> FavoriteAssetIDsScratch;
 	std::unordered_map<asset::AssetThumbnailKey, ThumbnailTexture, asset::AssetThumbnailKeyHash> ThumbnailTextures;
 	std::vector<ThumbnailTexture> RetiredThumbnailTextures;
+	std::unordered_map<string, ProjectThumbnailTexture> ProjectThumbnailTextures;
+	std::vector<std::unique_ptr<ImTextureData>> RetiredProjectThumbnailTextures;
 	resource::AssetID InspectedAssetID;
 	bool DependencyInspectorRequested = false;
 	bool TrashView = false;
@@ -174,6 +187,7 @@ struct EditorUserInterface::State final
 	std::vector<std::pair<asset::AssetThumbnailKey, uint64>> ThumbnailCandidatesScratch;
 	std::unordered_map<resource::AssetID, uint64> LiveAssetIDsScratch;
 	uint64 LiveAssetIDGeneration = 0;
+	float32 AppliedLayoutScale = 0.0F;
 	std::vector<world::ObjectHandle> ComponentTargetsScratch;
 	std::vector<material::PrivateMaterialTarget> PrivateMaterialTargetsScratch;
 	std::vector<runtime::behavior::BehaviorDescriptor> BehaviorDescriptorsScratch;
@@ -211,6 +225,11 @@ struct EditorUserInterface::State final
 
 namespace
 {
+[[nodiscard]] ImVec4 WithAlpha(const ImVec4 Color, const float32 Alpha) noexcept
+{
+	return ImVec4(Color.x, Color.y, Color.z, Alpha);
+}
+
 [[nodiscard]] string NormalizeFilterText(const string_view Text)
 {
 	string Result(Text);
@@ -327,6 +346,106 @@ void ReleaseThumbnailTextures(auto &State) noexcept
 	{
 		std::terminate();
 	}
+}
+
+void RetireProjectThumbnailTexture(auto &State, const string_view Key)
+{
+	const auto Found = State.ProjectThumbnailTextures.find(string(Key));
+	if (Found == State.ProjectThumbnailTextures.end())
+		return;
+	if (Found->second.Texture != nullptr)
+	{
+		Found->second.Texture->WantDestroyNextFrame = true;
+		Found->second.Texture->SetStatus(ImTextureStatus_WantDestroy);
+		Found->second.Texture->UnusedFrames = std::max(Found->second.Texture->UnusedFrames, 1);
+		State.RetiredProjectThumbnailTextures.push_back(std::move(Found->second.Texture));
+	}
+	State.ProjectThumbnailTextures.erase(Found);
+}
+
+void CollectRetiredProjectThumbnailTextures(auto &State)
+{
+	std::erase_if(State.RetiredProjectThumbnailTextures,
+				  [](auto &Texture)
+				  {
+					  if (Texture->Status != ImTextureStatus_Destroyed)
+						  return false;
+					  ImGui::UnregisterUserTexture(Texture.get());
+					  return true;
+				  });
+}
+
+void ReleaseProjectThumbnailTextures(auto &State) noexcept
+{
+	try
+	{
+		for (auto Iterator = State.ProjectThumbnailTextures.begin(); Iterator != State.ProjectThumbnailTextures.end();)
+		{
+			const string Key = Iterator->first;
+			++Iterator;
+			RetireProjectThumbnailTexture(State, Key);
+		}
+		for (std::unique_ptr<ImTextureData> &Texture : State.RetiredProjectThumbnailTextures)
+		{
+			if (Texture->Status == ImTextureStatus_OK || Texture->Status == ImTextureStatus_WantUpdates)
+			{
+				Texture->WantDestroyNextFrame = true;
+				Texture->SetStatus(ImTextureStatus_WantDestroy);
+				Texture->UnusedFrames = std::max(Texture->UnusedFrames, 1);
+			}
+			if (Texture->Status == ImTextureStatus_WantDestroy && Texture->TexID != ImTextureID_Invalid)
+				ImGui_ImplOpenGL3_UpdateTexture(Texture.get());
+			if (Texture->RefCount > 0)
+				ImGui::UnregisterUserTexture(Texture.get());
+		}
+		State.RetiredProjectThumbnailTextures.clear();
+	}
+	catch (...)
+	{
+		std::terminate();
+	}
+}
+
+[[nodiscard]] ImTextureData *ResolveProjectThumbnailTexture(auto &State, const project::RecentProject &Project)
+{
+	if (!Project.Thumbnail.IsValid() || Project.ThumbnailRevision == 0)
+		return nullptr;
+	const string Key = Project.DescriptorPath.generic_string();
+	const auto Existing = State.ProjectThumbnailTextures.find(Key);
+	if (Existing != State.ProjectThumbnailTextures.end())
+	{
+		if (Existing->second.Revision == Project.ThumbnailRevision)
+			return Existing->second.Texture.get();
+		RetireProjectThumbnailTexture(State, Key);
+	}
+	if (Project.Thumbnail.Width > static_cast<uint32>(std::numeric_limits<int32>::max()) ||
+		Project.Thumbnail.Height > static_cast<uint32>(std::numeric_limits<int32>::max()))
+	{
+		throw std::overflow_error("project thumbnail dimensions exceed the Dear ImGui texture boundary");
+	}
+	auto Texture = std::make_unique<ImTextureData>();
+	Texture->Create(ImTextureFormat_RGBA32, static_cast<int32>(Project.Thumbnail.Width), static_cast<int32>(Project.Thumbnail.Height));
+	std::memcpy(Texture->GetPixels(), Project.Thumbnail.Pixels.data(), Project.Thumbnail.Pixels.size());
+	Texture->UseColors = true;
+	ImGui::RegisterUserTexture(Texture.get());
+	ImTextureData *const Result = Texture.get();
+	using ProjectThumbnailTexture = typename std::remove_reference_t<decltype(State.ProjectThumbnailTextures)>::mapped_type;
+	State.ProjectThumbnailTextures.emplace(Key,
+										   ProjectThumbnailTexture{.Revision = Project.ThumbnailRevision, .Texture = std::move(Texture)});
+	return Result;
+}
+
+[[nodiscard]] string FormatLastEdited(const int64 Milliseconds)
+{
+	if (Milliseconds <= 0)
+		return "Edit date unavailable";
+	const std::time_t Timestamp = static_cast<std::time_t>(Milliseconds / 1'000);
+	std::tm LocalTime{};
+	if (localtime_s(&LocalTime, &Timestamp) != 0)
+		return "Edit date unavailable";
+	std::ostringstream Stream;
+	Stream << "Edited " << std::put_time(&LocalTime, "%b %d, %Y at %I:%M %p");
+	return Stream.str();
 }
 
 [[nodiscard]] ImTextureData *ResolveThumbnailTexture(auto &State, EditorSession &Session, const asset::ContentEntry &Entry,
@@ -475,7 +594,12 @@ constexpr std::array KeyMappings{KeyMapping{core::input::Key::Tab, ImGuiKey_Tab}
 
 [[nodiscard]] bool InputText(const string_view Label, string &Value)
 {
-	return ImGui::InputText(Label.data(), &Value);
+	return EditorWidgets::InputText(Label.data(), Value);
+}
+
+[[nodiscard]] bool SearchInputText(const string_view Label, string &Value, const EditorIconRegistry &Icons)
+{
+	return EditorWidgets::SearchField(Label.data(), Value, Icons);
 }
 
 void FeedInput(auto &State, const core::ApplicationFrame &Frame, const core::Window &Window, const EditorUIWindowBridge &WindowBridge)
@@ -594,6 +718,16 @@ void FeedInput(auto &State, const core::ApplicationFrame &Frame, const core::Win
 	IO.AddKeyAnalogEvent(ImGuiKey_GamepadR2, RightTrigger > 0.15f, RightTrigger);
 }
 
+void ApplyInterfaceScale(auto &State)
+{
+	const float32 RawScale = State.Window->GetContentScale();
+	const float32 Scale = std::isfinite(RawScale) ? std::clamp(RawScale, 0.5F, 4.0F) : 1.0F;
+	if (std::abs(Scale - State.AppliedLayoutScale) <= 0.0001F)
+		return;
+	EditorStyleSystem::ApplyDefaultDark(Scale);
+	State.AppliedLayoutScale = Scale;
+}
+
 void CloneDrawDataInto(const ImDrawData &Source, detail::EditorUIDrawData &Result)
 {
 	Result.Data.Valid = Source.Valid;
@@ -686,7 +820,7 @@ void FormatPropertyValue(const reflection::PropertyValue &Value, string &Result)
 	ImGui::BeginDisabled(ReadOnly);
 	bool Changed = false;
 	if (auto *BooleanValue = std::get_if<bool>(&Value))
-		Changed = ImGui::Checkbox("##Value", BooleanValue);
+		Changed = EditorWidgets::Checkbox("##Value", BooleanValue);
 	else if (auto *Signed32Value = std::get_if<int32>(&Value))
 		Changed = ImGui::InputScalar("##Value", ImGuiDataType_S32, Signed32Value);
 	else if (auto *Unsigned32Value = std::get_if<uint32>(&Value))
@@ -711,7 +845,7 @@ void FormatPropertyValue(const reflection::PropertyValue &Value, string &Result)
 				{
 					const uint32 Bit = static_cast<uint32>(Option.Value);
 					const bool Selected = (*Unsigned32Value & Bit) != 0;
-					if (ImGui::Selectable(Option.DisplayName.c_str(), Selected, ImGuiSelectableFlags_DontClosePopups))
+					if (EditorWidgets::Selectable(Option.DisplayName.c_str(), Selected, ImGuiSelectableFlags_DontClosePopups))
 					{
 						*Unsigned32Value = Selected ? (*Unsigned32Value & ~Bit) : (*Unsigned32Value | Bit);
 						Changed = true;
@@ -730,7 +864,7 @@ void FormatPropertyValue(const reflection::PropertyValue &Value, string &Result)
 				for (const reflection::EnumPropertyOption &Option : Property.EnumOptions)
 				{
 					const bool IsSelected = Option.Value == *Unsigned32Value;
-					if (ImGui::Selectable(Option.DisplayName.c_str(), IsSelected))
+					if (EditorWidgets::Selectable(Option.DisplayName.c_str(), IsSelected))
 					{
 						*Unsigned32Value = static_cast<uint32>(Option.Value);
 						Changed = true;
@@ -843,20 +977,6 @@ void OpenColorEditPickerPopup(const char *Label)
 	return Open;
 }
 
-[[nodiscard]] bool RenderPanelMinimizeControl(EditorSession &Session, workspace::EditorPanelState &Panel)
-{
-	ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight()));
-	ImGui::PushID(static_cast<int32>(Panel.ID));
-	const bool Minimize = ImGui::SmallButton("-");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Minimize %s", Panel.Name.c_str());
-	ImGui::PopID();
-	ImGui::Separator();
-	if (Minimize)
-		Session.GetWorkspace().SetMinimized(Panel.ID, true);
-	return Minimize;
-}
-
 template <IsCObjectComponent ComponentType>
 void RenderComponent(auto &State, EditorSession &Session, action::EditorActionContext &Context, const world::ObjectHandle Object,
 					 const string_view PropertyFilter)
@@ -887,9 +1007,9 @@ void RenderComponent(auto &State, EditorSession &Session, action::EditorActionCo
 	const bool Expanded = [&]()
 	{
 		if constexpr (Removable)
-			return ImGui::CollapsingHeader(Descriptor->DisplayName.c_str(), &KeepAttached, ImGuiTreeNodeFlags_DefaultOpen);
+			return EditorWidgets::CollapsingHeader(Descriptor->DisplayName.c_str(), &KeepAttached, ImGuiTreeNodeFlags_DefaultOpen);
 		else
-			return ImGui::CollapsingHeader(Descriptor->DisplayName.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+			return EditorWidgets::CollapsingHeader(Descriptor->DisplayName.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
 	}();
 	if constexpr (Removable)
 	{
@@ -1064,7 +1184,7 @@ void RenderMeshMaterials(auto &State, EditorSession &Session, action::EditorActi
 {
 	world::Scene &Scene = Session.GetDocument().GetScene();
 	const auto PrimaryHandle = Scene.GetComponent<components::CObjectMeshComponent>(Object);
-	if (!PrimaryHandle.IsValid() || !ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen))
+	if (!PrimaryHandle.IsValid() || !EditorWidgets::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen))
 		return;
 
 	resource::AssetHandle<resource::ModelAsset> Model;
@@ -1137,7 +1257,7 @@ void RenderMeshMaterials(auto &State, EditorSession &Session, action::EditorActi
 			ImGui::TextUnformatted(Slot.Name.c_str());
 			ImGui::SameLine(std::max(120.0f, ImGui::GetContentRegionAvail().x * 0.38f));
 			ImGui::SetNextItemWidth(-1.0f);
-			ImGui::Button(MaterialName.c_str(), ImVec2(-1.0f, 0.0f));
+			(void)EditorWidgets::Button(MaterialName.c_str(), ImVec2(-1.0f, 0.0f), EditorControlRole::Quiet);
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("Drop a Material or Material Instance. Double-click to edit. Right-click to clear the override.");
 			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && Effective)
@@ -1228,10 +1348,7 @@ void RenderMeshMaterials(auto &State, EditorSession &Session, action::EditorActi
 			}
 			const bool MaterialPersistencePending = Session.GetPrivateMaterialAssignmentService().HasPendingWork();
 			if (MaterialPersistencePending && !MatchingColorEdit)
-			{
-				ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0f);
 				ImGui::BeginDisabled();
-			}
 			ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, MixedBaseColor);
 			const bool BaseColorChanged = ImGui::ColorEdit4("Base Color", &BaseColor.x, ImGuiColorEditFlags_Float);
 			const bool BaseColorEditFinished = ImGui::IsItemDeactivatedAfterEdit();
@@ -1240,7 +1357,6 @@ void RenderMeshMaterials(auto &State, EditorSession &Session, action::EditorActi
 			if (MaterialPersistencePending && !MatchingColorEdit)
 			{
 				ImGui::EndDisabled();
-				ImGui::PopStyleVar();
 				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 					ImGui::SetTooltip("Waiting for the previous private material transaction to finish.");
 			}
@@ -1318,7 +1434,7 @@ void RenderMeshMaterials(auto &State, EditorSession &Session, action::EditorActi
 		{
 			using ValueType = std::remove_cvref_t<decltype(Typed)>;
 			if constexpr (std::same_as<ValueType, bool>)
-				return ImGui::Checkbox("##Value", &Typed);
+				return EditorWidgets::Checkbox("##Value", &Typed);
 			else if constexpr (std::same_as<ValueType, int32>)
 				return ImGui::InputScalar("##Value", ImGuiDataType_S32, &Typed);
 			else if constexpr (std::same_as<ValueType, uint32>)
@@ -1356,7 +1472,7 @@ void RenderBehaviorInstances(auto &State, EditorSession &Session, action::Editor
 	const auto Handle = Scene.GetComponent<components::CObjectBehaviorComponent>(Object);
 	if (!Handle.IsValid())
 		return;
-	if (ImGui::Button("Add Behavior", ImVec2(-1.0f, 0.0f)))
+	if (EditorWidgets::Button("Add Behavior", ImVec2(-1.0f, 0.0f), EditorControlRole::Primary))
 		ImGui::OpenPopup("Add Registered Behavior");
 	if (ImGui::BeginPopup("Add Registered Behavior"))
 	{
@@ -1391,7 +1507,7 @@ void RenderBehaviorInstances(auto &State, EditorSession &Session, action::Editor
 	{
 		ImGui::PushID(Behavior.InstanceID.ToString().c_str());
 		bool Attached = true;
-		const bool Expanded = ImGui::CollapsingHeader(Behavior.TypeName.c_str(), &Attached, ImGuiTreeNodeFlags_DefaultOpen);
+		const bool Expanded = EditorWidgets::CollapsingHeader(Behavior.TypeName.c_str(), &Attached, ImGuiTreeNodeFlags_DefaultOpen);
 		if (!Attached)
 		{
 			try
@@ -1408,7 +1524,7 @@ void RenderBehaviorInstances(auto &State, EditorSession &Session, action::Editor
 		bool Changed = false;
 		if (Expanded)
 		{
-			Changed |= ImGui::Checkbox("Enabled", &Behavior.Enabled);
+			Changed |= EditorWidgets::Checkbox("Enabled", &Behavior.Enabled);
 			ImGui::SameLine();
 			ImGui::TextDisabled("Schema %u", Behavior.SchemaVersion);
 			std::vector<std::pair<const string *, components::BehaviorPropertyValue *>> &Properties = State.BehaviorPropertiesScratch;
@@ -1458,7 +1574,7 @@ void RenderBehaviorInstances(auto &State, EditorSession &Session, action::Editor
 void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorActionContext &Context)
 {
 	workspace::EditorPanelState &Panel = Session.GetWorkspace().GetPanel(workspace::EditorPanelID::Properties);
-	if (!Panel.Open || Panel.Minimized)
+	if (!Panel.Open)
 		return;
 	bool Open = Panel.Open;
 	if (!ImGui::Begin("Properties", Panel.Closable ? &Open : nullptr))
@@ -1468,13 +1584,8 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 			Session.GetWorkspace().SetOpen(Panel.ID, Open);
 		return;
 	}
-	if (RenderPanelMinimizeControl(Session, Panel))
-	{
-		ImGui::End();
-		return;
-	}
 	ImGui::SetNextItemWidth(-1.0f);
-	(void)InputText("##PropertyFilter", State.PropertyFilter);
+	(void)SearchInputText("##PropertyFilter", State.PropertyFilter, State.Icons);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Filter properties");
 	ImGui::Separator();
@@ -1497,8 +1608,8 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 			ImGui::TextDisabled("%s", Record.ClassName.c_str());
 			if (Activation.State != instance::InstanceActivationState::Active)
 			{
-				const ImVec4 Color = Activation.State == instance::InstanceActivationState::Unavailable ? ImVec4(0.58F, 0.6F, 0.67F, 1.0F)
-																										: ImVec4(0.95F, 0.67F, 0.25F, 1.0F);
+				const ImVec4 Color = Activation.State == instance::InstanceActivationState::Unavailable ? EditorTheme::GetTokens().TextMuted
+																										: EditorTheme::GetTokens().Warning;
 				ImGui::TextColored(Color, "%s", Activation.Diagnostic.c_str());
 			}
 			if (Record.Protected && Record.Properties.empty())
@@ -1514,7 +1625,7 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 					{
 						const bool Selected = Behavior.Name == CurrentBehavior &&
 											  Behavior.StableTypeID == std::get<util::UUID>(Record.Properties.at("StableTypeID"));
-						if (!ImGui::Selectable((Behavior.ModuleName + " / " + Behavior.Name).c_str(), Selected))
+						if (!EditorWidgets::Selectable((Behavior.ModuleName + " / " + Behavior.Name).c_str(), Selected))
 							continue;
 						commands::CommandHistory &History = Session.GetDocument().GetHistory();
 						try
@@ -1626,7 +1737,7 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 							{
 								if (ReadOnly)
 									ImGui::TextUnformatted(Value ? "True" : "False");
-								else if (ImGui::Checkbox("##Value", &Value))
+								else if (EditorWidgets::Checkbox("##Value", &Value))
 									Commit(Value);
 							}
 							else if constexpr (std::same_as<ValueType, int32>)
@@ -1673,7 +1784,7 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 									{
 										for (const string &Option : Schema->Choices)
 										{
-											if (ImGui::Selectable(Option.c_str(), Option == Current))
+											if (EditorWidgets::Selectable(Option.c_str(), Option == Current))
 												Commit(static_cast<uint64>(std::stoull(Option)));
 										}
 										ImGui::EndCombo();
@@ -1721,7 +1832,7 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 									{
 										for (const string &Option : Schema->Choices)
 										{
-											if (ImGui::Selectable(Option.c_str(), Value == Option))
+											if (EditorWidgets::Selectable(Option.c_str(), Value == Option))
 												Commit(Option);
 										}
 										ImGui::EndCombo();
@@ -1765,14 +1876,14 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 								const string Label = Value.ID.empty() ? "None" : Value.ProjectRelativePath;
 								if (ImGui::BeginCombo("##Value", Label.empty() ? "None" : Label.c_str()))
 								{
-									if (ImGui::Selectable("None", Value.ID.empty()))
+									if (EditorWidgets::Selectable("None", Value.ID.empty()))
 										Commit(instance::InstanceAssetReference{.Type = Value.Type});
 									for (const asset::ContentEntry &Entry : Session.GetAssetRegistry().GetSnapshot().Entries)
 									{
 										if (Entry.Kind != asset::ContentEntryKind::Asset || !Entry.AssetType.has_value() ||
 											*Entry.AssetType != Value.Type)
 											continue;
-										if (ImGui::Selectable(Entry.DisplayName.c_str(), Entry.ID == Value.ID))
+										if (EditorWidgets::Selectable(Entry.DisplayName.c_str(), Entry.ID == Value.ID))
 											Commit(instance::InstanceAssetReference{.ID = Entry.ID,
 																					.Type = *Entry.AssetType,
 																					.ProjectRelativePath =
@@ -1794,7 +1905,7 @@ void RenderPropertiesPanel(auto &State, EditorSession &Session, action::EditorAc
 		{
 			const instance::InstanceRecord TypedRecord =
 				TypedInstance ? Session.GetDocument().GetInstances().Get(SelectedID) : instance::InstanceRecord{};
-			if (!TypedInstance && ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f)))
+			if (!TypedInstance && EditorWidgets::Button("Add Component", ImVec2(-1.0f, 0.0f), EditorControlRole::Primary))
 				ImGui::OpenPopup("Add Object Component");
 			if (!TypedInstance && ImGui::BeginPopup("Add Object Component"))
 			{
@@ -1877,7 +1988,8 @@ void CreateMeshObjectFromContent(EditorSession &Session, action::EditorActionCon
 								"Created mesh object from '" + RelativePath.generic_string() + "'");
 }
 
-void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActionRegistry &Actions, action::EditorActionContext &Context)
+void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActionRegistry &Actions, action::EditorActionContext &Context,
+						 const std::span<const EditorViewportPresentation> Viewports)
 {
 	const auto RenderRegisteredMenuItem = [&Actions, &Context](const action::EditorActionID ID, const char *Shortcut)
 	{
@@ -1894,7 +2006,7 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 		return Activated;
 	};
 	workspace::EditorPanelState &Panel = Session.GetWorkspace().GetPanel(workspace::EditorPanelID::Explorer);
-	if (!Panel.Open || Panel.Minimized)
+	if (!Panel.Open)
 		return;
 	bool Open = Panel.Open;
 	if (!ImGui::Begin("Explorer", Panel.Closable ? &Open : nullptr))
@@ -1904,15 +2016,10 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			Session.GetWorkspace().SetOpen(Panel.ID, Open);
 		return;
 	}
-	if (RenderPanelMinimizeControl(Session, Panel))
-	{
-		ImGui::End();
-		return;
-	}
 	string &Filter = State.HierarchyFilterScratch;
 	Filter.assign(Session.GetHierarchyFilter());
 	ImGui::SetNextItemWidth(-1.0f);
-	if (InputText("##ExplorerSearch", Filter))
+	if (SearchInputText("##ExplorerSearch", Filter, State.Icons))
 		Session.SetHierarchyFilter(std::move(Filter));
 	ImGui::Separator();
 	const auto ExecuteCommand = [&](commands::EditorCommandPtr Command)
@@ -1939,7 +2046,7 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			ImGui::OpenPopup("Insert Instance");
 			State.ExplorerInsertRequested = false;
 		}
-		ImGui::SetNextWindowSize(ImVec2(420.0F, 520.0F), ImGuiCond_Appearing);
+		ImGui::SetNextWindowSize(EditorTheme::ScaleLogical(ImVec2(420.0F, 520.0F)), ImGuiCond_Appearing);
 		if (!ImGui::BeginPopup("Insert Instance"))
 			return;
 		ImGui::TextUnformatted("Insert Instance");
@@ -1947,7 +2054,7 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 		ImGui::SetNextItemWidth(-1.0F);
 		if (ImGui::IsWindowAppearing())
 			ImGui::SetKeyboardFocusHere();
-		(void)InputText("##InstanceSearch", State.ExplorerInsertFilter);
+		(void)SearchInputText("##InstanceSearch", State.ExplorerInsertFilter, State.Icons);
 		ImGui::Separator();
 		const string Query = NormalizeFilterText(State.ExplorerInsertFilter);
 		const std::vector<instance::InstanceTypeDescriptor> Types = Session.GetDocument().GetInstanceTypes().GetCreatableTypes();
@@ -1977,7 +2084,8 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			}
 			ImGui::PushID(Type.ClassID.ToString().c_str());
 			const ImVec2 ItemStart = ImGui::GetCursorScreenPos();
-			const bool Selected = ImGui::Selectable("##InstanceType", false, ImGuiSelectableFlags_None, ImVec2(0.0F, 38.0F));
+			const bool Selected = EditorWidgets::Selectable("##InstanceType", false, ImGuiSelectableFlags_None,
+															ImVec2(0.0F, EditorTheme::GetTokens().TreeTypeRowHeight));
 			ImDrawList *DrawList = ImGui::GetWindowDrawList();
 			const ImU32 IconColor =
 				ImGui::ColorConvertFloat4ToU32(ImVec4(Type.IconColor.x, Type.IconColor.y, Type.IconColor.z, Type.IconColor.w));
@@ -1988,8 +2096,17 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			DrawList->AddText(ImVec2(ItemStart.x + 30.0F, ItemStart.y + 20.0F), ImGui::GetColorU32(ImGuiCol_TextDisabled), Detail.c_str());
 			if (Selected)
 			{
-				ExecuteCommand(
-					std::make_unique<commands::CreateInstanceCommand>(Session.GetDocument(), Type.ClassID, State.ExplorerInsertParent));
+				instance::InstancePropertyMap InitialProperties;
+				const auto ActiveViewport = std::ranges::find(Viewports, State.ActiveViewport, &EditorViewportPresentation::View);
+				if (ActiveViewport != Viewports.end())
+				{
+					if (Type.ClassID == instance::class_ids::PointLight || Type.ClassID == instance::class_ids::SpotLight)
+						InitialProperties.emplace("Position", ActiveViewport->PlacementPosition);
+					if (Type.ClassID == instance::class_ids::DirectionalLight || Type.ClassID == instance::class_ids::SpotLight)
+						InitialProperties.emplace("Rotation", ActiveViewport->PlacementRotation);
+				}
+				ExecuteCommand(std::make_unique<commands::CreateInstanceCommand>(Session.GetDocument(), Type.ClassID,
+																				 State.ExplorerInsertParent, std::move(InitialProperties)));
 				State.ExpandedObjects[State.ExplorerInsertParent] = true;
 				ImGui::CloseCurrentPopup();
 			}
@@ -2064,19 +2181,30 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 		bool Expanded = ExpandedState->second;
 		const string RowID = Row.PersistentID.ToString();
 		ImGui::PushID(RowID.c_str());
-		const float32 RowHeight = 28.0F;
+		const float32 RowHeight = EditorTheme::GetTokens().TreeRowHeight;
+		const float32 ItemSpacingX = ImGui::GetStyle().ItemSpacing.x;
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ItemSpacingX, 0.0F));
 		const bool RowPressed = ImGui::InvisibleButton("##InstanceRow", ImVec2(-1.0F, RowHeight));
+		ImGui::PopStyleVar();
 		const ImVec2 RowMinimum = ImGui::GetItemRectMin();
 		const ImVec2 RowMaximum = ImGui::GetItemRectMax();
 		const bool RowHovered = ImGui::IsItemHovered();
 		const bool RowSelected = Session.GetDocument().GetSelection().Contains(Row.PersistentID);
 		ImDrawList *const DrawList = ImGui::GetWindowDrawList();
-		if (RowSelected || RowHovered)
+		const EditorInteractionState RowState = EditorStyleSystem::ResolveState(RowSelected, RowHovered, RowPressed, true);
+		const EditorControlVisual RowVisual = EditorStyleSystem::Resolve(EditorControlRole::Row, RowState);
+		if (RowVisual.Fill.w > 0.0F)
 		{
-			const ImU32 Background = ImGui::GetColorU32(RowSelected ? ImGuiCol_Header : ImGuiCol_HeaderHovered);
-			DrawList->AddRectFilled(RowMinimum, RowMaximum, Background, 6.0F);
+			DrawList->AddRectFilled(RowMinimum, RowMaximum, ImGui::GetColorU32(RowVisual.Fill), EditorTheme::GetTokens().TreeRowRounding);
 		}
-		const float32 Indent = 18.0F;
+		if (RowVisual.DrawAccent)
+		{
+			const EditorThemeTokens &Tokens = EditorTheme::GetTokens();
+			DrawList->AddRectFilled(ImVec2(RowMinimum.x + 2.0F, RowMinimum.y + 5.0F),
+									ImVec2(RowMinimum.x + 2.0F + Tokens.SignatureRailWidth, RowMaximum.y - 5.0F),
+									ImGui::GetColorU32(RowVisual.Accent), Tokens.SignatureRailWidth * 0.5F);
+		}
+		const float32 Indent = EditorTheme::GetTokens().HierarchyIndent;
 		for (uint32 Depth = 0; Depth < Row.Depth; ++Depth)
 		{
 			const float32 GuideX = RowMinimum.x + 8.0F + static_cast<float32>(Depth) * Indent;
@@ -2098,12 +2226,15 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 											ImVec2(Center.x + 3.0F, Center.y), ArrowColor);
 		}
 		const std::shared_ptr<const instance::InstanceTypeDescriptor> RowType = Session.GetDocument().GetInstanceTypes().Find(Row.ClassID);
-		const glm::vec4 RowIconColor = RowType == nullptr ? glm::vec4(0.65F, 0.68F, 0.75F, 1.0F) : RowType->IconColor;
+		const glm::vec4 RowIconColor = RowType == nullptr
+										   ? glm::vec4(EditorTheme::GetTokens().TextMuted.x, EditorTheme::GetTokens().TextMuted.y,
+													   EditorTheme::GetTokens().TextMuted.z, 1.0F)
+										   : RowType->IconColor;
 		const ImU32 RowIconPacked = ImGui::ColorConvertFloat4ToU32(ImVec4(RowIconColor.x, RowIconColor.y, RowIconColor.z, RowIconColor.w));
 		const string_view RowIcon = State.Icons.Find(Row.ClassName);
-		constexpr float32 IconCellLeftMargin = 2.0F;
-		constexpr float32 IconCellWidth = 26.0F;
-		constexpr float32 IconLabelGap = 7.0F;
+		const float32 IconCellLeftMargin = EditorTheme::GetTokens().OpticalIconMargin;
+		const float32 IconCellWidth = EditorTheme::GetTokens().IconCellWidth;
+		const float32 IconLabelGap = EditorTheme::GetTokens().IconLabelGap;
 		const float32 IconCellMinimumX = ArrowMaximum.x + IconCellLeftMargin;
 		if (!RowIcon.empty())
 		{
@@ -2121,8 +2252,9 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 			ImGui::GetColorU32(ImGuiCol_Text), Row.Name.c_str());
 		if (Row.Activation.State != instance::InstanceActivationState::Active)
 		{
-			const ImU32 WarningColor = Row.Activation.State == instance::InstanceActivationState::Unavailable ? IM_COL32(145, 150, 165, 255)
-																											  : IM_COL32(245, 180, 65, 255);
+			const ImU32 WarningColor = ImGui::ColorConvertFloat4ToU32(Row.Activation.State == instance::InstanceActivationState::Unavailable
+																		  ? EditorTheme::GetTokens().TextMuted
+																		  : EditorTheme::GetTokens().Warning);
 			DrawList->AddCircleFilled(ImVec2(RowMaximum.x - 30.0F, (RowMinimum.y + RowMaximum.y) * 0.5F), 3.5F, WarningColor);
 			if (RowHovered && !Row.Activation.Diagnostic.empty())
 				ImGui::SetTooltip("%s", Row.Activation.Diagnostic.c_str());
@@ -2412,12 +2544,13 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 	}
 	if (ImGui::BeginPopupModal("Rename Scene Object", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 	{
-		ImGui::SetNextItemWidth(360.0f);
+		ImGui::SetNextItemWidth(EditorTheme::ScaleLogical(360.0F));
 		(void)InputText("Name", State.ExplorerRenameValue);
 		const bool CanSubmit = !State.ExplorerRenameValue.empty();
 		if (!CanSubmit)
 			ImGui::BeginDisabled();
-		if (ImGui::Button("Rename", ImVec2(110.0f, 0.0f)))
+		if (EditorWidgets::Button("Rename", ImVec2(EditorTheme::ScaleLogical(110.0F), EditorTheme::GetTokens().DialogActionHeight),
+								  EditorControlRole::Primary))
 		{
 			ExecuteCommand(std::make_unique<commands::RenameInstanceCommand>(Session.GetDocument(), State.ExplorerRenameObject,
 																			 State.ExplorerRenameValue));
@@ -2426,7 +2559,8 @@ void RenderExplorerPanel(auto &State, EditorSession &Session, action::EditorActi
 		if (!CanSubmit)
 			ImGui::EndDisabled();
 		ImGui::SameLine();
-		if (ImGui::Button("Cancel", ImVec2(90.0f, 0.0f)))
+		if (EditorWidgets::Button("Cancel", ImVec2(EditorTheme::ScaleLogical(90.0F), EditorTheme::GetTokens().DialogActionHeight),
+								  EditorControlRole::Quiet))
 			ImGui::CloseCurrentPopup();
 		ImGui::EndPopup();
 	}
@@ -2440,7 +2574,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 {
 	Session.TickAssetThumbnails(Context.Scheduler);
 	workspace::EditorPanelState &Panel = Session.GetWorkspace().GetPanel(workspace::EditorPanelID::AssetBrowser);
-	if (!Panel.Open || Panel.Minimized)
+	if (!Panel.Open)
 		return;
 	bool Open = Panel.Open;
 	if (!ImGui::Begin("Assets", Panel.Closable ? &Open : nullptr))
@@ -2448,11 +2582,6 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 		ImGui::End();
 		if (Open != Panel.Open)
 			Session.GetWorkspace().SetOpen(Panel.ID, Open);
-		return;
-	}
-	if (RenderPanelMinimizeControl(Session, Panel))
-	{
-		ImGui::End();
 		return;
 	}
 	asset::AssetContentService &ContentService = Session.GetAssetContentService();
@@ -2469,7 +2598,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 		}
 	};
 
-	if (ImGui::Button(State.TrashView ? "Content" : "Trash"))
+	if (EditorWidgets::Button(State.TrashView ? "Content" : "Trash", ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar, State.TrashView))
 	{
 		State.TrashView = !State.TrashView;
 		State.TrashLoaded = false;
@@ -2478,7 +2607,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 	ImGui::SameLine();
 	if (!State.TrashView)
 	{
-		if (ImGui::Button("Game"))
+		if (EditorWidgets::Button("Game", ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar))
 			State.ContentDirectory.clear();
 		std::filesystem::path Breadcrumb;
 		for (const std::filesystem::path &Part : State.ContentDirectory)
@@ -2490,11 +2619,11 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 			State.UITextScratch = Part.string();
 			State.UITextScratch += "##Breadcrumb";
 			State.UITextScratch += Breadcrumb.generic_string();
-			if (ImGui::SmallButton(State.UITextScratch.c_str()))
+			if (EditorWidgets::SmallButton(State.UITextScratch.c_str(), EditorControlRole::Toolbar))
 				State.ContentDirectory = Breadcrumb;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("New"))
+		if (EditorWidgets::Button("New", ImVec2(0.0F, 0.0F), EditorControlRole::Primary))
 			ImGui::OpenPopup("Create Content");
 		if (ImGui::BeginPopup("Create Content"))
 		{
@@ -2534,20 +2663,21 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 			ImGui::EndPopup();
 		}
 		ImGui::SameLine();
-		if (ImGui::Button(State.FavoritesOnly ? "All Assets" : "Favorites"))
+		if (EditorWidgets::Button(State.FavoritesOnly ? "All Assets" : "Favorites", ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar,
+								  State.FavoritesOnly))
 			State.FavoritesOnly = !State.FavoritesOnly;
 		ImGui::SameLine();
 		constexpr std::array ContentTypeNames{"All Types",		"Texture 2D",	   "Material",		   "Material Instance",
 											  "Model",			"Static Mesh",	   "Skeletal Mesh",	   "Skeleton",
 											  "Animation Clip", "Animation Graph", "Retarget Profile", "Shader Source"};
 		const int32 TypeNameIndex = State.ContentTypeFilter < 0 ? 0 : State.ContentTypeFilter + 1;
-		ImGui::SetNextItemWidth(125.0f);
+		ImGui::SetNextItemWidth(EditorTheme::ScaleLogical(125.0F));
 		if (ImGui::BeginCombo("##ContentTypeFilter", ContentTypeNames.at(static_cast<usize>(TypeNameIndex))))
 		{
 			for (int32 Index = -1; Index < static_cast<int32>(resource::AssetType::Count); ++Index)
 			{
 				const bool Selected = State.ContentTypeFilter == Index;
-				if (ImGui::Selectable(ContentTypeNames.at(static_cast<usize>(Index + 1)), Selected))
+				if (EditorWidgets::Selectable(ContentTypeNames.at(static_cast<usize>(Index + 1)), Selected))
 					State.ContentTypeFilter = Index;
 				if (Selected)
 					ImGui::SetItemDefaultFocus();
@@ -2555,10 +2685,12 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 			ImGui::EndCombo();
 		}
 		ImGui::SameLine();
-		ImGui::SetNextItemWidth(std::max(160.0f, ImGui::GetContentRegionAvail().x - 92.0f));
-		(void)InputText("##AssetSearch", State.AssetFilter);
+		ImGui::SetNextItemWidth(
+			std::max(EditorTheme::ScaleLogical(160.0F), ImGui::GetContentRegionAvail().x - EditorTheme::ScaleLogical(92.0F)));
+		(void)SearchInputText("##AssetSearch", State.AssetFilter, State.Icons);
 		ImGui::SameLine();
-		if (ImGui::Button(State.AssetGridView ? "List" : "Grid"))
+		if (EditorWidgets::Button(State.AssetGridView ? "List" : "Grid", ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar,
+								  State.AssetGridView))
 			State.AssetGridView = !State.AssetGridView;
 	}
 	else
@@ -2566,7 +2698,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 		ImGui::SameLine();
 		ImGui::TextUnformatted("Project Trash");
 		ImGui::SameLine();
-		if (ImGui::Button("Refresh"))
+		if (EditorWidgets::Button("Refresh", ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar))
 			State.TrashLoaded = false;
 	}
 
@@ -2575,7 +2707,8 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 		const asset::AssetImportProgress Progress = Import.GetProgress();
 		ImGui::ProgressBar(Progress.GetFraction(), ImVec2(-90.0f, 0.0f));
 		ImGui::SameLine();
-		if (Actions.CanExecute(action::IDs::CancelAssetImport, Context) && ImGui::Button("Cancel"))
+		if (Actions.CanExecute(action::IDs::CancelAssetImport, Context) &&
+			EditorWidgets::Button("Cancel", ImVec2(0.0F, 0.0F), EditorControlRole::Danger))
 			(void)Actions.Invoke(action::IDs::CancelAssetImport, Context);
 	}
 	else if (Import.GetResult().has_value())
@@ -2587,7 +2720,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 		ImGui::SameLine();
 		ImGui::TextDisabled("Content operation in progress...");
 		ImGui::SameLine();
-		if (ImGui::SmallButton("Cancel##ContentOperation"))
+		if (EditorWidgets::SmallButton("Cancel##ContentOperation", EditorControlRole::Danger))
 			ContentService.Cancel();
 	}
 	else if (ContentService.GetResult().has_value())
@@ -2634,7 +2767,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 				State.UITextScratch = Entry.OriginalPath.generic_string();
 				ImGui::TextDisabled("%s", State.UITextScratch.c_str());
 				ImGui::TableSetColumnIndex(2);
-				if (!ContentService.IsBusy() && ImGui::SmallButton("Restore"))
+				if (!ContentService.IsBusy() && EditorWidgets::SmallButton("Restore", EditorControlRole::Primary))
 				{
 					QueueOperation({.Operation = asset::AssetContentOperation::Restore, .TrashEntryID = Entry.ID});
 					State.TrashLoaded = false;
@@ -2664,7 +2797,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 		PruneThumbnailTextures(State, LiveAssetIDs, LiveAssetIDGeneration);
 		if (!Snapshot.Diagnostics.empty())
 		{
-			ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f), "%zu registry diagnostic%s", Snapshot.Diagnostics.size(),
+			ImGui::TextColored(EditorTheme::GetTokens().Warning, "%zu registry diagnostic%s", Snapshot.Diagnostics.size(),
 							   Snapshot.Diagnostics.size() == 1 ? "" : "s");
 			if (ImGui::IsItemHovered())
 			{
@@ -2682,7 +2815,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 			ImGui::TableSetColumnIndex(0);
 			ImGui::BeginChild("ContentFolders");
 			const bool RootSelected = State.ContentDirectory.empty();
-			if (ImGui::Selectable("/Game", RootSelected))
+			if (EditorWidgets::Selectable("/Game", RootSelected))
 				State.ContentDirectory.clear();
 			for (const asset::ContentEntry &Entry : Snapshot.Entries)
 			{
@@ -2691,7 +2824,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 				const usize Depth = static_cast<usize>(std::distance(Entry.RelativePath.begin(), Entry.RelativePath.end()));
 				ImGui::Indent(static_cast<float32>(Depth) * 12.0f);
 				const bool Selected = Entry.RelativePath == State.ContentDirectory;
-				if (ImGui::Selectable(Entry.DisplayName.c_str(), Selected))
+				if (EditorWidgets::Selectable(Entry.DisplayName.c_str(), Selected))
 					State.ContentDirectory = Entry.RelativePath;
 				ImGui::Unindent(static_cast<float32>(Depth) * 12.0f);
 				if (ImGui::BeginDragDropTarget())
@@ -2885,9 +3018,10 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 						ImGui::BeginGroup();
 						const float32 HorizontalInset = std::max(0.0f, (CardWidth - 8.0f - ThumbnailSize.x) * 0.5f);
 						ImGui::SetCursorPosX(ImGui::GetCursorPosX() + HorizontalInset);
-						ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, Selected ? 2.0f : 1.0f);
-						ImGui::PushStyleColor(ImGuiCol_Border, Selected ? ImGui::GetStyleColorVec4(ImGuiCol_SliderGrabActive)
-																		: ImGui::GetStyleColorVec4(ImGuiCol_Border));
+						ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,
+											Selected ? EditorTheme::GetTokens().FocusWidth : EditorTheme::GetTokens().BorderWidth);
+						ImGui::PushStyleColor(ImGuiCol_Border,
+											  Selected ? EditorTheme::GetTokens().FocusRing : EditorTheme::GetTokens().BorderSubtle);
 						string &ThumbnailDiagnostic = State.ThumbnailDiagnosticScratch;
 						ThumbnailDiagnostic.clear();
 						ImTextureData *Thumbnail = nullptr;
@@ -2910,7 +3044,10 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 							const char *Placeholder = Entry->Kind == asset::ContentEntryKind::Directory
 														  ? "Folder"
 														  : (ThumbnailDiagnostic.empty() ? "Loading..." : "Preview\nunavailable");
-							(void)ImGui::Button(Placeholder, ThumbnailSize);
+							(void)EditorWidgets::Button(Placeholder, EditorButtonOptions{.Size = ThumbnailSize,
+																						 .Role = EditorControlRole::Quiet,
+																						 .AllowLabelClipping = true,
+																						 .Tooltip = Placeholder});
 						}
 						ImGui::PopStyleColor();
 						ImGui::PopStyleVar();
@@ -2942,8 +3079,8 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 					ImGui::TableNextRow();
 					ImGui::TableSetColumnIndex(0);
 					const bool Selected = State.SelectedContentPath == Entry->RelativePath;
-					ImGui::Selectable(Entry->DisplayName.c_str(), Selected,
-									  ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
+					(void)EditorWidgets::Selectable(Entry->DisplayName.c_str(), Selected,
+													ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
 					RenderEntryInteraction(*Entry);
 					ImGui::TableSetColumnIndex(1);
 					ImGui::TextDisabled("%s", Entry->Kind == asset::ContentEntryKind::Directory ? "Folder" : Entry->Extension.c_str());
@@ -2980,14 +3117,17 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 					ImGui::TextDisabled("Parent: %s", State.ContentParentAssetID.c_str());
 				if (State.ActiveContentDialog != ContentDialog::Trash)
 				{
-					ImGui::SetNextItemWidth(420.0f);
+					ImGui::SetNextItemWidth(EditorTheme::ScaleLogical(420.0F));
 					(void)InputText("##ContentDestination", State.ContentDialogValue);
 				}
 				const bool CanSubmit =
 					!ContentService.IsBusy() && (State.ActiveContentDialog == ContentDialog::Trash || !State.ContentDialogValue.empty());
 				if (!CanSubmit)
 					ImGui::BeginDisabled();
-				if (ImGui::Button(State.ActiveContentDialog == ContentDialog::Trash ? "Move to Trash" : "Apply", ImVec2(120.0f, 0.0f)))
+				if (EditorWidgets::Button(State.ActiveContentDialog == ContentDialog::Trash ? "Move to Trash" : "Apply",
+										  ImVec2(EditorTheme::ScaleLogical(120.0F), EditorTheme::GetTokens().DialogActionHeight),
+										  State.ActiveContentDialog == ContentDialog::Trash ? EditorControlRole::Danger
+																							: EditorControlRole::Primary))
 				{
 					asset::AssetContentRequest Request{.Source = State.SelectedContentPath};
 					switch (State.ActiveContentDialog)
@@ -3034,7 +3174,8 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 				if (!CanSubmit)
 					ImGui::EndDisabled();
 				ImGui::SameLine();
-				if (ImGui::Button("Cancel", ImVec2(90.0f, 0.0f)))
+				if (EditorWidgets::Button("Cancel", ImVec2(EditorTheme::ScaleLogical(90.0F), EditorTheme::GetTokens().DialogActionHeight),
+										  EditorControlRole::Quiet))
 				{
 					State.ActiveContentDialog = ContentDialog::None;
 					ImGui::CloseCurrentPopup();
@@ -3074,7 +3215,8 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 				}
 			}
 			ImGui::Separator();
-			if (ImGui::Button("Close", ImVec2(90.0f, 0.0f)))
+			if (EditorWidgets::Button("Close", ImVec2(EditorTheme::ScaleLogical(90.0F), EditorTheme::GetTokens().DialogActionHeight),
+									  EditorControlRole::Quiet))
 				ImGui::CloseCurrentPopup();
 			ImGui::EndPopup();
 		}
@@ -3087,7 +3229,7 @@ void RenderAssetBrowser(auto &State, EditorSession &Session, action::EditorActio
 void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorActionContext &Context)
 {
 	workspace::EditorPanelState &Panel = Session.GetWorkspace().GetPanel(workspace::EditorPanelID::MaterialEditor);
-	if (!Panel.Open || Panel.Minimized)
+	if (!Panel.Open)
 		return;
 	bool Open = Panel.Open;
 	if (!ImGui::Begin("Material Editor", Panel.Closable ? &Open : nullptr))
@@ -3095,11 +3237,6 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 		ImGui::End();
 		if (Open != Panel.Open)
 			Session.GetWorkspace().SetOpen(Panel.ID, Open);
-		return;
-	}
-	if (RenderPanelMinimizeControl(Session, Panel))
-	{
-		ImGui::End();
 		return;
 	}
 	if (!State.MaterialSession.has_value())
@@ -3140,10 +3277,10 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 
 	if (!State.MaterialSession->IsDirty())
 		ImGui::BeginDisabled();
-	if (ImGui::Button("Save"))
+	if (EditorWidgets::Button("Save", ImVec2(0.0F, 0.0F), EditorControlRole::Primary))
 		Save();
 	ImGui::SameLine();
-	if (ImGui::Button("Revert"))
+	if (EditorWidgets::Button("Revert", ImVec2(0.0F, 0.0F), EditorControlRole::Quiet))
 		Revert();
 	if (!State.MaterialSession->IsDirty())
 		ImGui::EndDisabled();
@@ -3155,7 +3292,7 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 		!RegistryEntry->ReverseDependencies.empty())
 	{
 		ImGui::SameLine();
-		ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f), "Shared by %zu dependent assets", RegistryEntry->ReverseDependencies.size());
+		ImGui::TextColored(EditorTheme::GetTokens().Warning, "Shared by %zu dependent assets", RegistryEntry->ReverseDependencies.size());
 	}
 	ImGui::Separator();
 
@@ -3170,7 +3307,7 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 		for (usize Index = 0; Index < ShadingNames.size(); ++Index)
 		{
 			const bool Selected = Index == ShadingIndex;
-			if (ImGui::Selectable(ShadingNames[Index], Selected))
+			if (EditorWidgets::Selectable(ShadingNames[Index], Selected))
 			{
 				Document.Pipeline.ShadingModel = static_cast<resource::MaterialShadingModel>(Index);
 				Changed = PipelineChanged = true;
@@ -3186,7 +3323,7 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 		for (usize Index = 0; Index < BlendNames.size(); ++Index)
 		{
 			const bool Selected = Index == BlendIndex;
-			if (ImGui::Selectable(BlendNames[Index], Selected))
+			if (EditorWidgets::Selectable(BlendNames[Index], Selected))
 			{
 				Document.Pipeline.BlendMode = static_cast<resource::MaterialBlendMode>(Index);
 				Changed = PipelineChanged = true;
@@ -3196,11 +3333,11 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 		}
 		ImGui::EndCombo();
 	}
-	PipelineChanged |= ImGui::Checkbox("Two Sided", &Document.Pipeline.TwoSided);
+	PipelineChanged |= EditorWidgets::Checkbox("Two Sided", &Document.Pipeline.TwoSided);
 	ImGui::SameLine();
-	PipelineChanged |= ImGui::Checkbox("Cast Shadows", &Document.Pipeline.CastsShadows);
+	PipelineChanged |= EditorWidgets::Checkbox("Cast Shadows", &Document.Pipeline.CastsShadows);
 	ImGui::SameLine();
-	PipelineChanged |= ImGui::Checkbox("Receive Shadows", &Document.Pipeline.ReceivesShadows);
+	PipelineChanged |= EditorWidgets::Checkbox("Receive Shadows", &Document.Pipeline.ReceivesShadows);
 	Changed |= PipelineChanged;
 	if (PipelineChanged && Document.Type == material::MaterialDocumentType::MaterialInstance)
 		Document.PipelineOverride = Document.Pipeline;
@@ -3211,7 +3348,7 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 		Changed |= InputText("Parent Asset ID", Document.Parent->ID);
 		const bool InstanceParent = Document.Parent->Type == resource::AssetType::MaterialInstance;
 		bool ParentIsInstance = InstanceParent;
-		if (ImGui::Checkbox("Parent is Material Instance", &ParentIsInstance))
+		if (EditorWidgets::Checkbox("Parent is Material Instance", &ParentIsInstance))
 		{
 			Document.Parent->Type = ParentIsInstance ? resource::AssetType::MaterialInstance : resource::AssetType::Material;
 			Changed = true;
@@ -3275,7 +3412,7 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 			{
 				for (usize Option = 0; Option < SemanticNames.size(); ++Option)
 				{
-					if (ImGui::Selectable(SemanticNames[Option], Option == SemanticIndex))
+					if (EditorWidgets::Selectable(SemanticNames[Option], Option == SemanticIndex))
 					{
 						Texture.Semantic = static_cast<resource::MaterialTextureSemantic>(Option);
 						Changed = true;
@@ -3308,7 +3445,7 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 			ImGui::SetNextItemWidth(-1.0f);
 			Changed |= ImGui::InputScalar("##UV", ImGuiDataType_U32, &Texture.TextureCoordinateChannel);
 			ImGui::TableSetColumnIndex(3);
-			if (ImGui::SmallButton("X"))
+			if (EditorWidgets::SmallButton("X", EditorControlRole::Danger))
 				RemovedTexture = Index;
 			ImGui::PopID();
 		}
@@ -3319,7 +3456,7 @@ void RenderMaterialEditor(auto &State, EditorSession &Session, action::EditorAct
 		Document.Textures.erase(Document.Textures.begin() + static_cast<isize>(*RemovedTexture));
 		Changed = true;
 	}
-	if (ImGui::Button("Add Texture Binding"))
+	if (EditorWidgets::Button("Add Texture Binding", ImVec2(0.0F, 0.0F), EditorControlRole::Primary))
 	{
 		for (usize Index = 0; Index < SemanticNames.size(); ++Index)
 		{
@@ -3347,16 +3484,11 @@ void RenderDiagnosticsPanel(auto &State, EditorSession &Session, core::threading
 {
 	const workspace::EditorPanelID ID = OutputPanel ? workspace::EditorPanelID::Output : workspace::EditorPanelID::Diagnostics;
 	workspace::EditorPanelState &Panel = Session.GetWorkspace().GetPanel(ID);
-	if (!Panel.Open || Panel.Minimized)
+	if (!Panel.Open)
 		return;
 	bool Open = Panel.Open;
 	if (ImGui::Begin(Panel.Name.c_str(), Panel.Closable ? &Open : nullptr))
 	{
-		if (RenderPanelMinimizeControl(Session, Panel))
-		{
-			ImGui::End();
-			return;
-		}
 		if (OutputPanel)
 		{
 			const cook::CookPackageService &Cook = Session.GetCookPackageService();
@@ -3385,9 +3517,9 @@ void RenderDiagnosticsPanel(auto &State, EditorSession &Session, core::threading
 		{
 			const ImVec4 Color =
 				Entry.Severity >= core::diagnostics::DiagnosticSeverity::Error
-					? ImVec4(1.0f, 0.35f, 0.32f, 1.0f)
-					: (Entry.Severity == core::diagnostics::DiagnosticSeverity::Warning ? ImVec4(1.0f, 0.72f, 0.25f, 1.0f)
-																						: ImGui::GetStyleColorVec4(ImGuiCol_Text));
+					? EditorTheme::GetTokens().Danger
+					: (Entry.Severity == core::diagnostics::DiagnosticSeverity::Warning ? EditorTheme::GetTokens().Warning
+																						: EditorTheme::GetTokens().TextPrimary);
 			ImGui::TextColored(Color, "[%s] %s", Entry.Category.c_str(), Entry.Message.c_str());
 		}
 		if (Entries.empty())
@@ -3430,7 +3562,8 @@ void RenderRecoveryModal(auto &State, EditorSession &Session, core::diagnostics:
 			ImGui::TextDisabled("%s", Candidate.OriginalPath.string().c_str());
 	}
 	ImGui::Separator();
-	if (ImGui::Button("Recover Newest", ImVec2(140.0f, 0.0f)))
+	if (EditorWidgets::Button("Recover Newest", ImVec2(EditorTheme::ScaleLogical(140.0F), EditorTheme::GetTokens().DialogActionHeight),
+							  EditorControlRole::Primary))
 	{
 		try
 		{
@@ -3444,7 +3577,8 @@ void RenderRecoveryModal(auto &State, EditorSession &Session, core::diagnostics:
 		}
 	}
 	ImGui::SameLine();
-	if (ImGui::Button("Discard All", ImVec2(110.0f, 0.0f)))
+	if (EditorWidgets::Button("Discard All", ImVec2(EditorTheme::ScaleLogical(110.0F), EditorTheme::GetTokens().DialogActionHeight),
+							  EditorControlRole::Danger))
 	{
 		try
 		{
@@ -3459,7 +3593,8 @@ void RenderRecoveryModal(auto &State, EditorSession &Session, core::diagnostics:
 		}
 	}
 	ImGui::SameLine();
-	if (ImGui::Button("Later", ImVec2(80.0f, 0.0f)))
+	if (EditorWidgets::Button("Later", ImVec2(EditorTheme::ScaleLogical(80.0F), EditorTheme::GetTokens().DialogActionHeight),
+							  EditorControlRole::Quiet))
 		ImGui::CloseCurrentPopup();
 	ImGui::EndPopup();
 }
@@ -3478,7 +3613,7 @@ void RenderPreferences(auto &State, EditorSession &Session, core::diagnostics::D
 	{
 		preferences::EditorPreferences &Preferences = *State.PreferencesDraft;
 		ImGui::SeparatorText("Autosave & Recovery");
-		ImGui::Checkbox("Enable autosave", &Preferences.AutosaveEnabled);
+		(void)EditorWidgets::Checkbox("Enable autosave", &Preferences.AutosaveEnabled);
 		const uint32 MinimumInterval = 10;
 		const uint32 MaximumInterval = 3'600;
 		ImGui::SliderScalar("Autosave interval", ImGuiDataType_U32, &Preferences.AutosaveIntervalSeconds, &MinimumInterval,
@@ -3493,8 +3628,8 @@ void RenderPreferences(auto &State, EditorSession &Session, core::diagnostics::D
 		const uint32 MaximumHistory = 65'536;
 		ImGui::SliderScalar("Command history", ImGuiDataType_U32, &Preferences.CommandHistoryCapacity, &MinimumHistory, &MaximumHistory,
 							"%u commands", ImGuiSliderFlags_Logarithmic);
-		ImGui::Checkbox("Show grid by default", &Preferences.ShowGridByDefault);
-		ImGui::Checkbox("Enable transform snapping", &Preferences.TransformSnappingEnabled);
+		(void)EditorWidgets::Checkbox("Show grid by default", &Preferences.ShowGridByDefault);
+		(void)EditorWidgets::Checkbox("Enable transform snapping", &Preferences.TransformSnappingEnabled);
 		ImGui::DragFloat("Translation increment", &Preferences.TranslationSnap, 0.05f, 0.001f, 100'000.0f, "%.3f");
 		ImGui::DragFloat("Rotation increment", &Preferences.RotationSnapDegrees, 0.5f, 0.001f, 360.0f, "%.3f degrees");
 		ImGui::DragFloat("Scale increment", &Preferences.ScaleSnap, 0.01f, 0.001f, 100.0f, "%.3f");
@@ -3504,7 +3639,8 @@ void RenderPreferences(auto &State, EditorSession &Session, core::diagnostics::D
 		ImGui::DragFloat("Look sensitivity", &Preferences.CameraLookSensitivity, 0.005f, 0.001f, 10.0f, "%.3f");
 
 		ImGui::Separator();
-		if (ImGui::Button("Apply", ImVec2(100.0f, 0.0f)))
+		if (EditorWidgets::Button("Apply", ImVec2(EditorTheme::ScaleLogical(100.0F), EditorTheme::GetTokens().DialogActionHeight),
+								  EditorControlRole::Primary))
 		{
 			try
 			{
@@ -3521,7 +3657,8 @@ void RenderPreferences(auto &State, EditorSession &Session, core::diagnostics::D
 			}
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Cancel", ImVec2(100.0f, 0.0f)))
+		if (EditorWidgets::Button("Cancel", ImVec2(EditorTheme::ScaleLogical(100.0F), EditorTheme::GetTokens().DialogActionHeight),
+								  EditorControlRole::Quiet))
 		{
 			Session.SetPreferencesOpen(false);
 			State.PreferencesDraft.reset();
@@ -3628,7 +3765,7 @@ void RenderHelpModals(auto &State, EditorSession &Session, action::EditorActionR
 	if (Session.IsCommandReferenceOpen())
 		ImGui::OpenPopup("Command Reference");
 	bool CommandReferenceOpen = Session.IsCommandReferenceOpen();
-	ImGui::SetNextWindowSize(ImVec2(760.0f, 560.0f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(EditorTheme::ScaleLogical(ImVec2(760.0F, 560.0F)), ImGuiCond_FirstUseEver);
 	if (ImGui::BeginPopupModal("Command Reference", &CommandReferenceOpen, ImGuiWindowFlags_NoCollapse))
 	{
 		ImGui::TextUnformatted("Every menu, ribbon, and shortcut command is routed through the editor action registry.");
@@ -3656,7 +3793,7 @@ void RenderHelpModals(auto &State, EditorSession &Session, action::EditorActionR
 			}
 			ImGui::EndTable();
 		}
-		if (ImGui::Button("Close"))
+		if (EditorWidgets::Button("Close", ImVec2(0.0F, 0.0F), EditorControlRole::Quiet))
 		{
 			CommandReferenceOpen = false;
 			ImGui::CloseCurrentPopup();
@@ -3668,7 +3805,7 @@ void RenderHelpModals(auto &State, EditorSession &Session, action::EditorActionR
 	if (Session.IsAboutOpen())
 		ImGui::OpenPopup("About Engine");
 	bool AboutOpen = Session.IsAboutOpen();
-	ImGui::SetNextWindowSize(ImVec2(480.0f, 0.0f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(EditorTheme::ScaleLogical(ImVec2(480.0F, 0.0F)), ImGuiCond_FirstUseEver);
 	if (ImGui::BeginPopupModal("About Engine", &AboutOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
 	{
 		const runtime::project::ProjectDescriptor &Project = Session.GetProject().GetDescriptor();
@@ -3679,7 +3816,7 @@ void RenderHelpModals(auto &State, EditorSession &Session, action::EditorActionR
 		ImGui::Text("Project ID: %s", Project.ID.ToString().c_str());
 		ImGui::Text("Renderer: OpenGL 4.6 core");
 		ImGui::Text("Asset root: %s", Session.GetProject().GetPaths().Content.string().c_str());
-		if (ImGui::Button("Close"))
+		if (EditorWidgets::Button("Close", ImVec2(0.0F, 0.0F), EditorControlRole::Quiet))
 		{
 			AboutOpen = false;
 			ImGui::CloseCurrentPopup();
@@ -3692,7 +3829,8 @@ void RenderHelpModals(auto &State, EditorSession &Session, action::EditorActionR
 void RenderToolbar(auto &State, EditorSession &Session, action::EditorActionRegistry &Actions, action::EditorActionContext &Context,
 				   const EditorIconRegistry &Icons)
 {
-	ImGui::BeginChild("PrimaryToolbar", ImVec2(0.0f, 76.0f), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+	ImGui::BeginChild("PrimaryToolbar", ImVec2(0.0F, EditorTheme::GetTokens().RibbonHeight),
+					  ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
 	if (State.RenderedToolbarWorkspace != State.ActiveWorkspace)
 	{
 		ImGui::SetScrollX(0.0f);
@@ -3721,17 +3859,14 @@ void RenderToolbar(auto &State, EditorSession &Session, action::EditorActionRegi
 				Label.append(Descriptor->DisplayName);
 			}
 			ImGui::BeginDisabled(!Enabled);
-			if (Checked)
-				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-			if (ImGui::Button(Label.c_str(), ImVec2(0.0f, 54.0f)))
+			if (EditorWidgets::Button(Label.c_str(), ImVec2(0.0F, EditorTheme::GetTokens().RibbonButtonHeight), EditorControlRole::Toolbar,
+									  Checked))
 			{
 				if (Group.Name == "Primitives")
 					State.DeferredToolbarActionsScratch.push_back(ID);
 				else
 					InvokeAction(Actions, ID, Context);
 			}
-			if (Checked)
-				ImGui::PopStyleColor();
 			ImGui::EndDisabled();
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			{
@@ -3750,7 +3885,7 @@ void RenderToolbar(auto &State, EditorSession &Session, action::EditorActionRegi
 void RenderWorkspaceStrip(auto &State, action::EditorActionRegistry &Actions, action::EditorActionContext &Context,
 						  const EditorIconRegistry &Icons)
 {
-	ImGui::BeginChild("WorkspaceStrip", ImVec2(0.0f, 40.0f), ImGuiChildFlags_Borders);
+	ImGui::BeginChild("WorkspaceStrip", ImVec2(0.0F, EditorTheme::GetTokens().WorkspaceStripHeight), ImGuiChildFlags_Borders);
 	constexpr std::array PlayActions{action::IDs::Play, action::IDs::Simulate, action::IDs::Pause, action::IDs::Step,
 									 action::IDs::Standalone};
 	for (const action::EditorActionID ID : PlayActions)
@@ -3762,7 +3897,9 @@ void RenderWorkspaceStrip(auto &State, action::EditorActionRegistry &Actions, ac
 		const string_view Icon = Icons.Find(Descriptor->Icon);
 		ImGui::BeginDisabled(!Enabled);
 		ImGui::PushID(static_cast<int32>(ID));
-		if (ImGui::Button(Icon.empty() ? Descriptor->DisplayName.c_str() : Icon.data(), ImVec2(34.0f, 28.0f)))
+		if (EditorWidgets::Button(Icon.empty() ? Descriptor->DisplayName.c_str() : Icon.data(),
+								  ImVec2(EditorTheme::ScaleLogical(34.0F), EditorTheme::GetTokens().CompactControlHeight),
+								  EditorControlRole::Toolbar, Actions.IsChecked(ID, Context)))
 			InvokeAction(Actions, ID, Context);
 		ImGui::PopID();
 		ImGui::EndDisabled();
@@ -3780,39 +3917,11 @@ void RenderWorkspaceStrip(auto &State, action::EditorActionRegistry &Actions, ac
 		if (Workspace.ID != workspace::EditorWorkspaceID::Home)
 			ImGui::SameLine();
 		const bool WasActive = State.ActiveWorkspace == Workspace.ID;
-		if (WasActive)
-			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
 		ImGui::PushID(static_cast<int32>(Workspace.ID));
-		if (ImGui::Button(Workspace.Name.data(), ImVec2(94.0f, 28.0f)))
+		if (EditorWidgets::Button(Workspace.Name.data(),
+								  ImVec2(EditorTheme::ScaleLogical(94.0F), EditorTheme::GetTokens().CompactControlHeight),
+								  EditorControlRole::Toolbar, WasActive))
 			State.ActiveWorkspace = Workspace.ID;
-		ImGui::PopID();
-		if (WasActive)
-			ImGui::PopStyleColor();
-	}
-	ImGui::EndChild();
-}
-
-void RenderMinimizedPanelBar(EditorSession &Session)
-{
-	bool HasMinimizedPanels = false;
-	for (const workspace::EditorPanelState &Panel : Session.GetWorkspace().GetPanels())
-		HasMinimizedPanels = HasMinimizedPanels || (Panel.Open && Panel.Minimized);
-	if (!HasMinimizedPanels)
-		return;
-
-	ImGui::BeginChild("MinimizedPanels", ImVec2(0.0f, 31.0f), ImGuiChildFlags_Borders);
-	ImGui::AlignTextToFramePadding();
-	ImGui::TextDisabled("Minimized");
-	for (const workspace::EditorPanelState &Panel : Session.GetWorkspace().GetPanels())
-	{
-		if (!Panel.Open || !Panel.Minimized)
-			continue;
-		ImGui::SameLine();
-		ImGui::PushID(static_cast<int32>(Panel.ID));
-		if (ImGui::SmallButton(Panel.Name.c_str()))
-			Session.GetWorkspace().SetMinimized(Panel.ID, false);
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Restore %s", Panel.Name.c_str());
 		ImGui::PopID();
 	}
 	ImGui::EndChild();
@@ -3823,12 +3932,9 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 												  const ImVec2 FramebufferScale, bool &CreateRequested, bool &CloseRequested,
 												  bool &ToggleProjectionRequested)
 {
-	workspace::EditorPanelState &Panel = Session.GetWorkspace().GetPanel(workspace::EditorPanelID::Viewport);
 	EditorViewportRegion Region{.View = Presentation.View};
 	if (!Presentation.View.IsValid())
 		throw std::invalid_argument("Editor UI cannot render a viewport with an invalid identity");
-	if (!Presentation.Closable && (!Panel.Open || Panel.Minimized))
-		return Region;
 	auto ViewportState = std::ranges::find_if(State.Viewports, [&](const auto &Candidate) { return Candidate.View == Presentation.View; });
 	if (ViewportState == State.Viewports.end())
 	{
@@ -3841,16 +3947,23 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 	WindowName = Presentation.Closable ? Presentation.Name : "Viewport";
 	if (Presentation.Closable)
 		std::format_to(std::back_inserter(WindowName), "###Viewport-{}", Presentation.View.Value);
-	if (!ImGui::Begin(WindowName.c_str(), Presentation.Closable ? &Open : nullptr,
-					  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+	ImGuiWindowFlags WindowFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+	if (!Presentation.Closable)
+	{
+		WindowFlags |= ImGuiWindowFlags_NoTitleBar;
+		ImGuiWindowClass ViewportClass;
+		ViewportClass.DockNodeFlagsOverrideSet = ImGuiDockNodeFlags_NoTabBar | ImGuiDockNodeFlags_NoWindowMenuButton |
+												 ImGuiDockNodeFlags_NoCloseButton | ImGuiDockNodeFlags_NoDockingOverMe;
+		ImGui::SetNextWindowClass(&ViewportClass);
+	}
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+	const bool Visible = ImGui::Begin(WindowName.c_str(), Presentation.Closable ? &Open : nullptr, WindowFlags);
+	ImGui::PopStyleVar(2);
+	if (!Visible)
 	{
 		ImGui::End();
 		CloseRequested = Presentation.Closable && !Open;
-		return Region;
-	}
-	if (!Presentation.Closable && RenderPanelMinimizeControl(Session, Panel))
-	{
-		ImGui::End();
 		return Region;
 	}
 	ImVec2 ViewportFramebufferScale = FramebufferScale;
@@ -3880,7 +3993,7 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 	}
 	else
 	{
-		const ImU32 Background = ImGui::GetColorU32(ImVec4(0.018f, 0.023f, 0.032f, 1.0f));
+		const ImU32 Background = ImGui::GetColorU32(EditorTheme::GetTokens().Canvas);
 		ImGui::GetWindowDrawList()->AddRectFilled(Minimum, ImVec2(Minimum.x + Available.x, Minimum.y + Available.y), Background);
 		ImGui::SetCursorScreenPos(ImVec2(Minimum.x + 18.0f, Minimum.y + 18.0f));
 		ImGui::TextDisabled("Preparing viewport...");
@@ -3909,12 +4022,11 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 		}
 		ImGui::EndDragDropTarget();
 	}
-	ImGui::SetCursorScreenPos(ImVec2(Minimum.x + 10.0f, Minimum.y + 10.0f));
-	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.0f);
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.055f, 0.061f, 0.075f, 0.92f));
-	ImGui::BeginChild("ViewportControls", ImVec2(300.0f, 34.0f), ImGuiChildFlags_Borders,
-					  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-	if (ImGui::Button(Presentation.Projection == CameraProjectionMode::Perspective ? "Perspective" : "Orthographic"))
+	ImGui::SetCursorScreenPos(Minimum);
+	ImGui::PushID("ViewportControls");
+	ImGui::BeginGroup();
+	if (EditorWidgets::Button(Presentation.Projection == CameraProjectionMode::Perspective ? "Perspective" : "Orthographic",
+							  ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar))
 		ToggleProjectionRequested = true;
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Switch this viewport between perspective and orthographic projection");
@@ -3922,7 +4034,7 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 	static constexpr std::array ViewModeNames{"Lit", "Unlit", "Wireframe", "Normals", "Depth", "Object ID", "Overdraw"};
 	static_assert(ViewModeNames.size() == static_cast<usize>(pipeline::render::ViewportViewMode::Count));
 	const usize ViewModeIndex = static_cast<usize>(ViewportState->Settings.ViewMode);
-	if (ImGui::Button(ViewModeNames.at(ViewModeIndex)))
+	if (EditorWidgets::Button(ViewModeNames.at(ViewModeIndex), ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar))
 		ImGui::OpenPopup("ViewportViewMode");
 	if (ImGui::BeginPopup("ViewportViewMode"))
 	{
@@ -3937,10 +4049,10 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 		ImGui::EndPopup();
 	}
 	ImGui::SameLine();
-	if (ImGui::Button("+ View"))
+	if (EditorWidgets::Button("+ View", ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar))
 		CreateRequested = true;
 	ImGui::SameLine();
-	if (ImGui::Button("Show"))
+	if (EditorWidgets::Button("Show", ImVec2(0.0F, 0.0F), EditorControlRole::Toolbar))
 		ImGui::OpenPopup("ViewportOverlays");
 	if (ImGui::BeginPopup("ViewportOverlays"))
 	{
@@ -3968,16 +4080,15 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 		ImGui::EndPopup();
 	}
 	Region.Settings = ViewportState->Settings;
-	ImGui::EndChild();
-	ImGui::PopStyleColor();
-	ImGui::PopStyleVar();
+	ImGui::EndGroup();
+	ImGui::PopID();
 	if (ViewportState->Settings.Overlays.RenderStatistics && Presentation.Output.IsValid())
 	{
 		const auto &Statistics = Presentation.Output.RenderStatistics;
-		ImGui::SetCursorScreenPos(ImVec2(Minimum.x + Available.x - 220.0f, Minimum.y + 10.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0f);
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.035f, 0.04f, 0.05f, 0.9f));
-		ImGui::BeginChild("ViewportStatistics", ImVec2(210.0f, 112.0f), ImGuiChildFlags_Borders,
+		ImGui::SetCursorScreenPos(ImVec2(Minimum.x + Available.x - EditorTheme::ScaleLogical(210.0F), Minimum.y));
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, EditorTheme::GetTokens().ChildRounding);
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, WithAlpha(EditorTheme::GetTokens().PanelRaised, 0.90F));
+		ImGui::BeginChild("ViewportStatistics", EditorTheme::ScaleLogical(ImVec2(210.0F, 112.0F)), ImGuiChildFlags_Borders,
 						  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		ImGui::TextUnformatted("Render Statistics");
 		ImGui::Separator();
@@ -3993,10 +4104,10 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 	{
 		const pipeline::graph::RenderGraphInspection &Inspection = *Presentation.Output.GraphInspection;
 		const float32 Height = std::min(Available.y * 0.55f, 390.0f);
-		ImGui::SetCursorScreenPos(ImVec2(Minimum.x + Available.x - 290.0f, Minimum.y + Available.y - Height - 10.0f));
-		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0f);
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.035f, 0.04f, 0.05f, 0.94f));
-		ImGui::BeginChild("ViewportRenderGraph", ImVec2(280.0f, Height), ImGuiChildFlags_Borders);
+		ImGui::SetCursorScreenPos(ImVec2(Minimum.x + Available.x - EditorTheme::ScaleLogical(280.0F), Minimum.y + Available.y - Height));
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, EditorTheme::GetTokens().ChildRounding);
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, WithAlpha(EditorTheme::GetTokens().PanelRaised, 0.94F));
+		ImGui::BeginChild("ViewportRenderGraph", ImVec2(EditorTheme::ScaleLogical(280.0F), Height), ImGuiChildFlags_Borders);
 		State.UITextScratch = "Render Graph - Frame ";
 		std::format_to(std::back_inserter(State.UITextScratch), "{}", Inspection.FrameSerial);
 		ImGui::TextUnformatted(State.UITextScratch.c_str());
@@ -4011,7 +4122,6 @@ void RenderMinimizedPanelBar(EditorSession &Session)
 	}
 	ImGui::End();
 	CloseRequested = Presentation.Closable && !Open;
-	(void)Panel;
 	return Region;
 }
 } // namespace
@@ -4075,6 +4185,7 @@ void EditorUserInterface::ShutdownRenderer()
 	if (this->StateData->WindowBridge != nullptr)
 		this->StateData->WindowBridge->PrepareDetachedWindowTransfers();
 	ReleaseThumbnailTextures(*this->StateData);
+	ReleaseProjectThumbnailTextures(*this->StateData);
 	this->StateData->Renderer->Shutdown();
 }
 
@@ -4113,6 +4224,7 @@ EditorUIFrame EditorUserInterface::BuildFrame(const core::ApplicationFrame &Fram
 	Result.CreateViewportRequestCount = 0;
 	Result.WantsKeyboard = false;
 	Result.WantsPointer = false;
+	CollectRetiredProjectThumbnailTextures(*this->StateData);
 	CollectRetiredThumbnailTextures(*this->StateData);
 	if (this->StateData->WindowBridge == nullptr)
 		throw std::logic_error("Editor UI requires its managed window bridge before building frames");
@@ -4139,6 +4251,7 @@ EditorUIFrame EditorUserInterface::BuildFrame(const core::ApplicationFrame &Fram
 			Diagnostics.Publish(core::diagnostics::DiagnosticSeverity::Warning, "ContentBrowser", Exception.what());
 		}
 	}
+	ApplyInterfaceScale(*this->StateData);
 	FeedInput(*this->StateData, Frame, *this->StateData->Window, *this->StateData->WindowBridge);
 	ImGui::NewFrame();
 	if (this->StateData->LayoutStore == nullptr)
@@ -4187,9 +4300,10 @@ EditorUIFrame EditorUserInterface::BuildFrame(const core::ApplicationFrame &Fram
 	const ImGuiWindowFlags HostFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
 									   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
 									   ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	// The host window is a structural canvas behind the docked panels; its exposed corners must stay square.
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0F);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
 	ImGui::Begin("EditorHost", nullptr, HostFlags);
 	ImGui::PopStyleVar(3);
 	for (const EditorViewportPresentation &Viewport : Viewports)
@@ -4214,7 +4328,6 @@ EditorUIFrame EditorUserInterface::BuildFrame(const core::ApplicationFrame &Fram
 	}
 	RenderWorkspaceStrip(*this->StateData, Actions, ActionContext, this->StateData->Icons);
 	RenderToolbar(*this->StateData, Session, Actions, ActionContext, this->StateData->Icons);
-	RenderMinimizedPanelBar(Session);
 	const ImGuiID DockspaceID = ImGui::GetID("EditorDockspace");
 	const ImVec2 DockspaceSize = ImGui::GetContentRegionAvail();
 	if (this->StateData->LayoutPrimed && (!this->StateData->LayoutInitialized || ImGui::DockBuilderGetNode(DockspaceID) == nullptr))
@@ -4230,7 +4343,7 @@ EditorUIFrame EditorUserInterface::BuildFrame(const core::ApplicationFrame &Fram
 	ImGui::End();
 
 	RenderPropertiesPanel(*this->StateData, Session, ActionContext);
-	RenderExplorerPanel(*this->StateData, Session, Actions, ActionContext);
+	RenderExplorerPanel(*this->StateData, Session, Actions, ActionContext, Viewports);
 	RenderAssetBrowser(*this->StateData, Session, Actions, ActionContext);
 	RenderMaterialEditor(*this->StateData, Session, ActionContext);
 	RenderDiagnosticsPanel(*this->StateData, Session, ActionContext.Scheduler, Diagnostics, true);
@@ -4263,6 +4376,25 @@ EditorUIFrame EditorUserInterface::BuildFrame(const core::ApplicationFrame &Fram
 	this->StateData->LayoutPrimed = true;
 
 	ImGui::Render();
+	std::optional<EditorMouseCursorStyle> ViewportCursor;
+	if (std::ranges::any_of(Result.Viewports, &EditorViewportRegion::Hovered))
+	{
+		switch (Session.GetTransformGizmo().GetOperation())
+		{
+		case viewport::TransformGizmoOperation::Translate:
+			ViewportCursor = EditorMouseCursorStyle::Move;
+			break;
+		case viewport::TransformGizmoOperation::Rotate:
+			ViewportCursor = EditorMouseCursorStyle::Rotate;
+			break;
+		case viewport::TransformGizmoOperation::Scale:
+			ViewportCursor = EditorMouseCursorStyle::Scale;
+			break;
+		default:
+			break;
+		}
+	}
+	this->StateData->WindowBridge->UpdateMouseCursor(ViewportCursor);
 	for (const action::EditorActionID ID : this->StateData->DeferredToolbarActionsScratch)
 		InvokeAction(Actions, ID, ActionContext);
 	this->StateData->DeferredToolbarActionsScratch.clear();
@@ -4343,11 +4475,13 @@ EditorUIFrame EditorUserInterface::BuildHomeFrame(const core::ApplicationFrame &
 	Result.CreateViewportRequestCount = 0;
 	Result.WantsKeyboard = false;
 	Result.WantsPointer = false;
+	CollectRetiredProjectThumbnailTextures(*this->StateData);
 	if (this->StateData->WindowBridge == nullptr)
 		throw std::logic_error("Editor Home requires its managed window bridge before building frames");
 	this->StateData->WindowBridge->ProcessEvents(Frame.WindowEvents);
 	if (std::optional<string> CallbackDiagnostic = this->StateData->WindowBridge->TakeCallbackDiagnostic(); CallbackDiagnostic.has_value())
 		Diagnostics.Publish(core::diagnostics::DiagnosticSeverity::Error, "EditorWindow", std::move(*CallbackDiagnostic));
+	ApplyInterfaceScale(*this->StateData);
 	FeedInput(*this->StateData, Frame, *this->StateData->Window, *this->StateData->WindowBridge);
 	ImGui::NewFrame();
 
@@ -4358,37 +4492,24 @@ EditorUIFrame EditorUserInterface::BuildHomeFrame(const core::ApplicationFrame &
 	constexpr ImGuiWindowFlags HostFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
 										   ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
 										   ImGuiWindowFlags_NoNavFocus;
+	// The home page is also a structural canvas; exposed corners remain square while its child cards carry the rounded treatment.
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 	ImGui::Begin("OpenFrameHome", nullptr, HostFlags);
 	ImGui::PopStyleVar(3);
+	const EditorThemeTokens &Tokens = EditorTheme::GetTokens();
 	const ImVec2 Available = ImGui::GetContentRegionAvail();
-	const float32 ContentWidth = std::min(1'060.0f, Available.x - 48.0f);
-	ImGui::SetCursorPos(ImVec2(std::max(24.0f, (Available.x - ContentWidth) * 0.5f), 56.0f));
-	ImGui::BeginChild("HomeContent", ImVec2(ContentWidth, Available.y - 80.0f), ImGuiChildFlags_None);
-	ImGui::PushFont(ImGui::GetIO().FontDefault, 28.0f);
-	ImGui::TextUnformatted("OpenFrame");
-	ImGui::PopFont();
-	ImGui::TextDisabled("Create, open, and continue your worlds.");
-	if (!ProjectDiagnostic.empty())
-	{
-		ImGui::Spacing();
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.38f, 0.34f, 1.0f));
-		ImGui::TextWrapped("%.*s", static_cast<int32>(ProjectDiagnostic.size()), ProjectDiagnostic.data());
-		ImGui::PopStyleColor();
-	}
-	ImGui::Spacing();
-	ImGui::Spacing();
-	if (ImGui::Button("New Project", ImVec2(170.0f, 42.0f)))
+	Projects.Refresh();
+	const std::span<const project::RecentProject> Recent = Projects.GetRecentProjects();
+	const auto BeginCreateProject = [&]()
 	{
 		this->StateData->NewProjectName = "New Project";
 		this->StateData->NewProjectParent = Projects.GetProjectsRoot();
 		this->StateData->NewProjectParentText = this->StateData->NewProjectParent.string();
 		this->StateData->NewProjectDialogOpen = true;
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("Open Project", ImVec2(170.0f, 42.0f)))
+	};
+	const auto OpenProjectDialog = [&]()
 	{
 		const core::DialogResult<core::FileDialogSelection> Selection =
 			this->StateData->Window->ShowFileDialog({.Operation = core::FileDialogOperation::OpenFile,
@@ -4400,31 +4521,140 @@ EditorUIFrame EditorUserInterface::BuildHomeFrame(const core::ApplicationFrame &
 													 .RequireExistingPath = true});
 		if (Selection.Accepted() && !Selection.Value->Paths.empty())
 			Result.OpenProjectRequest = Selection.Value->Paths.front();
+	};
+
+	const float32 OuterInset = Tokens.HomeContentHorizontalInset;
+	const float32 CanvasWidth = std::min(std::max(1.0F, Available.x - OuterInset * 2.0F), Tokens.HomeContentMaximumWidth);
+	ImGui::SetCursorPos(ImVec2(std::max(OuterInset, (Available.x - CanvasWidth) * 0.5F), OuterInset));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+	ImGui::BeginChild("HomeCanvas", ImVec2(CanvasWidth, std::max(1.0F, Available.y - OuterInset - Tokens.HomeContentBottomInset)),
+					  ImGuiChildFlags_None);
+	ImGui::PopStyleVar();
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, Tokens.WindowPadding);
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, Tokens.PanelRaised);
+	const float32 HeroHeight = Tokens.HomeHeroHeight;
+	ImGui::BeginChild("HomeHero", ImVec2(ImGui::GetContentRegionAvail().x, HeroHeight), ImGuiChildFlags_Borders);
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar();
+	const ImVec2 HeroMinimum = ImGui::GetWindowPos();
+	const ImVec2 HeroMaximum = ImVec2(HeroMinimum.x + ImGui::GetWindowSize().x, HeroMinimum.y + ImGui::GetWindowSize().y);
+	ImDrawList *const HeroDrawList = ImGui::GetWindowDrawList();
+	HeroDrawList->AddRectFilled(ImVec2(HeroMinimum.x, HeroMinimum.y), ImVec2(HeroMinimum.x + Tokens.SignatureRailWidth, HeroMaximum.y),
+								ImGui::GetColorU32(Tokens.Accent));
+	HeroDrawList->AddCircleFilled(ImVec2(HeroMinimum.x + Tokens.WindowPadding.x + EditorTheme::ScaleLogical(18.0F),
+										 HeroMinimum.y + Tokens.WindowPadding.y + EditorTheme::ScaleLogical(18.0F)),
+								  EditorTheme::ScaleLogical(18.0F), ImGui::GetColorU32(Tokens.SurfaceSelected));
+	HeroDrawList->AddCircle(ImVec2(HeroMinimum.x + Tokens.WindowPadding.x + EditorTheme::ScaleLogical(18.0F),
+								   HeroMinimum.y + Tokens.WindowPadding.y + EditorTheme::ScaleLogical(18.0F)),
+							EditorTheme::ScaleLogical(18.0F), ImGui::GetColorU32(Tokens.Accent), 24, Tokens.BorderWidth);
+	ImGui::SetCursorPos(ImVec2(Tokens.WindowPadding.x + EditorTheme::ScaleLogical(48.0F), Tokens.WindowPadding.y));
+	ImGui::PushFont(ImGui::GetIO().FontDefault, EditorTheme::ScaleLogical(28.0F));
+	ImGui::TextUnformatted("OpenFrame");
+	ImGui::PopFont();
+	ImGui::SetCursorPosX(Tokens.WindowPadding.x + EditorTheme::ScaleLogical(48.0F));
+	ImGui::TextDisabled("Your projects, worlds, and tools in one place.");
+	ImGui::SetCursorPos(ImVec2(Tokens.WindowPadding.x, HeroHeight - Tokens.WindowPadding.y - Tokens.HomeActionHeight));
+	if (EditorWidgets::Button("New Project", ImVec2(EditorTheme::ScaleLogical(176.0F), Tokens.HomeActionHeight),
+							  EditorControlRole::Primary))
+		BeginCreateProject();
+	ImGui::SameLine(0.0F, Tokens.ItemSpacing.x);
+	if (EditorWidgets::Button("Open Project", ImVec2(EditorTheme::ScaleLogical(176.0F), Tokens.HomeActionHeight),
+							  EditorControlRole::Neutral))
+		OpenProjectDialog();
+
+	const float32 SummaryWidth =
+		std::min(Tokens.HomeHeroSummaryWidth,
+				 std::max(0.0F, ImGui::GetWindowSize().x - Tokens.WindowPadding.x * 2.0F - Tokens.HomeHeroTextMinimumWidth));
+	if (SummaryWidth >= EditorTheme::ScaleLogical(190.0F))
+	{
+		const float32 SummaryX = ImGui::GetWindowSize().x - SummaryWidth - Tokens.WindowPadding.x;
+		ImGui::SetCursorPos(ImVec2(SummaryX, Tokens.WindowPadding.y));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, Tokens.Surface);
+		ImGui::BeginChild("HomeSummary", ImVec2(SummaryWidth, HeroHeight - Tokens.WindowPadding.y * 2.0F), ImGuiChildFlags_Borders);
+		ImGui::PopStyleColor();
+		ImGui::TextDisabled("PROJECTS ROOT");
+		ImGui::Spacing();
+		const string RootText = Projects.GetProjectsRoot().string();
+		ImGui::TextWrapped("%s", RootText.c_str());
+		ImGui::Dummy(ImVec2(0.0F, Tokens.ItemSpacing.y));
+		ImGui::TextDisabled("RECENT PROJECTS");
+		ImGui::PushFont(ImGui::GetIO().FontDefault, EditorTheme::ScaleLogical(24.0F));
+		ImGui::Text("%zu", Recent.size());
+		ImGui::PopFont();
+		ImGui::EndChild();
 	}
-	ImGui::Spacing();
-	ImGui::SeparatorText("Recent Projects");
-	Projects.Refresh();
-	const std::span<const project::RecentProject> Recent = Projects.GetRecentProjects();
+	ImGui::EndChild();
+
+	if (!ProjectDiagnostic.empty())
+	{
+		ImGui::Dummy(ImVec2(0.0F, Tokens.ItemSpacing.y));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, Tokens.Surface);
+		ImGui::PushStyleColor(ImGuiCol_Border, Tokens.Danger);
+		ImGui::BeginChild("HomeProjectDiagnostic", ImVec2(ImGui::GetContentRegionAvail().x, 0.0F),
+						  ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+		ImGui::PopStyleColor(2);
+		ImGui::PushStyleColor(ImGuiCol_Text, Tokens.Danger);
+		ImGui::TextWrapped("%.*s", static_cast<int32>(ProjectDiagnostic.size()), ProjectDiagnostic.data());
+		ImGui::PopStyleColor();
+		ImGui::EndChild();
+	}
+
+	ImGui::Dummy(ImVec2(0.0F, Tokens.HomeSectionGap));
+	ImGui::PushFont(ImGui::GetIO().FontDefault, EditorTheme::ScaleLogical(20.0F));
+	ImGui::TextUnformatted("Recent projects");
+	ImGui::PopFont();
+	ImGui::SameLine();
+	ImGui::TextDisabled("%zu", Recent.size());
+	ImGui::Dummy(ImVec2(0.0F, Tokens.ItemSpacing.y));
 	if (Recent.empty())
 	{
-		ImGui::TextDisabled("No recent projects yet. Create a Baseplate project to get started.");
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, Tokens.Panel);
+		ImGui::BeginChild("HomeEmptyProjects", ImVec2(ImGui::GetContentRegionAvail().x, Tokens.HomeEmptyStateHeight),
+						  ImGuiChildFlags_Borders);
+		ImGui::PopStyleColor();
+		ImGui::SetCursorPos(ImVec2(Tokens.WindowPadding.x, Tokens.WindowPadding.y + Tokens.HomeSectionGap));
+		ImGui::PushFont(ImGui::GetIO().FontDefault, EditorTheme::ScaleLogical(20.0F));
+		ImGui::TextUnformatted("Start a new world");
+		ImGui::PopFont();
+		ImGui::TextDisabled("Create a Baseplate project with a camera, material, lighting, shadows, and a ready-to-edit scene.");
+		ImGui::Dummy(ImVec2(0.0F, Tokens.HomeSectionGap));
+		if (EditorWidgets::Button("Create Baseplate Project", ImVec2(EditorTheme::ScaleLogical(224.0F), Tokens.HomeActionHeight),
+								  EditorControlRole::Primary))
+		{
+			BeginCreateProject();
+		}
+		ImGui::EndChild();
 	}
 	else
 	{
 		std::optional<std::filesystem::path> RemoveRecent;
-		for (const project::RecentProject &Entry : Recent)
+		constexpr uint32 MaximumColumns = 4U;
+		const float32 GridGap = Tokens.ItemSpacing.x * 2.0F;
+		const float32 GridWidth = std::max(1.0F, ImGui::GetContentRegionAvail().x);
+		const uint32 ColumnCount = std::clamp(
+			static_cast<uint32>(std::floor((GridWidth + GridGap) / (Tokens.HomeProjectCardWidth + GridGap))), 1U, MaximumColumns);
+		const float32 CardWidth = std::min(Tokens.HomeProjectCardWidth, GridWidth);
+		for (usize Index = 0; Index < Recent.size(); ++Index)
 		{
+			const project::RecentProject &Entry = Recent[Index];
 			ImGui::PushID(Entry.DescriptorPath.string().c_str());
-			ImGui::BeginDisabled(!Entry.Available);
-			if (ImGui::Selectable(Entry.Name.c_str(), false, ImGuiSelectableFlags_None, ImVec2(0.0f, 48.0f)))
+			ImTextureData *const Thumbnail = ResolveProjectThumbnailTexture(*this->StateData, Entry);
+			const string LastEdited = FormatLastEdited(Entry.LastEditedMilliseconds);
+			const string PathText = Entry.DescriptorPath.string();
+			const EditorProjectCardResult Card =
+				EditorWidgets::ProjectCard("##ProjectCard", {.Thumbnail = Thumbnail == nullptr ? ImTextureRef{} : Thumbnail->GetTexRef(),
+															 .Size = ImVec2(CardWidth, Tokens.HomeProjectCardHeight),
+															 .Name = Entry.Name,
+															 .LastEdited = LastEdited,
+															 .DescriptorPath = PathText,
+															 .Available = Entry.Available});
+			if (Card.OpenRequested)
 				Result.OpenProjectRequest = Entry.DescriptorPath;
-			ImGui::EndDisabled();
-			ImGui::SameLine(ContentWidth - 150.0f);
-			if (ImGui::SmallButton("Remove"))
+			if (Card.RemoveRequested)
 				RemoveRecent = Entry.DescriptorPath;
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%s", Entry.DescriptorPath.string().c_str());
 			ImGui::PopID();
+			if ((Index + 1U) % ColumnCount != 0U && Index + 1U < Recent.size())
+				ImGui::SameLine(0.0F, GridGap);
 		}
 		if (RemoveRecent.has_value())
 			Projects.RemoveRecent(*RemoveRecent);
@@ -4435,7 +4665,7 @@ EditorUIFrame EditorUserInterface::BuildHomeFrame(const core::ApplicationFrame &
 	if (this->StateData->NewProjectDialogOpen)
 		ImGui::OpenPopup("Create Project");
 	bool DialogOpen = this->StateData->NewProjectDialogOpen;
-	ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
+	ImGui::SetNextWindowSize(EditorTheme::ScaleLogical(ImVec2(560.0F, 0.0F)), ImGuiCond_Appearing);
 	if (ImGui::BeginPopupModal("Create Project", &DialogOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
 	{
 		ImGui::TextUnformatted("Baseplate");
@@ -4444,7 +4674,7 @@ EditorUIFrame EditorUserInterface::BuildHomeFrame(const core::ApplicationFrame &
 		ImGui::InputText("Project name", &this->StateData->NewProjectName);
 		if (ImGui::InputText("Location", &this->StateData->NewProjectParentText))
 			this->StateData->NewProjectParent = std::filesystem::path(this->StateData->NewProjectParentText);
-		if (ImGui::Button("Browse..."))
+		if (EditorWidgets::Button("Browse...", ImVec2(0.0F, 0.0F), EditorControlRole::Neutral))
 		{
 			const core::DialogResult<core::FileDialogSelection> Selection =
 				this->StateData->Window->ShowFileDialog({.Operation = core::FileDialogOperation::SelectFolder,
@@ -4458,14 +4688,16 @@ EditorUIFrame EditorUserInterface::BuildHomeFrame(const core::ApplicationFrame &
 			}
 		}
 		ImGui::Separator();
-		if (ImGui::Button("Create", ImVec2(120.0f, 0.0f)))
+		if (EditorWidgets::Button("Create", ImVec2(EditorTheme::ScaleLogical(120.0F), EditorTheme::GetTokens().DialogActionHeight),
+								  EditorControlRole::Primary))
 		{
 			Result.CreateProjectRequest = std::pair{this->StateData->NewProjectName, this->StateData->NewProjectParent};
 			DialogOpen = false;
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f)))
+		if (EditorWidgets::Button("Cancel", ImVec2(EditorTheme::ScaleLogical(120.0F), EditorTheme::GetTokens().DialogActionHeight),
+								  EditorControlRole::Quiet))
 		{
 			DialogOpen = false;
 			ImGui::CloseCurrentPopup();
@@ -4475,6 +4707,7 @@ EditorUIFrame EditorUserInterface::BuildHomeFrame(const core::ApplicationFrame &
 	this->StateData->NewProjectDialogOpen = DialogOpen;
 
 	ImGui::Render();
+	this->StateData->WindowBridge->UpdateMouseCursor();
 	if (AllowWindowMutation)
 		this->StateData->WindowBridge->UpdateWindows();
 	ImGuiIO &IO = ImGui::GetIO();
@@ -4580,7 +4813,8 @@ void EditorUserInterface::Render(const EditorUIFrame &Frame, const std::span<con
 				glDisable(GL_DEPTH_TEST);
 				glDisable(GL_STENCIL_TEST);
 				glDisable(GL_SCISSOR_TEST);
-				glClearColor(0.025f, 0.028f, 0.035f, 1.0f);
+				const ImVec4 Canvas = EditorTheme::GetTokens().Canvas;
+				glClearColor(Canvas.x, Canvas.y, Canvas.z, Canvas.w);
 				glClear(GL_COLOR_BUFFER_BIT);
 			}
 			this->StateData->Renderer->Render(WindowFrame.DrawData->Data, Context);

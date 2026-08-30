@@ -17,8 +17,8 @@ struct EditorCameraSettings final
 	float32 DollySensitivity = 0.12f;
 	float32 FlySpeed = 10.0f;
 	float32 FastMultiplier = 4.0f;
-	float32 FlyAcceleration = 14.0f;
-	float32 FlyDeceleration = 18.0f;
+	float32 FlyAcceleration = 64.0f;
+	float32 FlyDeceleration = 80.0f;
 	float32 FlySpeedStep = 1.25f;
 	float32 MinimumFlySpeedScale = 0.125f;
 	float32 MaximumFlySpeedScale = 64.0f;
@@ -41,20 +41,30 @@ struct EditorCameraPointerInput final
 	bool RightMouseDown = false;
 };
 
+struct EditorCameraNavigationInput final
+{
+	EditorCameraPointerInput Pointer;
+	glm::vec3 Movement{0.0f};
+	bool Fast = false;
+	bool Alt = false;
+	bool LeftMouseDown = false;
+	bool MiddleMouseDown = false;
+};
+
 class EditorCameraController final
 {
   public:
 	void SetSettings(const EditorCameraSettings &Settings);
 	[[nodiscard]] const EditorCameraSettings &GetSettings() const noexcept;
 
-	[[nodiscard]] EditorCameraInteraction Update(Camera &Camera, const core::input::InputSnapshot &Input, float32 DeltaSeconds,
-												 const EditorCameraPointerInput &PointerInput, bool ViewportHovered, bool ViewportFocused,
-												 bool ViewportWindowFocused, bool CancelNavigation, bool PointerCapturedByUI,
-												 bool KeyboardCapturedByUI);
+	[[nodiscard]] EditorCameraInteraction Update(Camera &Camera, const EditorCameraNavigationInput &Input, float32 DeltaSeconds,
+												 bool ViewportHovered, bool ViewportFocused, bool ViewportWindowFocused,
+												 bool CancelNavigation, bool PointerCapturedByUI, bool KeyboardCapturedByUI);
 	[[nodiscard]] bool FocusSelection(const document::SceneDocument &Document, Camera &Camera);
 	void Focus(Camera &Camera, const glm::vec3 &Center, float32 Radius);
 
 	[[nodiscard]] const glm::vec3 &GetOrbitPivot() const noexcept;
+	[[nodiscard]] glm::vec3 GetPlacementPoint(const Camera &Camera) const noexcept;
 	[[nodiscard]] float32 GetOrbitDistance() const noexcept;
 	[[nodiscard]] float32 GetFlySpeedScale() const noexcept;
 
@@ -64,7 +74,7 @@ class EditorCameraController final
 	void Orbit(Camera &Camera, float32 DeltaX, float32 DeltaY);
 	void Pan(Camera &Camera, float32 DeltaX, float32 DeltaY);
 	void Dolly(Camera &Camera, float32 Scroll);
-	void Fly(Camera &Camera, const core::input::InputSnapshot &Input, float32 DeltaSeconds);
+	void Fly(Camera &Camera, const glm::vec3 &Movement, bool Fast, float32 DeltaSeconds);
 
 	EditorCameraSettings Settings;
 	glm::vec3 OrbitPivot{0.0f};

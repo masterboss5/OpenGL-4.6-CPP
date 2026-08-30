@@ -39,7 +39,7 @@ bool EditorLayoutStore::Load(workspace::EditorWorkspace &Workspace, string &Dock
 		if (!Root.is_object())
 			throw std::runtime_error("layout root must be an object");
 		const uint32 FormatVersion = Root.at("FormatVersion").get<uint32>();
-		if ((FormatVersion != 2U && FormatVersion != CurrentFormatVersion) || !Root.at("Panels").is_array())
+		if (FormatVersion < 2U || FormatVersion > CurrentFormatVersion || !Root.at("Panels").is_array())
 		{
 			throw std::runtime_error("layout root, version, or panel table is invalid");
 		}
@@ -50,7 +50,6 @@ bool EditorLayoutStore::Load(workspace::EditorWorkspace &Workspace, string &Dock
 				throw std::runtime_error("layout contains an invalid panel ID");
 			workspace::EditorPanelState &State = Workspace.GetPanel(ID);
 			State.Open = Panel.at("Open").get<bool>();
-			State.Minimized = State.Open && Panel.at("Minimized").get<bool>();
 			if (!State.Closable)
 				State.Open = true;
 		}
@@ -105,8 +104,7 @@ void EditorLayoutStore::Capture(const std::span<const workspace::EditorPanelStat
 	{
 		for (usize Index = 0; Index < Panels.size(); ++Index)
 		{
-			if (this->Panels[Index].ID != Panels[Index].ID || this->Panels[Index].Open != Panels[Index].Open ||
-				this->Panels[Index].Minimized != Panels[Index].Minimized)
+			if (this->Panels[Index].ID != Panels[Index].ID || this->Panels[Index].Open != Panels[Index].Open)
 			{
 				Changed = true;
 				break;
@@ -141,7 +139,7 @@ void EditorLayoutStore::Flush()
 		return;
 	Json PanelTable = Json::array();
 	for (const workspace::EditorPanelState &Panel : this->Panels)
-		PanelTable.push_back({{"ID", static_cast<uint32>(Panel.ID)}, {"Open", Panel.Open}, {"Minimized", Panel.Minimized}});
+		PanelTable.push_back({{"ID", static_cast<uint32>(Panel.ID)}, {"Open", Panel.Open}});
 	Json ViewportTable = Json::array();
 	for (const EditorViewportLayoutState &Viewport : this->ViewportStates)
 	{

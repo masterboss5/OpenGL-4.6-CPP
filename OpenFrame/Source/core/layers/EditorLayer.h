@@ -168,13 +168,16 @@ class EditorLayer final : public ApplicationLayer
 	void QueueViewportRequests(const ui::EditorUIFrame &InterfaceFrame);
 	void ApplyViewportRequests();
 	void ProcessEditorInput(const core::ApplicationFrame &Frame, const core::input::InputSnapshot &Input,
-							const ui::EditorUIFrame &InterfaceFrame, action::EditorActionContext &ActionContext, float32 DeltaSeconds);
+							const ui::EditorUIFrame &InterfaceFrame, action::EditorActionContext &ActionContext);
+	void UpdateCameraNavigation(const core::ApplicationFrame &Frame, float32 DeltaSeconds);
+	void CacheCameraInteraction(const ui::EditorUIFrame &InterfaceFrame);
 	void AccumulateCameraInput(const core::input::InputEvent &Event);
+	[[nodiscard]] viewport::EditorCameraPointerInput ConsumeCameraPointerInput(core::WindowID Window);
 	[[nodiscard]] BufferedEditorPointerInput ConsumeEditorPointerInput(core::WindowID Window);
 	void SubmitFrame(ui::EditorUIFrame InterfaceFrame, core::threading::TaskScheduler &Scheduler);
 	void SubmitHomeFrame(ui::EditorUIFrame InterfaceFrame);
 	void DestroyRenderResources();
-	void OpenProject(project::ProjectDescriptor Descriptor);
+	void OpenProject(project::ProjectDescriptor Descriptor, bool TrackInProjectHub);
 	void CloseProject();
 	[[nodiscard]] EditorViewportInstance &CreateViewport(pipeline::render::RenderViewID View, bool Primary);
 	[[nodiscard]] EditorViewportInstance *FindViewport(pipeline::render::RenderViewID View) noexcept;
@@ -210,6 +213,7 @@ class EditorLayer final : public ApplicationLayer
 	std::vector<ui::EditorViewportPresentation> RenderViewportPresentations;
 	std::vector<action::EditorActionResult> ActionResultsScratch;
 	std::unordered_map<core::WindowID, PendingCameraInput> PendingCameraInputs;
+	std::vector<ui::EditorViewportRegion> CameraViewportRegions;
 	string HomeProjectDiagnostic;
 	core::EventSubscription CameraInputSubscription;
 	float64 PendingEditorDeltaSeconds = 0.0;
@@ -217,7 +221,12 @@ class EditorLayer final : public ApplicationLayer
 	uint64 NextRenderView = 0;
 	uint64 MaximumRenderedFrames = 0;
 	uint64 RenderedFrames = 0;
+	uint64 ProjectOpeningRevision = 0;
+	bool TrackProjectInHome = false;
 	bool ActionsInstalled = false;
 	bool InterfaceRendererInitialized = false;
+	bool CameraInteractionAvailable = false;
+	bool CameraWantsKeyboard = false;
+	bool CameraWantsPointer = false;
 };
 } // namespace editor

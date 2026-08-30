@@ -2,6 +2,7 @@
 
 #include "Project.h"
 #include "Source/types.h"
+#include "Source/util/UUID.h"
 
 #include <filesystem>
 #include <span>
@@ -10,11 +11,25 @@
 
 namespace editor::project
 {
+struct ProjectThumbnailImage final
+{
+	uint32 Width = 0;
+	uint32 Height = 0;
+	std::vector<uint8> Pixels;
+
+	[[nodiscard]] bool IsValid() const noexcept;
+};
+
 struct RecentProject final
 {
+	util::UUID ID;
 	string Name;
 	std::filesystem::path DescriptorPath;
 	int64 LastOpenedMilliseconds = 0;
+	int64 LastEditedMilliseconds = 0;
+	std::filesystem::path ThumbnailPath;
+	uint64 ThumbnailRevision = 0;
+	ProjectThumbnailImage Thumbnail;
 	bool Available = false;
 };
 
@@ -44,12 +59,16 @@ class ProjectHub final
 	void Refresh();
 	[[nodiscard]] ProjectDescriptor OpenProject(const std::filesystem::path &DescriptorPath);
 	[[nodiscard]] ProjectDescriptor CreateBaseplateProject(const NewProjectSpecification &Specification);
+	void MarkProjectEdited(const ProjectDescriptor &Descriptor);
+	void UpdateProjectThumbnail(const ProjectDescriptor &Descriptor, uint32 SourceWidth, uint32 SourceHeight,
+								std::span<const uint8> SourcePixels, bool SourceRowsAreBottomUp);
 	void RemoveRecent(const std::filesystem::path &DescriptorPath);
 
   private:
 	void LoadRecentProjects();
 	void SaveRecentProjects() const;
 	void RecordRecent(const ProjectDescriptor &Descriptor);
+	void RefreshRecentProject(RecentProject &Recent, const ProjectDescriptor *KnownDescriptor = nullptr);
 
 	std::filesystem::path ProjectsRoot;
 	std::filesystem::path StateRoot;

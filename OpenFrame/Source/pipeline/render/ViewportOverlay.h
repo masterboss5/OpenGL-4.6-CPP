@@ -64,6 +64,7 @@ struct TransformGizmoOverlay final
 	float32 WorldScale = 1.0f;
 	uint32 Operation = 0;
 	uint32 ActiveHandle = 0;
+	uint32 CapabilityMask = 7;
 };
 
 static_assert(sizeof(GPUDebugLineRecord) == sizeof(glm::vec4) * 3U);

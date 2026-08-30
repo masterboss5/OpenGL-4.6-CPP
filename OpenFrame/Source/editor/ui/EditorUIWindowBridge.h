@@ -7,6 +7,7 @@
 #include <span>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace core
@@ -17,6 +18,13 @@ class WindowManager;
 
 namespace editor::ui
 {
+enum class EditorMouseCursorStyle : uint8
+{
+	Move,
+	Rotate,
+	Scale
+};
+
 class EditorUIWindowBridge final
 {
   public:
@@ -31,6 +39,7 @@ class EditorUIWindowBridge final
 	void Install();
 	void Shutdown() noexcept;
 	void ProcessEvents(std::span<const core::WindowEvent> Events);
+	void UpdateMouseCursor(std::optional<EditorMouseCursorStyle> Override = std::nullopt) noexcept;
 	void UpdateWindows();
 	void UpdateMonitors();
 	void PrepareDetachedWindowTransfers();
@@ -64,6 +73,7 @@ class EditorUIWindowBridge final
 	core::WindowManager *Manager = nullptr;
 	core::Window *MainWindow = nullptr;
 	std::vector<core::MonitorInfo> MonitorsScratch;
+	std::unordered_map<core::WindowID, int32> AppliedMouseCursors;
 	string ClipboardTextScratch;
 	std::optional<string> CallbackDiagnostic;
 	bool Installed = false;

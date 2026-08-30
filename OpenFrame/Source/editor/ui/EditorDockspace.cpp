@@ -48,6 +48,11 @@ void EditorDockspace::BuildReferenceLayout(const uint32 DockspaceID, const float
 	const float32 RightPanelRemainingWidthRatio = SidePanelWidthRatio / (1.0f - SidePanelWidthRatio);
 	const ImGuiID Right = ImGui::DockBuilderSplitNode(Center, ImGuiDir_Right, RightPanelRemainingWidthRatio, nullptr, &Center);
 	const ImGuiID Bottom = ImGui::DockBuilderSplitNode(Center, ImGuiDir_Down, BottomPanelHeightRatio, nullptr, &Center);
+	if (ImGuiDockNode *const CenterNode = ImGui::DockBuilderGetNode(Center))
+	{
+		CenterNode->SetLocalFlags(CenterNode->LocalFlags | ImGuiDockNodeFlags_NoTabBar | ImGuiDockNodeFlags_NoWindowMenuButton |
+								  ImGuiDockNodeFlags_NoCloseButton | ImGuiDockNodeFlags_NoDockingOverMe);
+	}
 	ImGui::DockBuilderDockWindow("Properties", Left);
 	ImGui::DockBuilderDockWindow("Explorer", Right);
 	ImGui::DockBuilderDockWindow("Viewport", Center);

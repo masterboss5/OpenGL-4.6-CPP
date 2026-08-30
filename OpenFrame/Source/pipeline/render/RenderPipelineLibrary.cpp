@@ -210,7 +210,8 @@ RenderPipelineLibrary::RenderPipelineLibrary(pipeline::device::Device &Device, r
 								   pipeline::shader::UniformBit(pipeline::shader::VertexUniform::GizmoBasis) |
 								   pipeline::shader::UniformBit(pipeline::shader::VertexUniform::GizmoScale) |
 								   pipeline::shader::UniformBit(pipeline::shader::VertexUniform::GizmoOperation) |
-								   pipeline::shader::UniformBit(pipeline::shader::VertexUniform::ActiveHandle),
+								   pipeline::shader::UniformBit(pipeline::shader::VertexUniform::ActiveHandle) |
+								   pipeline::shader::UniformBit(pipeline::shader::VertexUniform::GizmoCapabilityMask),
 		 .RequiredVertexEngineInterface = UniformInterface(RendererBinding::FrameConstants)});
 	this->EditorDebugLinePipeline = this->Shaders.CreateGraphicsPipeline(
 		{.Vertex = {.Path = "Shaders/EditorDebugLine.vert", .Stage = pipeline::shader::ShaderStage::Vertex},

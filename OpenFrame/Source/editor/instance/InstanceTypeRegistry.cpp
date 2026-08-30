@@ -153,22 +153,26 @@ InstanceTypeRegistry::InstanceTypeRegistry()
 		MakeType(class_ids::Model, "Model", "Organization", "M", {0.65F, 0.75F, 1.0F, 1.0F}, "Pivoted collection of descendant parts");
 	Model.DefaultProperties = {
 		{"PivotPosition", glm::vec3(0.0F)}, {"PivotRotation", glm::quat(1.0F, 0.0F, 0.0F, 0.0F)}, {"PivotScale", glm::vec3(1.0F)}};
+	Model.TransformCapabilities = {.Translation = true, .Rotation = true, .Scale = true};
 	Model.AllowedServiceClasses = {class_ids::Workspace};
 	this->Register(std::move(Model));
 
 	auto Part = MakeType(class_ids::Part, "Part", "World", "P", {0.75F, 0.8F, 0.88F, 1.0F}, "Primitive world geometry");
 	Part.DefaultProperties = WorldTransformDefaults();
+	Part.TransformCapabilities = {.Translation = true, .Rotation = true, .Scale = true};
 	Part.DefaultProperties.emplace("Shape", string("Box"));
 	Part.AllowedServiceClasses = {class_ids::Workspace};
 	this->Register(std::move(Part));
 	auto MeshPart =
 		MakeType(class_ids::MeshPart, "MeshPart", "World", "N", {0.55F, 0.85F, 0.75F, 1.0F}, "World geometry backed by a model asset");
 	MeshPart.DefaultProperties = WorldTransformDefaults();
+	MeshPart.TransformCapabilities = {.Translation = true, .Rotation = true, .Scale = true};
 	MeshPart.DefaultProperties.emplace("Model", InstanceAssetReference{.Type = resource::AssetType::Model});
 	MeshPart.AllowedServiceClasses = {class_ids::Workspace};
 	this->Register(std::move(MeshPart));
 	auto Camera = MakeType(class_ids::Camera, "Camera", "World", "C", {0.45F, 0.75F, 1.0F, 1.0F}, "Workspace camera");
 	Camera.DefaultProperties = WorldTransformDefaults();
+	Camera.TransformCapabilities = {.Translation = true, .Rotation = true};
 	Camera.AllowedServiceClasses = {class_ids::Workspace};
 	MergeDefaults(Camera.DefaultProperties, {{"Projection", string("Perspective")},
 											 {"FieldOfView", 60.0},
@@ -194,8 +198,9 @@ InstanceTypeRegistry::InstanceTypeRegistry()
 	};
 	auto DirectionalLight = MakeType(class_ids::DirectionalLight, "DirectionalLight", "Lighting and Effects", "D",
 									 {1.0F, 0.85F, 0.3F, 1.0F}, "Directional world light");
-	DirectionalLight.ExactParentClasses = {class_ids::Workspace, class_ids::Lighting};
-	DirectionalLight.AllowedServiceClasses = {class_ids::Workspace, class_ids::Lighting};
+	DirectionalLight.DisplayName = "Directional Light";
+	DirectionalLight.AllowedServiceClasses = {class_ids::Workspace};
+	DirectionalLight.TransformCapabilities = {.Rotation = true};
 	DirectionalLight.DefaultProperties = {{"Rotation", glm::quat(1.0F, 0.0F, 0.0F, 0.0F)},
 										  {"Color", glm::vec3(1.0F)},
 										  {"IlluminanceLux", 110'000.0},
@@ -206,14 +211,26 @@ InstanceTypeRegistry::InstanceTypeRegistry()
 	this->Register(std::move(DirectionalLight));
 	auto PointLight = MakeType(class_ids::PointLight, "PointLight", "Lighting and Effects", "O", {1.0F, 0.65F, 0.25F, 1.0F},
 							   "Omnidirectional light on its immediate spatial parent");
-	PointLight.ExactParentClasses = {class_ids::Part, class_ids::MeshPart, class_ids::Attachment};
-	PointLight.DefaultProperties = {{"Color", glm::vec3(1.0F)}, {"LuminousPowerLumens", 1'500.0}, {"Range", 20.0}, {"SourceRadius", 0.0}};
+	PointLight.DisplayName = "Point Light";
+	PointLight.Description = "Independently positioned omnidirectional world light";
+	PointLight.AllowedServiceClasses = {class_ids::Workspace};
+	PointLight.TransformCapabilities = {.Translation = true};
+	PointLight.DefaultProperties = {{"Position", glm::vec3(0.0F)},
+									{"Color", glm::vec3(1.0F)},
+									{"LuminousPowerLumens", 1'500.0},
+									{"Range", 20.0},
+									{"SourceRadius", 0.0}};
 	MergeDefaults(PointLight.DefaultProperties, ShadowDefaults());
 	this->Register(std::move(PointLight));
 	auto SpotLight = MakeType(class_ids::SpotLight, "SpotLight", "Lighting and Effects", "Q", {1.0F, 0.6F, 0.25F, 1.0F},
 							  "Cone light on its immediate spatial parent");
-	SpotLight.ExactParentClasses = {class_ids::Part, class_ids::MeshPart, class_ids::Attachment};
-	SpotLight.DefaultProperties = {{"Color", glm::vec3(1.0F)},
+	SpotLight.DisplayName = "Spot Light";
+	SpotLight.Description = "Independently positioned and oriented cone world light";
+	SpotLight.AllowedServiceClasses = {class_ids::Workspace};
+	SpotLight.TransformCapabilities = {.Translation = true, .Rotation = true};
+	SpotLight.DefaultProperties = {{"Position", glm::vec3(0.0F)},
+								   {"Rotation", glm::quat(1.0F, 0.0F, 0.0F, 0.0F)},
+								   {"Color", glm::vec3(1.0F)},
 								   {"LuminousPowerLumens", 2'000.0},
 								   {"Range", 30.0},
 								   {"InnerConeDegrees", 25.0},

@@ -1023,7 +1023,7 @@ void MigratePreInstanceDocument(Json &Root)
 		if (Object.contains("Parent") && Object.at("Parent").is_string())
 			Record.Parent = util::UUID::Parse(Object.at("Parent").get<string>());
 		else
-			Record.Parent = ClassID == instance::class_ids::DirectionalLight ? Services.GetLighting() : Services.GetWorkspace();
+			Record.Parent = Services.GetWorkspace();
 
 		const auto TransformNode = Components.find(string(components::CObjectTransformComponent::ComponentName));
 		if (TransformNode != Components.end() && TransformNode->is_object() && TransformNode->contains("Properties") &&
@@ -1140,6 +1140,89 @@ void MigratePreInstanceDocument(Json &Root)
 		Snapshot.Instances.push_back(std::move(Record));
 	}
 	Root["Instances"] = SerializeInstances(Snapshot);
+	Root["FormatVersion"] = SceneDocumentSerializer::CurrentFormatVersion;
+}
+
+void MigrateWorkspaceLights(Json &Root)
+{
+	if (!Root.is_object() || Root.value("FormatVersion", uint32{0}) != 2U ||
+		Root.value("EngineSchemaVersion", uint32{0}) != SceneDocumentSerializer::CurrentEngineSchemaVersion ||
+		!Root.contains("Instances") || !Root.at("Instances").is_array() || !Root.contains("Objects") || !Root.at("Objects").is_array())
+	{
+		throw SceneDocumentSerializationException("Scene document has no built-in Workspace-light migration path");
+	}
+
+	const string WorkspaceClassID = instance::class_ids::Workspace.ToString();
+	const string DirectionalClassID = instance::class_ids::DirectionalLight.ToString();
+	const string PointClassID = instance::class_ids::PointLight.ToString();
+	const string SpotClassID = instance::class_ids::SpotLight.ToString();
+	string WorkspaceID;
+	for (const Json &Node : Root.at("Instances"))
+	{
+		if (Node.is_object() && Node.value("ClassID", string{}) == WorkspaceClassID && Node.contains("ID") && Node.at("ID").is_string())
+		{
+			WorkspaceID = Node.at("ID").get<string>();
+			break;
+		}
+	}
+	if (WorkspaceID.empty())
+		throw SceneDocumentSerializationException("Scene document Workspace-light migration cannot find Workspace");
+
+	std::unordered_map<string, const Json *> ObjectTransforms;
+	for (const Json &Object : Root.at("Objects"))
+	{
+		if (!Object.is_object() || !Object.contains("ID") || !Object.at("ID").is_string() || !Object.contains("Components") ||
+			!Object.at("Components").is_object())
+		{
+			continue;
+		}
+		const Json &Components = Object.at("Components");
+		const auto Transform = Components.find(string(components::CObjectTransformComponent::ComponentName));
+		if (Transform != Components.end() && Transform->is_object() && Transform->contains("Properties") &&
+			Transform->at("Properties").is_object())
+		{
+			ObjectTransforms.emplace(Object.at("ID").get<string>(), &Transform->at("Properties"));
+		}
+	}
+
+	const auto ReadVector3 = [](const Json &Properties, const string_view Name, const glm::vec3 Fallback)
+	{
+		const auto Found = Properties.find(string(Name));
+		if (Found == Properties.end() || !Found->is_array() || Found->size() != 3U ||
+			!std::ranges::all_of(*Found, [](const Json &Value) { return Value.is_number(); }))
+		{
+			return Fallback;
+		}
+		return glm::vec3((*Found)[0].get<float32>(), (*Found)[1].get<float32>(), (*Found)[2].get<float32>());
+	};
+
+	for (Json &Node : Root.at("Instances"))
+	{
+		if (!Node.is_object() || !Node.contains("ClassID") || !Node.at("ClassID").is_string() || !Node.contains("ID") ||
+			!Node.at("ID").is_string() || !Node.contains("Properties") || !Node.at("Properties").is_object())
+		{
+			continue;
+		}
+		const string ClassID = Node.at("ClassID").get<string>();
+		if (ClassID == DirectionalClassID)
+			Node["Parent"] = WorkspaceID;
+		if (ClassID != PointClassID && ClassID != SpotClassID)
+			continue;
+
+		Json &Properties = Node.at("Properties");
+		const auto ObjectTransform = ObjectTransforms.find(Node.at("ID").get<string>());
+		const Json *Transform = ObjectTransform == ObjectTransforms.end() ? nullptr : ObjectTransform->second;
+		if (!Properties.contains("Position"))
+		{
+			const glm::vec3 Position = Transform == nullptr ? glm::vec3(0.0F) : ReadVector3(*Transform, "Position", glm::vec3(0.0F));
+			Properties["Position"] = InstancePropertyToJson(Position);
+		}
+		if (ClassID == SpotClassID && !Properties.contains("Rotation"))
+		{
+			const glm::vec3 Euler = Transform == nullptr ? glm::vec3(0.0F) : ReadVector3(*Transform, "RotationEuler", glm::vec3(0.0F));
+			Properties["Rotation"] = InstancePropertyToJson(glm::quat(glm::radians(Euler)));
+		}
+	}
 	Root["FormatVersion"] = SceneDocumentSerializer::CurrentFormatVersion;
 }
 
@@ -1361,6 +1444,8 @@ std::unique_ptr<document::SceneDocument> SceneDocumentSerializer::Load(const std
 	Json Root = ReadJsonFile(Path);
 	if (Root.is_object() && Root.value("FormatVersion", uint32{0}) == 1U)
 		MigratePreInstanceDocument(Root);
+	else if (Root.is_object() && Root.value("FormatVersion", uint32{0}) == 2U)
+		MigrateWorkspaceLights(Root);
 	if (Migrations != nullptr)
 	{
 		Migrations->Migrate(Root, SceneDocumentSerializer::CurrentFormatVersion, SceneDocumentSerializer::CurrentEngineSchemaVersion,

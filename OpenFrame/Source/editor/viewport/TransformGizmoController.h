@@ -76,6 +76,9 @@ struct TransformGizmoVisualState final
 {
 	bool Visible = false;
 	bool Dragging = false;
+	bool AllowTranslation = true;
+	bool AllowRotation = true;
+	bool AllowScale = true;
 	glm::vec3 Pivot{0.0f};
 	glm::mat3 Basis{1.0f};
 	float32 WorldScale = 1.0f;
@@ -131,6 +134,9 @@ class TransformGizmoController final
 	[[nodiscard]] static glm::vec3 AxisForHandle(TransformGizmoHandle Handle, const glm::mat3 &Basis);
 	[[nodiscard]] static glm::vec3 PlaneNormalForHandle(TransformGizmoHandle Handle, const glm::mat3 &Basis, const Camera &Camera);
 	[[nodiscard]] static commands::TransformState ResolveLocalTransform(const DragTarget &Target, const glm::mat4 &DesiredWorld);
+	[[nodiscard]] static instance::InstanceTransformCapabilities ResolveSharedCapabilities(const document::SceneDocument &Document,
+																						   const world::Scene::ReadAccess &Access,
+																						   std::span<const world::ObjectHandle> Objects);
 	[[nodiscard]] glm::vec3 CalculatePivot(const document::SceneDocument &Document, const std::vector<DragTarget> &Targets) const;
 	[[nodiscard]] glm::mat3 CalculateBasis(const std::vector<DragTarget> &Targets) const;
 	void ApplyTranslation(const Ray &Ray);

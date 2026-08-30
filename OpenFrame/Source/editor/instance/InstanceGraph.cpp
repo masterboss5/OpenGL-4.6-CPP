@@ -150,7 +150,8 @@ InstanceGraph::InstanceGraph(const InstanceTypeRegistry &Types, const bool Creat
 		this->CreateServices();
 }
 
-util::UUID InstanceGraph::Create(const InstanceClassID &ClassID, const util::UUID &Parent, string Name, const util::UUID ID)
+util::UUID InstanceGraph::Create(const InstanceClassID &ClassID, const util::UUID &Parent, string Name, const util::UUID ID,
+								 InstancePropertyMap InitialProperties)
 {
 	this->AssertOwnerThread();
 	const std::shared_ptr<const InstanceTypeDescriptor> Descriptor = this->Types->Find(ClassID);
@@ -172,12 +173,19 @@ util::UUID InstanceGraph::Create(const InstanceClassID &ClassID, const util::UUI
 
 	auto &Siblings = Parent.IsValid() ? this->Records.at(Parent).Children : this->Roots;
 	const uint32 Order = static_cast<uint32>(Siblings.size());
+	InstancePropertyMap Properties = Descriptor->DefaultProperties;
+	for (auto &[PropertyName, Value] : InitialProperties)
+	{
+		ValidateAndNormalizeProperty(*Descriptor, PropertyName, Value);
+		Properties.insert_or_assign(std::move(PropertyName), std::move(Value));
+	}
+	ValidateRecordSemantics(*Descriptor, Properties);
 	InstanceRecord Record{.ID = ID,
 						  .ClassID = Descriptor->ClassID,
 						  .ClassName = Descriptor->ClassName,
 						  .Name = std::move(Name),
 						  .Parent = Parent,
-						  .Properties = Descriptor->DefaultProperties,
+						  .Properties = std::move(Properties),
 						  .SiblingOrder = Order};
 	this->Records.emplace(ID, std::move(Record));
 	try
@@ -432,11 +440,29 @@ void InstanceGraph::SetWorldTransform(const util::UUID &ID, const glm::vec3 &Pos
 	}
 	else
 	{
-		if (!Record.Properties.contains("Position") || !Record.Properties.contains("Rotation") || !Record.Properties.contains("Scale"))
+		const std::shared_ptr<const InstanceTypeDescriptor> Descriptor = this->Types->Find(Record.ClassID);
+		if (Descriptor == nullptr)
+			throw std::logic_error("Instance class is no longer registered");
+		if (!Descriptor->TransformCapabilities.SupportsAnyTransform())
 			throw std::invalid_argument("Instance class does not expose a world transform");
-		Record.Properties.at("Position") = Position;
-		Record.Properties.at("Rotation") = NormalizedRotation;
-		Record.Properties.at("Scale") = Scale;
+		if (Descriptor->TransformCapabilities.Translation)
+		{
+			if (!Record.Properties.contains("Position"))
+				throw std::logic_error("Translatable instance class has no Position property");
+			Record.Properties.at("Position") = Position;
+		}
+		if (Descriptor->TransformCapabilities.Rotation)
+		{
+			if (!Record.Properties.contains("Rotation"))
+				throw std::logic_error("Rotatable instance class has no Rotation property");
+			Record.Properties.at("Rotation") = NormalizedRotation;
+		}
+		if (Descriptor->TransformCapabilities.Scale)
+		{
+			if (!Record.Properties.contains("Scale"))
+				throw std::logic_error("Scalable instance class has no Scale property");
+			Record.Properties.at("Scale") = Scale;
+		}
 	}
 	this->Touch();
 }

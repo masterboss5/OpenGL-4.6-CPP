@@ -909,6 +909,7 @@ void Renderer::ExecuteHybridPass(const pipeline::graph::HybridDeferredPassID Pas
 			Pipelines.GizmoOverlay.SetVertexUniformFloat(pipeline::shader::VertexUniform::GizmoScale, Overlay.WorldScale);
 			Pipelines.GizmoOverlay.SetVertexUniformUInt(pipeline::shader::VertexUniform::GizmoOperation, Overlay.Operation);
 			Pipelines.GizmoOverlay.SetVertexUniformUInt(pipeline::shader::VertexUniform::ActiveHandle, Overlay.ActiveHandle);
+			Pipelines.GizmoOverlay.SetVertexUniformUInt(pipeline::shader::VertexUniform::GizmoCapabilityMask, Overlay.CapabilityMask);
 			Pipelines.GizmoOverlay.Bind();
 			glBindBufferBase(GL_UNIFORM_BUFFER, static_cast<GLuint>(pipeline::render::RendererBinding::FrameConstants),
 							 Frame.FrameConstants.Buffer);
@@ -1045,7 +1046,8 @@ void Renderer::Render(const world::Scene &Scene, resource::AssetManager &Assets,
 	const SceneRenderSnapshotBuildOptions Options{.IncludeBounds = Settings.Overlays.Bounds || Settings.Overlays.Culling,
 												  .IncludeSkeletons = Settings.Overlays.Skeletons,
 												  .IncludeCameras = Settings.Overlays.Cameras,
-												  .IncludeLights = Settings.Overlays.Lights};
+												  .IncludeLights = Settings.Overlays.Lights,
+												  .SelectedObjects = SelectedObjects};
 	SceneRenderSnapshotBuilder::BuildInto(Scene, this->SceneSnapshotScratch, Options, this->SceneSnapshotBuildScratch);
 	this->Render(this->SceneSnapshotScratch, Assets, Camera, View, SelectedObjects, std::move(GizmoOverlay), Settings, PickPixels);
 }
@@ -1153,6 +1155,8 @@ void Renderer::Render(const SceneRenderSnapshot &Snapshot, resource::AssetManage
 			return Settings.Overlays.Cameras;
 		case SceneDebugLineCategory::Light:
 			return Settings.Overlays.Lights;
+		case SceneDebugLineCategory::SelectedLight:
+			return true;
 		}
 		return false;
 	};

@@ -31,7 +31,7 @@ class EditorLayoutStore final
 	[[nodiscard]] bool IsDirty() const noexcept;
 
   private:
-	static constexpr uint32 CurrentFormatVersion = 3;
+	static constexpr uint32 CurrentFormatVersion = 4;
 
 	std::filesystem::path Path;
 	std::vector<workspace::EditorPanelState> Panels;

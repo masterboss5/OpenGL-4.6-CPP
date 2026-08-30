@@ -81,7 +81,6 @@ struct EditorPanelState final
 	float32 MinimumWidth = 160.0f;
 	float32 MinimumHeight = 100.0f;
 	bool Open = true;
-	bool Minimized = false;
 	bool Closable = true;
 	bool Resizable = true;
 };
@@ -107,7 +106,6 @@ class EditorWorkspace final
 
 	void ResetToReferenceLayout();
 	void SetOpen(EditorPanelID Panel, bool Open);
-	void SetMinimized(EditorPanelID Panel, bool Minimized);
 	void Toggle(EditorPanelID Panel);
 
 	[[nodiscard]] EditorPanelState &GetPanel(EditorPanelID Panel);

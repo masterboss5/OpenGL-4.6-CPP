@@ -7,11 +7,136 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
 namespace editor::ui
 {
+namespace
+{
+inline constexpr uint32 ToolCursorExtent = 32;
+inline constexpr usize ToolCursorPixelBytes = static_cast<usize>(ToolCursorExtent) * ToolCursorExtent * 4U;
+inline constexpr int32 ToolCursorKeyBase = 1'000;
+
+struct ToolCursorImage final
+{
+	std::array<uint8, ToolCursorPixelBytes> Pixels{};
+	core::WindowPosition HotSpot{16, 16};
+};
+
+void PutCursorPixel(ToolCursorImage &Image, const int32 X, const int32 Y, const std::array<uint8, 4> Color)
+{
+	if (X < 0 || Y < 0 || X >= static_cast<int32>(ToolCursorExtent) || Y >= static_cast<int32>(ToolCursorExtent))
+		return;
+	const usize Offset = (static_cast<usize>(Y) * ToolCursorExtent + static_cast<usize>(X)) * 4U;
+	std::ranges::copy(Color, Image.Pixels.begin() + static_cast<std::ptrdiff_t>(Offset));
+}
+
+void DrawCursorLine(ToolCursorImage &Image, int32 X0, int32 Y0, const int32 X1, const int32 Y1, const int32 Radius,
+					const std::array<uint8, 4> Color)
+{
+	const int32 DeltaX = std::abs(X1 - X0);
+	const int32 StepX = X0 < X1 ? 1 : -1;
+	const int32 DeltaY = -std::abs(Y1 - Y0);
+	const int32 StepY = Y0 < Y1 ? 1 : -1;
+	int32 Error = DeltaX + DeltaY;
+	for (;;)
+	{
+		for (int32 OffsetY = -Radius; OffsetY <= Radius; ++OffsetY)
+			for (int32 OffsetX = -Radius; OffsetX <= Radius; ++OffsetX)
+				if (OffsetX * OffsetX + OffsetY * OffsetY <= Radius * Radius + 1)
+					PutCursorPixel(Image, X0 + OffsetX, Y0 + OffsetY, Color);
+		if (X0 == X1 && Y0 == Y1)
+			break;
+		const int32 TwiceError = Error * 2;
+		if (TwiceError >= DeltaY)
+		{
+			Error += DeltaY;
+			X0 += StepX;
+		}
+		if (TwiceError <= DeltaX)
+		{
+			Error += DeltaX;
+			Y0 += StepY;
+		}
+	}
+}
+
+void DrawOutlinedCursorLine(ToolCursorImage &Image, const int32 X0, const int32 Y0, const int32 X1, const int32 Y1)
+{
+	static constexpr std::array<uint8, 4> Outline{11, 13, 16, 255};
+	static constexpr std::array<uint8, 4> Foreground{241, 243, 247, 255};
+	DrawCursorLine(Image, X0, Y0, X1, Y1, 2, Outline);
+	DrawCursorLine(Image, X0, Y0, X1, Y1, 0, Foreground);
+}
+
+[[nodiscard]] ToolCursorImage BuildMoveCursor()
+{
+	ToolCursorImage Image;
+	DrawOutlinedCursorLine(Image, 16, 5, 16, 27);
+	DrawOutlinedCursorLine(Image, 5, 16, 27, 16);
+	static constexpr std::array<std::array<int32, 4>, 8> ArrowHeads{
+		std::array<int32, 4>{16, 5, 12, 9},	  std::array<int32, 4>{16, 5, 20, 9},  std::array<int32, 4>{16, 27, 12, 23},
+		std::array<int32, 4>{16, 27, 20, 23}, std::array<int32, 4>{5, 16, 9, 12},  std::array<int32, 4>{5, 16, 9, 20},
+		std::array<int32, 4>{27, 16, 23, 12}, std::array<int32, 4>{27, 16, 23, 20}};
+	for (const std::array<int32, 4> Segment : ArrowHeads)
+		DrawOutlinedCursorLine(Image, Segment[0], Segment[1], Segment[2], Segment[3]);
+	return Image;
+}
+
+[[nodiscard]] ToolCursorImage BuildRotateCursor()
+{
+	ToolCursorImage Image;
+	constexpr float32 Start = -2.55F;
+	constexpr float32 End = 2.55F;
+	constexpr int32 SegmentCount = 28;
+	int32 PreviousX = 0;
+	int32 PreviousY = 0;
+	for (int32 Segment = 0; Segment <= SegmentCount; ++Segment)
+	{
+		const float32 Angle = Start + (End - Start) * static_cast<float32>(Segment) / static_cast<float32>(SegmentCount);
+		const int32 X = static_cast<int32>(std::lround(16.0F + std::cos(Angle) * 10.0F));
+		const int32 Y = static_cast<int32>(std::lround(16.0F + std::sin(Angle) * 10.0F));
+		if (Segment != 0)
+			DrawOutlinedCursorLine(Image, PreviousX, PreviousY, X, Y);
+		PreviousX = X;
+		PreviousY = Y;
+	}
+	DrawOutlinedCursorLine(Image, PreviousX, PreviousY, PreviousX - 1, PreviousY - 6);
+	DrawOutlinedCursorLine(Image, PreviousX, PreviousY, PreviousX - 6, PreviousY - 1);
+	return Image;
+}
+
+[[nodiscard]] ToolCursorImage BuildScaleCursor()
+{
+	ToolCursorImage Image;
+	DrawOutlinedCursorLine(Image, 8, 24, 24, 8);
+	DrawOutlinedCursorLine(Image, 24, 8, 17, 8);
+	DrawOutlinedCursorLine(Image, 24, 8, 24, 15);
+	DrawOutlinedCursorLine(Image, 8, 24, 15, 24);
+	DrawOutlinedCursorLine(Image, 8, 24, 8, 17);
+	return Image;
+}
+
+[[nodiscard]] const ToolCursorImage &GetToolCursor(const EditorMouseCursorStyle Style)
+{
+	static const ToolCursorImage Move = BuildMoveCursor();
+	static const ToolCursorImage Rotate = BuildRotateCursor();
+	static const ToolCursorImage Scale = BuildScaleCursor();
+	switch (Style)
+	{
+	case EditorMouseCursorStyle::Move:
+		return Move;
+	case EditorMouseCursorStyle::Rotate:
+		return Rotate;
+	case EditorMouseCursorStyle::Scale:
+		return Scale;
+	}
+	return Move;
+}
+} // namespace
+
 struct EditorUIWindowBridge::WindowData final
 {
 	core::WindowID Window;
@@ -45,7 +170,8 @@ void EditorUIWindowBridge::Install()
 		IO.GetClipboardTextFn = GetClipboardText;
 		IO.SetClipboardTextFn = SetClipboardText;
 		IO.ClipboardUserData = this;
-		IO.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports | ImGuiBackendFlags_HasMouseHoveredViewport;
+		IO.BackendFlags |=
+			ImGuiBackendFlags_PlatformHasViewports | ImGuiBackendFlags_HasMouseHoveredViewport | ImGuiBackendFlags_HasMouseCursors;
 		IO.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 		IO.ConfigDpiScaleFonts = true;
 		IO.ConfigDpiScaleViewports = true;
@@ -93,7 +219,8 @@ void EditorUIWindowBridge::Shutdown() noexcept
 		ImGuiPlatformIO &WindowIO = ImGui::GetPlatformIO();
 		WindowIO.ClearPlatformHandlers();
 		ImGuiIO &IO = ImGui::GetIO();
-		IO.BackendFlags &= ~(ImGuiBackendFlags_PlatformHasViewports | ImGuiBackendFlags_HasMouseHoveredViewport);
+		IO.BackendFlags &=
+			~(ImGuiBackendFlags_PlatformHasViewports | ImGuiBackendFlags_HasMouseHoveredViewport | ImGuiBackendFlags_HasMouseCursors);
 		IO.BackendPlatformName = nullptr;
 		IO.BackendPlatformUserData = nullptr;
 		IO.GetClipboardTextFn = nullptr;
@@ -105,6 +232,7 @@ void EditorUIWindowBridge::Shutdown() noexcept
 		std::terminate();
 	}
 	this->Installed = false;
+	this->AppliedMouseCursors.clear();
 }
 
 void EditorUIWindowBridge::ProcessEvents(const std::span<const core::WindowEvent> Events)
@@ -135,6 +263,76 @@ void EditorUIWindowBridge::ProcessEvents(const std::span<const core::WindowEvent
 		default:
 			break;
 		}
+	}
+}
+
+void EditorUIWindowBridge::UpdateMouseCursor(const std::optional<EditorMouseCursorStyle> Override) noexcept
+{
+	if (!this->Installed || (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_NoMouseCursorChange) != 0)
+		return;
+	try
+	{
+		const ImGuiIO &IO = ImGui::GetIO();
+		ImGuiViewport *HoveredViewport = ImGui::FindViewportByID(IO.MouseHoveredViewport);
+		if (HoveredViewport == nullptr)
+			return;
+		core::Window *Window = this->GetManagedWindow(*HoveredViewport);
+		if (Window == nullptr)
+			return;
+		const int32 CursorKey =
+			Override.has_value() ? ToolCursorKeyBase + static_cast<int32>(*Override) : static_cast<int32>(ImGui::GetMouseCursor());
+		if (const auto Applied = this->AppliedMouseCursors.find(Window->GetID());
+			Applied != this->AppliedMouseCursors.end() && Applied->second == CursorKey)
+			return;
+		if (Override.has_value())
+		{
+			const ToolCursorImage &Cursor = GetToolCursor(*Override);
+			Window->SetCustomCursor({.Pixels = Cursor.Pixels.data(), .Extent = {ToolCursorExtent, ToolCursorExtent}, .BytesPerPixel = 4},
+									Cursor.HotSpot);
+			this->AppliedMouseCursors[Window->GetID()] = CursorKey;
+			return;
+		}
+
+		core::CursorShape Shape = core::CursorShape::Arrow;
+		switch (ImGui::GetMouseCursor())
+		{
+		case ImGuiMouseCursor_TextInput:
+			Shape = core::CursorShape::Text;
+			break;
+		case ImGuiMouseCursor_ResizeAll:
+			Shape = core::CursorShape::ResizeAll;
+			break;
+		case ImGuiMouseCursor_ResizeNS:
+			Shape = core::CursorShape::ResizeVertical;
+			break;
+		case ImGuiMouseCursor_ResizeEW:
+			Shape = core::CursorShape::ResizeHorizontal;
+			break;
+		case ImGuiMouseCursor_ResizeNESW:
+			Shape = core::CursorShape::ResizeNortheastSouthwest;
+			break;
+		case ImGuiMouseCursor_ResizeNWSE:
+			Shape = core::CursorShape::ResizeNorthwestSoutheast;
+			break;
+		case ImGuiMouseCursor_Hand:
+			Shape = core::CursorShape::PointingHand;
+			break;
+		case ImGuiMouseCursor_NotAllowed:
+			Shape = core::CursorShape::NotAllowed;
+			break;
+		default:
+			break;
+		}
+		Window->SetCursorShape(Shape);
+		this->AppliedMouseCursors[Window->GetID()] = CursorKey;
+	}
+	catch (const std::exception &Exception)
+	{
+		this->CallbackDiagnostic = "Editor mouse cursor update failed: " + string(Exception.what());
+	}
+	catch (...)
+	{
+		this->CallbackDiagnostic = "Editor mouse cursor update failed with an unknown exception";
 	}
 }
 
@@ -306,6 +504,7 @@ void EditorUIWindowBridge::DestroyWindow(ImGuiViewport *Viewport)
 		return;
 	EditorUIWindowBridge &Bridge = Current();
 	WindowData *Data = static_cast<WindowData *>(Viewport->PlatformUserData);
+	Bridge.AppliedMouseCursors.erase(Data->Window);
 	if (Data->Owned && Bridge.Manager->FindManagedWindow(Data->Window) != nullptr)
 		Bridge.Manager->DestroyWindow(Data->Window);
 	delete Data;

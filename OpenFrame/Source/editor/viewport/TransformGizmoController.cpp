@@ -247,8 +247,6 @@ bool TransformGizmoController::BeginDrag(document::SceneDocument &Document, cons
 	{
 		throw std::invalid_argument("The selected handle is incompatible with the transform-gizmo operation");
 	}
-	this->DragOperation = this->Operation == TransformGizmoOperation::Universal ? OperationForHandle(Handle) : this->Operation;
-
 	this->SelectedScratch.clear();
 	Document.GetSelection().ResolveInto(Document.GetScene(), this->SelectedScratch);
 	const std::vector<world::ObjectHandle> &Selected = this->SelectedScratch;
@@ -258,6 +256,14 @@ bool TransformGizmoController::BeginDrag(document::SceneDocument &Document, cons
 	this->DragTargets.clear();
 	this->DragTargets.reserve(Selected.size());
 	const auto Access = Document.GetScene().Read();
+	this->DragOperation = this->Operation == TransformGizmoOperation::Universal ? OperationForHandle(Handle) : this->Operation;
+	const instance::InstanceTransformCapabilities Capabilities = ResolveSharedCapabilities(Document, Access, Selected);
+	if ((this->DragOperation == TransformGizmoOperation::Translate && !Capabilities.Translation) ||
+		(this->DragOperation == TransformGizmoOperation::Rotate && !Capabilities.Rotation) ||
+		(this->DragOperation == TransformGizmoOperation::Scale && !Capabilities.Scale))
+	{
+		return false;
+	}
 	world::SceneTransformSnapshot::BuildInto(Access, this->TransformSnapshotScratch, this->TransformSnapshotBuildScratch);
 	const world::SceneTransformSnapshot &WorldTransforms = this->TransformSnapshotScratch;
 	for (const world::ObjectHandle Object : Selected)
@@ -380,6 +386,13 @@ TransformGizmoVisualState TransformGizmoController::BuildVisualState(const docum
 	Targets.clear();
 	Targets.reserve(Selected.size());
 	const auto Access = Document.GetScene().Read();
+	const instance::InstanceTransformCapabilities Capabilities = ResolveSharedCapabilities(Document, Access, Selected);
+	if (!Capabilities.SupportsAnyTransform() || (this->Operation == TransformGizmoOperation::Translate && !Capabilities.Translation) ||
+		(this->Operation == TransformGizmoOperation::Rotate && !Capabilities.Rotation) ||
+		(this->Operation == TransformGizmoOperation::Scale && !Capabilities.Scale))
+	{
+		return {};
+	}
 	world::SceneTransformSnapshot::BuildInto(Access, this->TransformSnapshotScratch, this->TransformSnapshotBuildScratch);
 	const world::SceneTransformSnapshot &WorldTransforms = this->TransformSnapshotScratch;
 	for (const world::ObjectHandle Object : Selected)
@@ -410,6 +423,9 @@ TransformGizmoVisualState TransformGizmoController::BuildVisualState(const docum
 	const glm::vec3 Pivot = this->CalculatePivot(Document, Targets);
 	return {.Visible = true,
 			.Dragging = Dragging,
+			.AllowTranslation = Capabilities.Translation,
+			.AllowRotation = Capabilities.Rotation,
+			.AllowScale = Capabilities.Scale,
 			.Pivot = Pivot,
 			.Basis = this->CalculateBasis(Targets),
 			.WorldScale = std::max(glm::distance(Camera.Position, Pivot) * 0.15f, 0.1f),
@@ -436,12 +452,13 @@ TransformGizmoHandle TransformGizmoController::HitTest(const document::SceneDocu
 	if (State.Operation == TransformGizmoOperation::Universal)
 	{
 		glm::vec2 PivotPixels;
-		if (ProjectToPixels(State.Pivot, ViewProjection, Extent, PivotPixels) && glm::distance(Cursor, PivotPixels) <= TolerancePixels)
+		if (State.AllowScale && ProjectToPixels(State.Pivot, ViewProjection, Extent, PivotPixels) &&
+			glm::distance(Cursor, PivotPixels) <= TolerancePixels)
 		{
 			return TransformGizmoHandle::ScaleUniform;
 		}
 
-		for (uint32 Axis = 0; Axis < 3; ++Axis)
+		for (uint32 Axis = 0; State.AllowScale && Axis < 3; ++Axis)
 		{
 			glm::vec2 Endpoint;
 			const glm::vec3 WorldEndpoint = State.Pivot + glm::normalize(State.Basis[Axis]) * State.WorldScale * 0.72f;
@@ -451,7 +468,7 @@ TransformGizmoHandle TransformGizmoController::HitTest(const document::SceneDocu
 			}
 		}
 
-		for (uint32 Plane = 0; Plane < 3; ++Plane)
+		for (uint32 Plane = 0; State.AllowScale && Plane < 3; ++Plane)
 		{
 			const uint32 FirstAxis = Plane == 0 ? 0U : (Plane == 1 ? 1U : 2U);
 			const uint32 SecondAxis = Plane == 0 ? 1U : (Plane == 1 ? 2U : 0U);
@@ -471,7 +488,7 @@ TransformGizmoHandle TransformGizmoController::HitTest(const document::SceneDocu
 
 		float32 BestRotationDistance = TolerancePixels;
 		TransformGizmoHandle BestRotation = TransformGizmoHandle::None;
-		for (uint32 Axis = 0; Axis < 4; ++Axis)
+		for (uint32 Axis = 0; State.AllowRotation && Axis < 4; ++Axis)
 		{
 			const glm::vec3 FirstDirection = Axis < 3 ? glm::normalize(State.Basis[(Axis + 1U) % 3U]) : glm::normalize(Camera.Right);
 			const glm::vec3 SecondDirection = Axis < 3 ? glm::normalize(State.Basis[(Axis + 2U) % 3U]) : glm::normalize(Camera.Up);
@@ -502,6 +519,8 @@ TransformGizmoHandle TransformGizmoController::HitTest(const document::SceneDocu
 		}
 		if (BestRotation != TransformGizmoHandle::None)
 			return BestRotation;
+		if (!State.AllowTranslation)
+			return TransformGizmoHandle::None;
 	}
 
 	if (State.Operation == TransformGizmoOperation::Rotate)
@@ -724,6 +743,29 @@ commands::TransformState TransformGizmoController::ResolveLocalTransform(const D
 {
 	const world::DecomposedTransform Local = world::DecomposeAffineTransform(Target.ParentWorldInverse * DesiredWorld);
 	return {.Position = Local.Position, .Rotation = Local.Rotation, .Scale = Local.Scale};
+}
+
+instance::InstanceTransformCapabilities TransformGizmoController::ResolveSharedCapabilities(
+	const document::SceneDocument &Document, const world::Scene::ReadAccess &Access, const std::span<const world::ObjectHandle> Objects)
+{
+	instance::InstanceTransformCapabilities Result{.Translation = true, .Rotation = true, .Scale = true};
+	for (const world::ObjectHandle Object : Objects)
+	{
+		const auto Identity = Access.GetComponent<components::CObjectIdentityComponent>(Object);
+		if (!Identity.IsValid())
+			continue;
+		const util::UUID &ID = Access.Resolve(Identity).GetPersistentID();
+		if (!Document.GetInstances().Contains(ID))
+			continue;
+		const instance::InstanceRecord Record = Document.GetInstances().Get(ID);
+		const std::shared_ptr<const instance::InstanceTypeDescriptor> Type = Document.GetInstances().GetTypes().Find(Record.ClassID);
+		if (Type == nullptr)
+			continue;
+		Result.Translation = Result.Translation && Type->TransformCapabilities.Translation;
+		Result.Rotation = Result.Rotation && Type->TransformCapabilities.Rotation;
+		Result.Scale = Result.Scale && Type->TransformCapabilities.Scale;
+	}
+	return Result;
 }
 
 glm::vec3 TransformGizmoController::CalculatePivot(const document::SceneDocument &Document, const std::vector<DragTarget> &Targets) const

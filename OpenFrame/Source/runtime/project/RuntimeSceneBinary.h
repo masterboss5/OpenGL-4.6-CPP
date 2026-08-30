@@ -19,7 +19,7 @@ class ENGINE_API RuntimeSceneBinary final
 {
   public:
 	static constexpr uint32 FormatVersion = 1;
-	static constexpr uint32 SceneDocumentFormatVersion = 2;
+	static constexpr uint32 SceneDocumentFormatVersion = 3;
 
 	[[nodiscard]] static bool IsBinary(std::span<const uint8> Bytes) noexcept;
 	[[nodiscard]] static std::vector<uint8> Compile(std::span<const uint8> JsonSource);

@@ -28,29 +28,28 @@ const EditorCameraSettings &EditorCameraController::GetSettings() const noexcept
 	return this->Settings;
 }
 
-EditorCameraInteraction EditorCameraController::Update(Camera &Camera, const core::input::InputSnapshot &Input, const float32 DeltaSeconds,
-													   const EditorCameraPointerInput &PointerInput, const bool ViewportHovered,
-													   const bool ViewportFocused, const bool ViewportWindowFocused,
-													   const bool CancelNavigation, const bool PointerCapturedByUI,
-													   const bool KeyboardCapturedByUI)
+EditorCameraInteraction EditorCameraController::Update(Camera &Camera, const EditorCameraNavigationInput &Input, const float32 DeltaSeconds,
+													   const bool ViewportHovered, const bool ViewportFocused,
+													   const bool ViewportWindowFocused, const bool CancelNavigation,
+													   const bool PointerCapturedByUI, const bool KeyboardCapturedByUI)
 {
 	if (!std::isfinite(DeltaSeconds) || DeltaSeconds < 0.0f)
 		throw std::invalid_argument("Editor camera delta time must be finite and non-negative");
-	if (!std::isfinite(PointerInput.DeltaX) || !std::isfinite(PointerInput.DeltaY) || !std::isfinite(PointerInput.ScrollY))
-		throw std::invalid_argument("Editor camera pointer input must be finite");
+	if (!std::isfinite(Input.Pointer.DeltaX) || !std::isfinite(Input.Pointer.DeltaY) || !std::isfinite(Input.Pointer.ScrollY) ||
+		!std::isfinite(Input.Movement.x) || !std::isfinite(Input.Movement.y) || !std::isfinite(Input.Movement.z))
+		throw std::invalid_argument("Editor camera navigation input must be finite");
 
 	EditorCameraInteraction Result;
-	const bool Alt = Input.IsKeyDown(core::input::Key::LeftAlt) || Input.IsKeyDown(core::input::Key::RightAlt);
-	const bool RightMouseDown = PointerInput.RightMouseDown || Input.IsMouseButtonDown(core::input::MouseButton::Right);
-	const bool Looking = !CancelNavigation && ViewportWindowFocused && ViewportHovered && !PointerCapturedByUI && !Alt && RightMouseDown;
-	const bool Orbiting =
-		!Looking && ViewportHovered && !PointerCapturedByUI && Alt && Input.IsMouseButtonDown(core::input::MouseButton::Left);
-	const bool Panning = !Looking && ViewportHovered && !PointerCapturedByUI && Input.IsMouseButtonDown(core::input::MouseButton::Middle);
+	const bool RightMouseDown = Input.Pointer.RightMouseDown;
+	const bool Looking =
+		!CancelNavigation && ViewportWindowFocused && ViewportHovered && !PointerCapturedByUI && !Input.Alt && RightMouseDown;
+	const bool Orbiting = !Looking && ViewportHovered && !PointerCapturedByUI && Input.Alt && Input.LeftMouseDown;
+	const bool Panning = !Looking && ViewportHovered && !PointerCapturedByUI && Input.MiddleMouseDown;
 	const bool KeyboardNavigationAvailable =
 		!CancelNavigation && ViewportWindowFocused && (ViewportFocused || ViewportHovered) && (!KeyboardCapturedByUI || Looking);
 
-	const float32 DeltaX = PointerInput.DeltaX;
-	const float32 DeltaY = PointerInput.DeltaY;
+	const float32 DeltaX = Input.Pointer.DeltaX;
+	const float32 DeltaY = Input.Pointer.DeltaY;
 	if (Orbiting)
 	{
 		this->Orbit(Camera, DeltaX, DeltaY);
@@ -66,9 +65,9 @@ EditorCameraInteraction EditorCameraController::Update(Camera &Camera, const cor
 		Camera.Yaw += DeltaX * this->Settings.LookSensitivity;
 		Camera.Pitch = std::clamp(Camera.Pitch - DeltaY * this->Settings.LookSensitivity, -89.9f, 89.9f);
 		Camera.UpdateCameraVectors();
-		if (PointerInput.ScrollY != 0.0f)
+		if (Input.Pointer.ScrollY != 0.0f)
 		{
-			this->FlySpeedScale = std::clamp(this->FlySpeedScale * std::pow(this->Settings.FlySpeedStep, PointerInput.ScrollY),
+			this->FlySpeedScale = std::clamp(this->FlySpeedScale * std::pow(this->Settings.FlySpeedStep, Input.Pointer.ScrollY),
 											 this->Settings.MinimumFlySpeedScale, this->Settings.MaximumFlySpeedScale);
 		}
 		Result.ConsumedPointer = true;
@@ -77,7 +76,7 @@ EditorCameraInteraction EditorCameraController::Update(Camera &Camera, const cor
 
 	if (KeyboardNavigationAvailable)
 	{
-		this->Fly(Camera, Input, DeltaSeconds);
+		this->Fly(Camera, Input.Movement, Input.Fast, DeltaSeconds);
 		Result.ConsumedKeyboard = true;
 		this->HasOrbitPivot = false;
 	}
@@ -86,9 +85,9 @@ EditorCameraInteraction EditorCameraController::Update(Camera &Camera, const cor
 		this->FlyVelocity = glm::vec3(0.0f);
 	}
 
-	if (!Looking && ViewportHovered && !PointerCapturedByUI && PointerInput.ScrollY != 0.0f)
+	if (!Looking && ViewportHovered && !PointerCapturedByUI && Input.Pointer.ScrollY != 0.0f)
 	{
-		this->Dolly(Camera, PointerInput.ScrollY);
+		this->Dolly(Camera, Input.Pointer.ScrollY);
 		Result.ConsumedPointer = true;
 	}
 	return Result;
@@ -139,6 +138,11 @@ void EditorCameraController::Focus(Camera &Camera, const glm::vec3 &Center, cons
 const glm::vec3 &EditorCameraController::GetOrbitPivot() const noexcept
 {
 	return this->OrbitPivot;
+}
+
+glm::vec3 EditorCameraController::GetPlacementPoint(const Camera &Camera) const noexcept
+{
+	return this->HasOrbitPivot ? this->OrbitPivot : Camera.Position + Camera.Front * this->OrbitDistance;
 }
 
 float32 EditorCameraController::GetOrbitDistance() const noexcept
@@ -201,30 +205,26 @@ void EditorCameraController::Dolly(Camera &Camera, const float32 Scroll)
 	Camera.Position = this->OrbitPivot - Camera.Front * this->OrbitDistance;
 }
 
-void EditorCameraController::Fly(Camera &Camera, const core::input::InputSnapshot &Input, const float32 DeltaSeconds)
+void EditorCameraController::Fly(Camera &Camera, const glm::vec3 &Movement, const bool Fast, const float32 DeltaSeconds)
 {
 	float32 Speed = this->Settings.FlySpeed * this->FlySpeedScale;
-	if (Input.IsKeyDown(core::input::Key::LeftShift) || Input.IsKeyDown(core::input::Key::RightShift))
+	if (Fast)
 		Speed *= this->Settings.FastMultiplier;
-	glm::vec3 Translation(0.0f);
-	if (Input.IsKeyDown(core::input::Key::W))
-		Translation += Camera.Front;
-	if (Input.IsKeyDown(core::input::Key::S))
-		Translation -= Camera.Front;
-	if (Input.IsKeyDown(core::input::Key::D))
-		Translation += Camera.Right;
-	if (Input.IsKeyDown(core::input::Key::A))
-		Translation -= Camera.Right;
-	if (Input.IsKeyDown(core::input::Key::E))
-		Translation += Camera.WorldUp;
-	if (Input.IsKeyDown(core::input::Key::Q))
-		Translation -= Camera.WorldUp;
+	const glm::vec3 Translation = Camera.Right * Movement.x + Camera.WorldUp * Movement.y + Camera.Front * Movement.z;
 	const bool HasTranslation = glm::dot(Translation, Translation) > 0.0f;
 	const glm::vec3 TargetVelocity = HasTranslation ? glm::normalize(Translation) * Speed : glm::vec3(0.0f);
 	const float32 Response = HasTranslation ? this->Settings.FlyAcceleration : this->Settings.FlyDeceleration;
-	const float32 Blend = 1.0f - std::exp(-Response * DeltaSeconds);
-	this->FlyVelocity += (TargetVelocity - this->FlyVelocity) * Blend;
-	Camera.Position += this->FlyVelocity * DeltaSeconds;
+	const float32 Decay = std::exp(-Response * DeltaSeconds);
+	const glm::vec3 VelocityError = this->FlyVelocity - TargetVelocity;
+	const glm::vec3 Displacement = TargetVelocity * DeltaSeconds + VelocityError * ((1.0f - Decay) / Response);
+	this->FlyVelocity = TargetVelocity + VelocityError * Decay;
+	if (!std::isfinite(Displacement.x) || !std::isfinite(Displacement.y) || !std::isfinite(Displacement.z) ||
+		!std::isfinite(this->FlyVelocity.x) || !std::isfinite(this->FlyVelocity.y) || !std::isfinite(this->FlyVelocity.z))
+	{
+		this->FlyVelocity = glm::vec3(0.0f);
+		throw std::overflow_error("Editor camera movement exceeded its finite range");
+	}
+	Camera.Position += Displacement;
 }
 
 } // namespace editor::viewport

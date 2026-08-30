@@ -1,6 +1,6 @@
 #include "EditorUIContext.h"
 
-#include "EditorTheme.h"
+#include "EditorStyle.h"
 
 #include <imgui.h>
 
@@ -34,7 +34,7 @@ void ConfigureFonts(ImGuiIO &IO)
 	InterfaceConfiguration.OversampleH = 2;
 	InterfaceConfiguration.OversampleV = 2;
 	InterfaceConfiguration.PixelSnapH = true;
-	IO.FontDefault = IO.Fonts->AddFontFromFileTTF(InterfaceFont.string().c_str(), 15.0f, &InterfaceConfiguration);
+	IO.FontDefault = IO.Fonts->AddFontFromFileTTF(InterfaceFont.string().c_str(), 14.0F, &InterfaceConfiguration);
 	if (IO.FontDefault == nullptr)
 		throw std::runtime_error("Dear ImGui could not load the editor interface font");
 
@@ -47,8 +47,8 @@ void ConfigureFonts(ImGuiIO &IO)
 		ImFontConfig IconConfiguration;
 		IconConfiguration.MergeMode = true;
 		IconConfiguration.PixelSnapH = true;
-		IconConfiguration.GlyphMinAdvanceX = 15.0f;
-		if (IO.Fonts->AddFontFromFileTTF(IconFont.string().c_str(), 15.0f, &IconConfiguration, IconRanges) == nullptr)
+		IconConfiguration.GlyphMinAdvanceX = 16.0F;
+		if (IO.Fonts->AddFontFromFileTTF(IconFont.string().c_str(), 16.0F, &IconConfiguration, IconRanges) == nullptr)
 			throw std::runtime_error("Dear ImGui could not load the editor icon font");
 	}
 }
@@ -69,7 +69,7 @@ EditorUIContext::EditorUIContext()
 		IO.IniFilename = nullptr;
 		IO.LogFilename = nullptr;
 		ConfigureFonts(IO);
-		EditorTheme::ApplyDark();
+		EditorStyleSystem::ApplyDefaultDark();
 	}
 	catch (...)
 	{

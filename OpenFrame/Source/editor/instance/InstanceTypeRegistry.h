@@ -8,6 +8,18 @@
 
 namespace editor::instance
 {
+struct InstanceTransformCapabilities final
+{
+	bool Translation = false;
+	bool Rotation = false;
+	bool Scale = false;
+
+	[[nodiscard]] bool SupportsAnyTransform() const noexcept
+	{
+		return this->Translation || this->Rotation || this->Scale;
+	}
+};
+
 struct InstanceTypeDescriptor final
 {
 	InstanceClassID ClassID;
@@ -20,6 +32,7 @@ struct InstanceTypeDescriptor final
 	InstanceAvailability Availability = InstanceAvailability::Available;
 	bool Creatable = true;
 	bool Service = false;
+	InstanceTransformCapabilities TransformCapabilities;
 	InstancePropertyMap DefaultProperties;
 	std::vector<InstancePropertyDescriptor> Properties;
 	std::vector<InstanceClassID> ExactParentClasses;

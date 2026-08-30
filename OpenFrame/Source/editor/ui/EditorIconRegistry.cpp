@@ -24,6 +24,7 @@ namespace editor::ui
 EditorIconRegistry::EditorIconRegistry()
 	: Icons{{"Open", "\xEE\xA3\xA5"},
 			{"Save", "\xEE\x9D\x8E"},
+			{"Search", "\xEE\x9C\xA1"},
 			{"Cook", "\xEE\xA2\x92"},
 			{"Package", "\xEE\xA2\x93"},
 			{"Undo", "\xEE\x9E\xA7"},

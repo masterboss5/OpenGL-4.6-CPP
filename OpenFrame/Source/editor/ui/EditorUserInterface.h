@@ -59,6 +59,8 @@ struct EditorViewportPresentation final
 	string Name;
 	pipeline::render::RenderViewOutput Output;
 	CameraProjectionMode Projection = CameraProjectionMode::Perspective;
+	glm::vec3 PlacementPosition{0.0F};
+	glm::quat PlacementRotation{1.0F, 0.0F, 0.0F, 0.0F};
 	bool Closable = true;
 };
 

@@ -34,7 +34,8 @@ struct InstanceArchive final
 class CreateInstanceCommand final : public EditorCommand
 {
   public:
-	CreateInstanceCommand(document::SceneDocument &Document, instance::InstanceClassID ClassID, util::UUID Parent);
+	CreateInstanceCommand(document::SceneDocument &Document, instance::InstanceClassID ClassID, util::UUID Parent,
+						  instance::InstancePropertyMap InitialProperties = {});
 
 	[[nodiscard]] string_view GetName() const noexcept override;
 	void Execute() override;
@@ -45,6 +46,7 @@ class CreateInstanceCommand final : public EditorCommand
 	document::SceneDocument *Document = nullptr;
 	instance::InstanceClassID ClassID;
 	util::UUID Parent;
+	instance::InstancePropertyMap InitialProperties;
 	util::UUID ID = util::UUID::GenerateRandomUUID();
 	std::vector<util::UUID> PreviousSelection;
 	bool Present = false;

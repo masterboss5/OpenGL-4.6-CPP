@@ -104,9 +104,11 @@ EditorLayer::EditorLayer(core::Window *Window, pipeline::device::Device &Device,
 	this->NextRenderView = this->Specification.View.Value + 1;
 	if (this->NextRenderView == 0)
 		throw std::overflow_error("Editor viewport identity range is exhausted");
+	if (this->Window->SetPresentationMode(core::PresentationMode::On) == core::PresentationResult::Unsupported)
+		throw std::runtime_error("Editor presentation synchronization is unavailable");
 	this->Window->SetCursorMode(core::CursorMode::Visible);
 	if (this->Specification.InitialProject.has_value())
-		this->OpenProject(std::move(*this->Specification.InitialProject));
+		this->OpenProject(std::move(*this->Specification.InitialProject), false);
 }
 
 EditorLayer::~EditorLayer()
@@ -136,9 +138,7 @@ EditorLayer::~EditorLayer()
 			}
 		}
 		if (this->Session != nullptr)
-		{
-			this->Session->WaitForBackgroundWork();
-		}
+			this->CloseProject();
 		this->DestroyRenderResources();
 	}
 	catch (...)
@@ -208,6 +208,12 @@ void EditorLayer::Run(const core::ApplicationFrame &Frame)
 		Frame.Services.RequestStop();
 		return;
 	}
+	bool CameraUpdatedThisFrame = false;
+	if (this->Session != nullptr && this->CameraInteractionAvailable)
+	{
+		this->UpdateCameraNavigation(Frame, static_cast<float32>(Frame.Timing.DeltaSeconds));
+		CameraUpdatedThisFrame = true;
+	}
 	// Dear ImGui requires UpdatePlatformWindows() between every pair of
 	// NewFrame() calls.  A frame remains active while the render thread owns
 	// its detached-window contexts, so do not begin another UI frame until the
@@ -224,7 +230,7 @@ void EditorLayer::Run(const core::ApplicationFrame &Frame)
 			{
 				this->HomeProjectDiagnostic.clear();
 				project::ProjectDescriptor Descriptor = this->ProjectHub.OpenProject(*InterfaceFrame.OpenProjectRequest);
-				this->OpenProject(std::move(Descriptor));
+				this->OpenProject(std::move(Descriptor), true);
 				// The completed Home frame may own newly-created detached ImGui
 				// window contexts. Render it before switching to the project UI so
 				// those contexts complete their render-thread round trip and the
@@ -237,7 +243,7 @@ void EditorLayer::Run(const core::ApplicationFrame &Frame)
 				this->HomeProjectDiagnostic.clear();
 				project::ProjectDescriptor Descriptor = this->ProjectHub.CreateBaseplateProject(
 					{.Name = InterfaceFrame.CreateProjectRequest->first, .ParentDirectory = InterfaceFrame.CreateProjectRequest->second});
-				this->OpenProject(std::move(Descriptor));
+				this->OpenProject(std::move(Descriptor), true);
 				this->SubmitHomeFrame(std::move(InterfaceFrame));
 				return;
 			}
@@ -327,6 +333,9 @@ void EditorLayer::Run(const core::ApplicationFrame &Frame)
 		const std::span<const ui::EditorViewportPresentation> ViewportPresentations = this->BuildViewportPresentations();
 		ui::EditorUIFrame InterfaceFrame = this->UserInterface->BuildFrame(EditorFrame, *this->Session, this->Actions, ActionContext,
 																		   Frame.Services.GetDiagnostics(), ViewportPresentations, true);
+		this->CacheCameraInteraction(InterfaceFrame);
+		if (!CameraUpdatedThisFrame)
+			this->UpdateCameraNavigation(Frame, EditorDeltaSeconds);
 		if (InterfaceFrame.CloseProjectRequest)
 		{
 			bool CloseAccepted = true;
@@ -388,7 +397,7 @@ void EditorLayer::Run(const core::ApplicationFrame &Frame)
 		this->QueueViewportRequests(InterfaceFrame);
 		if (!this->PendingFrame->IsActive())
 			this->ApplyViewportRequests();
-		this->ProcessEditorInput(EditorFrame, Frame.Input, InterfaceFrame, ActionContext, EditorDeltaSeconds);
+		this->ProcessEditorInput(EditorFrame, Frame.Input, InterfaceFrame, ActionContext);
 		if (!this->PendingFrame->IsActive())
 			this->SubmitFrame(std::move(InterfaceFrame), Frame.Services.GetTaskScheduler());
 	}
@@ -521,8 +530,7 @@ void EditorLayer::ApplyViewportRequests()
 }
 
 void EditorLayer::ProcessEditorInput(const core::ApplicationFrame &Frame, const core::input::InputSnapshot &Input,
-									 const ui::EditorUIFrame &InterfaceFrame, action::EditorActionContext &ActionContext,
-									 const float32 DeltaSeconds)
+									 const ui::EditorUIFrame &InterfaceFrame, action::EditorActionContext &ActionContext)
 {
 	const bool RelativePointerActive =
 		std::ranges::any_of(this->Viewports, [](const auto &Viewport) { return Viewport->RelativePointerActive; });
@@ -611,11 +619,8 @@ void EditorLayer::ProcessEditorInput(const core::ApplicationFrame &Frame, const 
 	const bool EditWorldInteractive = this->Session->GetPlaySession().GetState() == play::PlaySessionState::Stopped;
 	const bool ViewportPointerAvailable =
 		ViewportRegion->Hovered || BufferedPressInsideViewport || Viewport->RelativePointerActive || Gizmo.IsDragging();
-	bool GizmoConsumedPointer = false;
-
 	if (EditWorldInteractive && Gizmo.IsDragging())
 	{
-		GizmoConsumedPointer = true;
 		if (EscapePressed)
 			Gizmo.CancelDrag();
 		else if (LeftMouseReleased)
@@ -636,11 +641,11 @@ void EditorLayer::ProcessEditorInput(const core::ApplicationFrame &Frame, const 
 															  : viewport::TransformGizmoHandle::None;
 			if (Handle != viewport::TransformGizmoHandle::None)
 			{
-				GizmoConsumedPointer = Gizmo.BeginDrag(this->Session->GetDocument(), *Viewport->Camera, ViewportRegion->PixelExtent,
+				const bool BeganDrag = Gizmo.BeginDrag(this->Session->GetDocument(), *Viewport->Camera, ViewportRegion->PixelExtent,
 													   PressPointer.x, PressPointer.y, Handle);
-				if (GizmoConsumedPointer && (LeftMouseDown || LeftMouseReleased))
+				if (BeganDrag && (LeftMouseDown || LeftMouseReleased))
 					(void)Gizmo.UpdateDrag(*Viewport->Camera, ViewportRegion->PixelExtent, Pointer.x, Pointer.y);
-				if (GizmoConsumedPointer && LeftMouseReleased)
+				if (BeganDrag && LeftMouseReleased)
 					Gizmo.CommitDrag();
 			}
 			else
@@ -657,25 +662,99 @@ void EditorLayer::ProcessEditorInput(const core::ApplicationFrame &Frame, const 
 
 	if (EditWorldInteractive && !Gizmo.IsDragging() && ActiveInput->WasKeyPressed(core::input::Key::F))
 		(void)Viewport->CameraController.FocusSelection(this->Session->GetDocument(), *Viewport->Camera);
-	const viewport::EditorCameraInteraction CameraInteraction = Viewport->CameraController.Update(
-		*Viewport->Camera, *ActiveInput, DeltaSeconds, BufferedPointerInput.Camera, ViewportPointerAvailable, ViewportRegion->Focused,
-		InteractionWindow->IsFocused(), EscapePressed,
-		GizmoConsumedPointer || Gizmo.IsDragging() || (InterfaceFrame.WantsPointer && !ViewportPointerAvailable),
-		InterfaceFrame.WantsKeyboard && !ViewportRegion->Focused);
-	if (CameraInteraction.WantsRelativePointer != Viewport->RelativePointerActive)
+}
+
+void EditorLayer::CacheCameraInteraction(const ui::EditorUIFrame &InterfaceFrame)
+{
+	this->CameraViewportRegions = InterfaceFrame.Viewports;
+	this->CameraWantsKeyboard = InterfaceFrame.WantsKeyboard;
+	this->CameraWantsPointer = InterfaceFrame.WantsPointer;
+	this->CameraInteractionAvailable = true;
+}
+
+void EditorLayer::UpdateCameraNavigation(const core::ApplicationFrame &Frame, const float32 DeltaSeconds)
+{
+	if (this->Session == nullptr || !this->CameraInteractionAvailable)
+		return;
+	const bool RelativePointerActive =
+		std::ranges::any_of(this->Viewports, [](const auto &Viewport) { return Viewport->RelativePointerActive; });
+	const ui::EditorViewportRegion *ViewportRegion = nullptr;
+	EditorViewportInstance *Viewport = nullptr;
+	for (const ui::EditorViewportRegion &Candidate : this->CameraViewportRegions)
 	{
-		if (CameraInteraction.WantsRelativePointer)
+		EditorViewportInstance *Instance = this->FindViewport(Candidate.View);
+		if (Instance == nullptr || Instance->Closing)
+			continue;
+		if (Instance->RelativePointerActive)
+		{
+			ViewportRegion = &Candidate;
+			Viewport = Instance;
+			break;
+		}
+		if (Candidate.Hovered || (ViewportRegion == nullptr && Candidate.Focused))
+		{
+			ViewportRegion = &Candidate;
+			Viewport = Instance;
+			if (Candidate.Hovered)
+				break;
+		}
+	}
+	core::Window *InteractionWindow = this->Window;
+	const core::input::InputSnapshot *ActiveInput = &Frame.Input;
+	if (ViewportRegion != nullptr && ViewportRegion->Window.IsValid())
+	{
+		core::Window *CandidateWindow = Frame.Services.GetWindowManager().FindManagedWindow(ViewportRegion->Window);
+		if (CandidateWindow != nullptr)
+		{
+			InteractionWindow = CandidateWindow;
+			ActiveInput = &Frame.Services.GetInputSystem().GetSnapshot(ViewportRegion->Window);
+		}
+	}
+	if (ViewportRegion == nullptr || Viewport == nullptr || !ViewportRegion->IsValid())
+	{
+		if (RelativePointerActive)
 		{
 			for (const std::unique_ptr<EditorViewportInstance> &Instance : this->Viewports)
 			{
 				Instance->RelativePointerActive = false;
 				Instance->RelativePointerWindow = {};
 			}
+			InteractionWindow->SetCursorMode(core::CursorMode::Visible);
 		}
-		InteractionWindow->SetCursorMode(CameraInteraction.WantsRelativePointer ? core::CursorMode::Relative : core::CursorMode::Visible);
-		Viewport->RelativePointerActive = CameraInteraction.WantsRelativePointer;
-		Viewport->RelativePointerWindow = CameraInteraction.WantsRelativePointer ? InteractionWindow->GetID() : core::WindowID{};
+		return;
 	}
+	const viewport::EditorCameraPointerInput PointerInput = this->ConsumeCameraPointerInput(InteractionWindow->GetID());
+	const auto Pending = this->PendingCameraInputs.find(InteractionWindow->GetID());
+	const bool EscapePressed = Pending != this->PendingCameraInputs.end() && Pending->second.EscapePressed;
+	viewport::TransformGizmoController &Gizmo = this->Session->GetTransformGizmo();
+	const bool ViewportPointerAvailable = ViewportRegion->Hovered || Viewport->RelativePointerActive || Gizmo.IsDragging();
+	const viewport::EditorCameraNavigationInput NavigationInput{
+		.Pointer = PointerInput,
+		.Movement = glm::vec3(
+			(ActiveInput->IsKeyDown(core::input::Key::D) ? 1.0f : 0.0f) - (ActiveInput->IsKeyDown(core::input::Key::A) ? 1.0f : 0.0f),
+			(ActiveInput->IsKeyDown(core::input::Key::E) ? 1.0f : 0.0f) - (ActiveInput->IsKeyDown(core::input::Key::Q) ? 1.0f : 0.0f),
+			(ActiveInput->IsKeyDown(core::input::Key::W) ? 1.0f : 0.0f) - (ActiveInput->IsKeyDown(core::input::Key::S) ? 1.0f : 0.0f)),
+		.Fast = ActiveInput->IsKeyDown(core::input::Key::LeftShift) || ActiveInput->IsKeyDown(core::input::Key::RightShift),
+		.Alt = ActiveInput->IsKeyDown(core::input::Key::LeftAlt) || ActiveInput->IsKeyDown(core::input::Key::RightAlt),
+		.LeftMouseDown = ActiveInput->IsMouseButtonDown(core::input::MouseButton::Left),
+		.MiddleMouseDown = ActiveInput->IsMouseButtonDown(core::input::MouseButton::Middle)};
+	const viewport::EditorCameraInteraction CameraInteraction = Viewport->CameraController.Update(
+		*Viewport->Camera, NavigationInput, DeltaSeconds, ViewportPointerAvailable, ViewportRegion->Focused, InteractionWindow->IsFocused(),
+		EscapePressed, Gizmo.IsDragging() || (this->CameraWantsPointer && !ViewportPointerAvailable),
+		this->CameraWantsKeyboard && !ViewportRegion->Focused);
+	if (CameraInteraction.WantsRelativePointer == Viewport->RelativePointerActive)
+		return;
+	if (CameraInteraction.WantsRelativePointer)
+	{
+		for (const std::unique_ptr<EditorViewportInstance> &Instance : this->Viewports)
+		{
+			Instance->RelativePointerActive = false;
+			Instance->RelativePointerWindow = {};
+		}
+	}
+	InteractionWindow->SetCursorMode(CameraInteraction.WantsRelativePointer ? core::CursorMode::Relative : core::CursorMode::Visible);
+	Viewport->RelativePointerActive = CameraInteraction.WantsRelativePointer;
+	Viewport->RelativePointerWindow = CameraInteraction.WantsRelativePointer ? InteractionWindow->GetID() : core::WindowID{};
 }
 
 void EditorLayer::AccumulateCameraInput(const core::input::InputEvent &Event)
@@ -771,6 +850,22 @@ EditorLayer::BufferedEditorPointerInput EditorLayer::ConsumeEditorPointerInput(c
 	return Result;
 }
 
+viewport::EditorCameraPointerInput EditorLayer::ConsumeCameraPointerInput(const core::WindowID Window)
+{
+	const auto Found = this->PendingCameraInputs.find(Window);
+	if (Found == this->PendingCameraInputs.end())
+		return {};
+	PendingCameraInput &Pending = Found->second;
+	const viewport::EditorCameraPointerInput Result{.DeltaX = static_cast<float32>(Pending.MouseDeltaX),
+													.DeltaY = static_cast<float32>(Pending.MouseDeltaY),
+													.ScrollY = static_cast<float32>(Pending.ScrollY),
+													.RightMouseDown = Pending.RightMouseDown};
+	Pending.MouseDeltaX = 0.0;
+	Pending.MouseDeltaY = 0.0;
+	Pending.ScrollY = 0.0;
+	return Result;
+}
+
 void EditorLayer::SubmitFrame(ui::EditorUIFrame InterfaceFrame, core::threading::TaskScheduler &Scheduler)
 {
 	if (this->PendingRenderWork == nullptr)
@@ -796,6 +891,7 @@ void EditorLayer::SubmitFrame(ui::EditorUIFrame InterfaceFrame, core::threading:
 		SnapshotOptions.IncludeCameras = SnapshotOptions.IncludeCameras || Region.Settings.Overlays.Cameras;
 		SnapshotOptions.IncludeLights = SnapshotOptions.IncludeLights || Region.Settings.Overlays.Lights;
 	}
+	SnapshotOptions.SelectedObjects = Work->SelectedObjects;
 	world::Scene *ViewportScene = &this->Session->GetViewportScene();
 	resource::AssetManager *ProjectAssets = &this->Session->GetProject().GetAssetManager();
 	const bool ShowGizmo = this->Session->GetPlaySession().GetState() == play::PlaySessionState::Stopped;
@@ -830,7 +926,10 @@ void EditorLayer::SubmitFrame(ui::EditorUIFrame InterfaceFrame, core::threading:
 																	 .Basis = GizmoState.Basis,
 																	 .WorldScale = GizmoState.WorldScale,
 																	 .Operation = static_cast<uint32>(GizmoState.Operation),
-																	 .ActiveHandle = static_cast<uint32>(GizmoState.ActiveHandle)};
+																	 .ActiveHandle = static_cast<uint32>(GizmoState.ActiveHandle),
+																	 .CapabilityMask = (GizmoState.AllowTranslation ? 1U : 0U) |
+																					   (GizmoState.AllowRotation ? 2U : 0U) |
+																					   (GizmoState.AllowScale ? 4U : 0U)};
 		}
 	}
 	Work->ClosingViewports.clear();
@@ -914,6 +1013,10 @@ void EditorLayer::SubmitFrame(ui::EditorUIFrame InterfaceFrame, core::threading:
 										{.View = Viewport->View,
 										 .Name = Viewport->Name,
 										 .Output = Rendered == Result.Viewports.end() ? Viewport->Output : Rendered->Frame.Output,
+										 .Projection = Viewport->Camera->Projection,
+										 .PlacementPosition = Viewport->CameraController.GetPlacementPoint(*Viewport->Camera),
+										 .PlacementRotation = glm::normalize(glm::quat_cast(
+											 glm::mat3(Viewport->Camera->Right, Viewport->Camera->Up, -Viewport->Camera->Front))),
 										 .Closable = !Viewport->Primary});
 								}
 								this->Renderer->PrepareInterfacePresentation(*this->Window);
@@ -996,7 +1099,7 @@ void EditorLayer::SubmitHomeFrame(ui::EditorUIFrame InterfaceFrame)
 	}
 }
 
-void EditorLayer::OpenProject(project::ProjectDescriptor Descriptor)
+void EditorLayer::OpenProject(project::ProjectDescriptor Descriptor, const bool TrackInProjectHub)
 {
 	if (this->Session != nullptr)
 		throw std::logic_error("OpenFrame already has an active project");
@@ -1011,6 +1114,12 @@ void EditorLayer::OpenProject(project::ProjectDescriptor Descriptor)
 	try
 	{
 		this->Session = std::move(Candidate);
+		this->CameraViewportRegions.clear();
+		this->CameraInteractionAvailable = false;
+		this->CameraWantsKeyboard = false;
+		this->CameraWantsPointer = false;
+		this->ProjectOpeningRevision = this->Session->GetDocument().GetRevision();
+		this->TrackProjectInHome = TrackInProjectHub;
 		this->Viewports.clear();
 		(void)this->CreateViewport(this->Specification.View, true);
 		this->NextRenderView = this->Specification.View.Value + 1;
@@ -1019,7 +1128,13 @@ void EditorLayer::OpenProject(project::ProjectDescriptor Descriptor)
 	catch (...)
 	{
 		this->Viewports.clear();
+		this->CameraViewportRegions.clear();
+		this->CameraInteractionAvailable = false;
+		this->CameraWantsKeyboard = false;
+		this->CameraWantsPointer = false;
 		this->Session.reset();
+		this->ProjectOpeningRevision = 0;
+		this->TrackProjectInHome = false;
 		this->Window->SetTitle("OpenFrame");
 		throw;
 	}
@@ -1034,14 +1149,51 @@ void EditorLayer::CloseProject()
 	if (this->Session->GetPlaySession().GetState() != play::PlaySessionState::Stopped)
 		this->Session->StopPlay();
 	this->Session->WaitForBackgroundWork();
+	const project::ProjectDescriptor Descriptor = this->Session->GetProject().GetDescriptor();
+	const bool ProjectWasEdited = this->Session->GetDocument().GetRevision() != this->ProjectOpeningRevision;
+	std::vector<uint8> ThumbnailPixels;
+	uint32 ThumbnailWidth = 0;
+	uint32 ThumbnailHeight = 0;
+	string ThumbnailDiagnostic;
 	if (this->ExecutionThread != nullptr && this->ExecutionThread->IsRunning())
 	{
 		this->ExecutionThread
 			->Submit(
-				[this]()
+				[this, &ThumbnailPixels, &ThumbnailWidth, &ThumbnailHeight, &ThumbnailDiagnostic]()
 				{
 					if (this->Renderer != nullptr)
 					{
+						const auto Primary = std::ranges::find_if(this->Viewports, [](const auto &Viewport) { return Viewport->Primary; });
+						if (Primary != this->Viewports.end() && (*Primary)->Output.Color.IsValid())
+						{
+							try
+							{
+								const pipeline::graph::ExportedTexture &Color = (*Primary)->Output.Color;
+								const uint64 ByteCount = static_cast<uint64>(Color.Extent.Width) * Color.Extent.Height * 4U;
+								if (ByteCount == 0 || ByteCount > static_cast<uint64>(std::numeric_limits<usize>::max()) ||
+									ByteCount > static_cast<uint64>(std::numeric_limits<GLsizei>::max()))
+								{
+									throw std::overflow_error("Project thumbnail viewport readback exceeds the OpenGL transfer limit");
+								}
+								ThumbnailPixels.resize(static_cast<usize>(ByteCount));
+								glPixelStorei(GL_PACK_ALIGNMENT, 1);
+								glGetTextureSubImage(Color.Texture, 0, 0, 0, 0, static_cast<GLsizei>(Color.Extent.Width),
+													 static_cast<GLsizei>(Color.Extent.Height), 1, GL_RGBA, GL_UNSIGNED_BYTE,
+													 static_cast<GLsizei>(ByteCount), ThumbnailPixels.data());
+								glPixelStorei(GL_PACK_ALIGNMENT, 4);
+								this->Device->CheckErrors("Project thumbnail capture");
+								ThumbnailWidth = Color.Extent.Width;
+								ThumbnailHeight = Color.Extent.Height;
+							}
+							catch (const std::exception &Exception)
+							{
+								glPixelStorei(GL_PACK_ALIGNMENT, 4);
+								ThumbnailPixels.clear();
+								ThumbnailWidth = 0;
+								ThumbnailHeight = 0;
+								ThumbnailDiagnostic = Exception.what();
+							}
+						}
 						for (const std::unique_ptr<EditorViewportInstance> &Viewport : this->Viewports)
 						{
 							if (Viewport->Renderer != nullptr)
@@ -1052,9 +1204,30 @@ void EditorLayer::CloseProject()
 				})
 			.get();
 	}
+	try
+	{
+		if (this->TrackProjectInHome && !ThumbnailPixels.empty())
+			this->ProjectHub.UpdateProjectThumbnail(Descriptor, ThumbnailWidth, ThumbnailHeight, ThumbnailPixels, true);
+		if (this->TrackProjectInHome && ProjectWasEdited)
+			this->ProjectHub.MarkProjectEdited(Descriptor);
+	}
+	catch (const std::exception &Exception)
+	{
+		if (!ThumbnailDiagnostic.empty())
+			ThumbnailDiagnostic += "\n";
+		ThumbnailDiagnostic += Exception.what();
+	}
+	if (!ThumbnailDiagnostic.empty())
+		this->HomeProjectDiagnostic = "Project closed, but its Home card could not be updated: " + ThumbnailDiagnostic;
 	this->Viewports.clear();
+	this->CameraViewportRegions.clear();
+	this->CameraInteractionAvailable = false;
+	this->CameraWantsKeyboard = false;
+	this->CameraWantsPointer = false;
 	this->UserInterface->ResetProjectState();
 	this->Session.reset();
+	this->ProjectOpeningRevision = 0;
+	this->TrackProjectInHome = false;
 	this->Window->SetTitle("OpenFrame");
 }
 
@@ -1134,6 +1307,9 @@ std::span<const ui::EditorViewportPresentation> EditorLayer::BuildViewportPresen
 						  .Name = Viewport->Name,
 						  .Output = Viewport->Output,
 						  .Projection = Viewport->Camera->Projection,
+						  .PlacementPosition = Viewport->CameraController.GetPlacementPoint(*Viewport->Camera),
+						  .PlacementRotation = glm::normalize(
+							  glm::quat_cast(glm::mat3(Viewport->Camera->Right, Viewport->Camera->Up, -Viewport->Camera->Front))),
 						  .Closable = !Viewport->Primary});
 	}
 	return Result;

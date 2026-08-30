@@ -297,6 +297,8 @@ void SceneRenderSnapshotBuilder::BuildInto(const world::Scene &Scene, SceneRende
 	const auto Access = Scene.Read();
 	world::SceneTransformSnapshot::BuildInto(Access, Scratch.WorldTransforms, Scratch.WorldTransformScratch);
 	ObjectRenderability Renderability(Access, Options.RespectEditorVisibility, Scratch);
+	const auto IsSelected = [&Options](const world::ObjectHandle Object)
+	{ return std::ranges::find(Options.SelectedObjects, Object) != Options.SelectedObjects.end(); };
 	for (const components::CObjectDirectionalLightComponent &Component : Access.Components<components::CObjectDirectionalLightComponent>())
 	{
 		if (!Component.IsEnabled() || !Renderability.IsRenderable(Component.GetOwner()))
@@ -306,11 +308,12 @@ void SceneRenderSnapshotBuilder::BuildInto(const world::Scene &Scene, SceneRende
 											  Component.GetShadowSettings().CastShadows,
 											  CaptureShadowParameters(Component.GetShadowSettings()), Component.GetAngularDiameterDegrees(),
 											  Component.GetCascadeCount(), Component.GetCascadeDistributionExponent());
-		if (Options.IncludeLights)
+		if (Options.IncludeLights || IsSelected(Component.GetOwner()))
 		{
 			const glm::vec3 Origin = Scratch.WorldTransforms.GetPosition(Component.GetOwner());
 			const glm::vec3 Direction = Scratch.WorldTransforms.GetForward(Component.GetOwner());
-			AddDebugLine(Result, Origin, Origin + Direction * 3.0f, glm::vec4(1.0f, 0.9f, 0.25f, 1.0f), SceneDebugLineCategory::Light);
+			AddDebugLine(Result, Origin, Origin + Direction * 3.0f, glm::vec4(1.0f, 0.9f, 0.25f, 1.0f),
+						 Options.IncludeLights ? SceneDebugLineCategory::Light : SceneDebugLineCategory::SelectedLight);
 		}
 	}
 	for (const components::CObjectPointLightComponent &Component : Access.Components<components::CObjectPointLightComponent>())
@@ -321,14 +324,16 @@ void SceneRenderSnapshotBuilder::BuildInto(const world::Scene &Scene, SceneRende
 		Result.PointLights.emplace_back(Scratch.WorldTransforms.GetPosition(Component.GetOwner()), glm::vec3(0.0f), Radiance, Radiance,
 										1.0f, 0.0f, QuadraticForRange(Radiance, Component.GetRange()),
 										Component.GetShadowSettings().CastShadows, CaptureShadowParameters(Component.GetShadowSettings()));
-		if (Options.IncludeLights)
+		if (Options.IncludeLights || IsSelected(Component.GetOwner()))
 		{
 			const glm::vec3 Position = Scratch.WorldTransforms.GetPosition(Component.GetOwner());
 			const float32 Radius = Component.GetRange();
 			const glm::vec4 Color(Component.GetColor(), 1.0f);
-			AddCircle(Result, Position, glm::vec3(Radius, 0.0f, 0.0f), glm::vec3(0.0f, Radius, 0.0f), Color, SceneDebugLineCategory::Light);
-			AddCircle(Result, Position, glm::vec3(Radius, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, Radius), Color, SceneDebugLineCategory::Light);
-			AddCircle(Result, Position, glm::vec3(0.0f, Radius, 0.0f), glm::vec3(0.0f, 0.0f, Radius), Color, SceneDebugLineCategory::Light);
+			const SceneDebugLineCategory Category =
+				Options.IncludeLights ? SceneDebugLineCategory::Light : SceneDebugLineCategory::SelectedLight;
+			AddCircle(Result, Position, glm::vec3(Radius, 0.0f, 0.0f), glm::vec3(0.0f, Radius, 0.0f), Color, Category);
+			AddCircle(Result, Position, glm::vec3(Radius, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, Radius), Color, Category);
+			AddCircle(Result, Position, glm::vec3(0.0f, Radius, 0.0f), glm::vec3(0.0f, 0.0f, Radius), Color, Category);
 		}
 	}
 	for (const components::CObjectSpotLightComponent &Component : Access.Components<components::CObjectSpotLightComponent>())
@@ -343,7 +348,7 @@ void SceneRenderSnapshotBuilder::BuildInto(const world::Scene &Scene, SceneRende
 									   glm::cos(glm::radians(Component.GetInnerConeDegrees())), OuterCosine, glm::vec3(0.0f), Radiance,
 									   Radiance, 1.0f, 0.0f, QuadraticForRange(Radiance, Component.GetRange()),
 									   Component.GetShadowSettings().CastShadows, CaptureShadowParameters(Component.GetShadowSettings()));
-		if (Options.IncludeLights)
+		if (Options.IncludeLights || IsSelected(Component.GetOwner()))
 		{
 			const glm::vec3 Position = Scratch.WorldTransforms.GetPosition(Component.GetOwner());
 			const glm::vec3 Direction = Scratch.WorldTransforms.GetForward(Component.GetOwner());
@@ -353,9 +358,11 @@ void SceneRenderSnapshotBuilder::BuildInto(const world::Scene &Scene, SceneRende
 			const float32 Radius = std::tan(glm::radians(Component.GetOuterConeDegrees())) * Component.GetRange();
 			const glm::vec3 End = Position + Direction * Component.GetRange();
 			const glm::vec4 Color(Component.GetColor(), 1.0f);
-			AddCircle(Result, End, Right * Radius, ConeUp * Radius, Color, SceneDebugLineCategory::Light);
+			const SceneDebugLineCategory Category =
+				Options.IncludeLights ? SceneDebugLineCategory::Light : SceneDebugLineCategory::SelectedLight;
+			AddCircle(Result, End, Right * Radius, ConeUp * Radius, Color, Category);
 			for (const glm::vec3 Offset : std::array{Right * Radius, -Right * Radius, ConeUp * Radius, -ConeUp * Radius})
-				AddDebugLine(Result, Position, End + Offset, Color, SceneDebugLineCategory::Light);
+				AddDebugLine(Result, Position, End + Offset, Color, Category);
 		}
 	}
 	if (Options.IncludeCameras)

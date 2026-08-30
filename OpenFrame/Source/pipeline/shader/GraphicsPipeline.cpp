@@ -12,11 +12,11 @@ namespace pipeline::shader
 namespace
 {
 constexpr std::array<string_view, static_cast<usize>(VertexUniform::Count)> VertexUniformNames{
-	"shadowViewIndex", "gizmoPivot", "gizmoBasis", "gizmoScale", "gizmoOperation", "activeHandle"};
+	"shadowViewIndex", "gizmoPivot", "gizmoBasis", "gizmoScale", "gizmoOperation", "activeHandle", "gizmoCapabilityMask"};
 constexpr std::array<string_view, static_cast<usize>(FragmentUniform::Count)> FragmentUniformNames{"trackOverdraw", "lightCount",
 																								   "clusterCount"};
 constexpr std::array<GLenum, static_cast<usize>(VertexUniform::Count)> VertexUniformTypes{
-	GL_UNSIGNED_INT, GL_FLOAT_VEC3, GL_FLOAT_MAT3, GL_FLOAT, GL_UNSIGNED_INT, GL_UNSIGNED_INT};
+	GL_UNSIGNED_INT, GL_FLOAT_VEC3, GL_FLOAT_MAT3, GL_FLOAT, GL_UNSIGNED_INT, GL_UNSIGNED_INT, GL_UNSIGNED_INT};
 constexpr std::array<GLenum, static_cast<usize>(FragmentUniform::Count)> FragmentUniformTypes{GL_UNSIGNED_INT, GL_UNSIGNED_INT,
 																							  GL_UNSIGNED_INT};
 

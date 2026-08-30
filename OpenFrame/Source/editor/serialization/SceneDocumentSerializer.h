@@ -53,7 +53,7 @@ class SceneDocumentMigrationRegistry final
 class SceneDocumentSerializer final
 {
   public:
-	static constexpr uint32 CurrentFormatVersion = 2;
+	static constexpr uint32 CurrentFormatVersion = 3;
 	static constexpr uint32 CurrentEngineSchemaVersion = 1;
 	static constexpr uint32 CurrentComponentSchemaVersion = 1;
 

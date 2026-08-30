@@ -68,8 +68,9 @@ InstanceArchive CaptureInstanceArchive(const instance::InstanceGraph &Graph, con
 }
 
 CreateInstanceCommand::CreateInstanceCommand(document::SceneDocument &Document, const instance::InstanceClassID ClassID,
-											 const util::UUID Parent)
-	: Document(&Document), ClassID(ClassID), Parent(Parent), PreviousSelection(Document.GetSelection().GetOrdered())
+											 const util::UUID Parent, instance::InstancePropertyMap InitialProperties)
+	: Document(&Document), ClassID(ClassID), Parent(Parent), InitialProperties(std::move(InitialProperties)),
+	  PreviousSelection(Document.GetSelection().GetOrdered())
 {
 	if (Document.GetInstanceTypes().Find(ClassID) == nullptr)
 		throw std::invalid_argument("CreateInstanceCommand class is not registered");
@@ -86,7 +87,7 @@ void CreateInstanceCommand::Execute()
 {
 	if (this->Present)
 		throw std::logic_error("CreateInstanceCommand is already present");
-	(void)this->Document->CreateInstance(this->ClassID, this->Parent, {}, this->ID);
+	(void)this->Document->CreateInstance(this->ClassID, this->Parent, {}, this->ID, this->InitialProperties);
 	this->Present = true;
 }
 
